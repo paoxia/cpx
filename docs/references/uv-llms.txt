@@ -1,0 +1,221 @@
+# UV 参考文档 (LLMs)
+
+本文档为 AI 模型提供 UV Python 包管理器参考信息。
+
+## 什么是 UV？
+
+UV 是一个极速的 Python 包管理器和项目管理工具，用 Rust 编写，可作为 pip, pip-tools, virtualenv 的替代品。
+
+## 核心特性
+
+- **极快**: 比 pip 快 10-100 倍
+- **兼容**: 与 pip 命令兼容
+- **可靠**: 确定性的依赖解析
+- **统一**: 包管理和项目管理一体化
+
+## 安装
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# 使用 pip
+pip install uv
+
+# 使用 Homebrew
+brew install uv
+```
+
+## 常用命令
+
+### 项目管理
+
+```bash
+# 创建新项目
+uv init myproject
+
+# 进入项目
+cd myproject
+
+# 添加依赖
+uv add requests
+
+# 添加开发依赖
+uv add --dev pytest
+
+# 移除依赖
+uv remove requests
+
+# 运行脚本
+uv run main.py
+
+# 运行命令
+uv run pytest
+```
+
+### 包管理
+
+```bash
+# 安装包
+uv pip install requests
+
+# 安装指定版本
+uv pip install requests==2.31.0
+
+# 从 requirements.txt 安装
+uv pip install -r requirements.txt
+
+# 卸载包
+uv pip uninstall requests
+
+# 列出已安装的包
+uv pip list
+
+# 显示包信息
+uv pip show requests
+```
+
+### 虚拟环境
+
+```bash
+# 创建虚拟环境
+uv venv
+
+# 创建指定 Python 版本的虚拟环境
+uv venv --python 3.11
+
+# 激活虚拟环境
+source .venv/bin/activate  # macOS/Linux
+.venv\Scripts\activate     # Windows
+```
+
+### 依赖锁定
+
+```bash
+# 生成锁文件
+uv lock
+
+# 从锁文件安装
+uv sync
+```
+
+## 项目结构
+
+```
+myproject/
+├── .venv/              # 虚拟环境
+├── pyproject.toml      # 项目配置
+├── uv.lock             # 锁文件
+├── src/                # 源代码
+│   └── myproject/
+│       └── __init__.py
+└── tests/              # 测试
+    └── test_main.py
+```
+
+## pyproject.toml
+
+```toml
+[project]
+name = "myproject"
+version = "0.1.0"
+description = "My project"
+authors = [{name = "Your Name", email = "you@example.com"}]
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+## 环境变量
+
+```bash
+# 指定 Python 版本
+UV_PYTHON=3.11
+
+# 禁用缓存
+UV_NO_CACHE=1
+
+# 指定缓存目录
+UV_CACHE_DIR=/path/to/cache
+
+# 指定索引 URL
+UV_INDEX_URL=https://pypi.org/simple/
+```
+
+## 最佳实践
+
+### 1. 使用 pyproject.toml
+- 标准化项目配置
+- 统一管理依赖
+
+### 2. 锁定依赖版本
+- 使用 uv.lock 确保一致性
+- 定期更新依赖
+
+### 3. 虚拟环境管理
+- 每个项目独立环境
+- 使用 uv venv 创建环境
+
+### 4. CI/CD 集成
+```yaml
+# GitHub Actions 示例
+- name: Install uv
+  run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+- name: Install dependencies
+  run: uv sync
+
+- name: Run tests
+  run: uv run pytest
+```
+
+### 5. 开发工具链
+```bash
+# 安装开发工具
+uv add --dev black ruff mypy pytest
+
+# 运行检查
+uv run black .
+uv run ruff check .
+uv run mypy .
+uv run pytest
+```
+
+## 常见问题
+
+### Q: UV 与 pip 有什么区别？
+A: UV 更快、更可靠，提供项目管理功能
+
+### Q: 如何从 pip 迁移到 UV？
+A: 大部分命令兼容，可直接使用 uv pip 代替 pip
+
+### Q: UV 支持 requirements.txt 吗？
+A: 支持，使用 `uv pip install -r requirements.txt`
+
+### Q: 如何处理私有包？
+A: 配置 UV_INDEX_URL 或使用环境变量
+
+## 参考资源
+
+- 官方文档: https://docs.astral.sh/uv/
+- GitHub: https://github.com/astral-sh/uv
+- 快速开始: https://docs.astral.sh/uv/getting-started/
+
+---
+
+*更新时间: [待补充]*
+*维护者: [待补充]*
