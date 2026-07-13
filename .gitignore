@@ -42,6 +42,7 @@ coverage/
 tmp/
 temp/
 *.tmp
+tmp-test-*/
 
 # OS generated files
 .DS_Store
@@ -70,3 +71,9 @@ secrets/
 *.pem
 *.key
 credentials.json
+
+# Runtime data (SQLite database and WAL files)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal

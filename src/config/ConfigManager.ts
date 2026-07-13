@@ -1,0 +1,200 @@
+import { readFileSync, existsSync, watch } from 'fs';
+import { join, resolve } from 'path';
+import * as yaml from 'js-yaml';
+import dotenv from 'dotenv';
+import { Logger } from '../utils/Logger';
+import { ConfigError } from '../utils/errors';
+import { DEFAULT_CONFIG } from './defaults';
+import { AppConfigSchema } from './schema';
+import type { AppConfig } from '../core/types';
+
+/**
+ * 配置管理器：加载、合并、校验、热更新
+ *
+ * 加载顺序（后者覆盖前者）：
+ * 1. 默认配置 (defaults.ts)
+ * 2. config.yaml
+ * 3. permissions.yaml（合并到 config.permissions）
+ * 4. 环境变量（AGENT_ 前缀，优先级最高）
+ */
+export class ConfigManager {
+  private config: AppConfig;
+  private logger: Logger;
+  private configDir: string;
+  private watchTimer?: NodeJS.Timeout;
+  private onReload?: () => void;
+
+  constructor(configDir: string = './config', logger?: Logger) {
+    this.configDir = resolve(configDir);
+    this.logger = logger ?? new Logger('info');
+    this.config = structuredClone(DEFAULT_CONFIG);
+  }
+
+  /** 加载并校验配置 */
+  load(): AppConfig {
+    // 1. .env 文件（仅本地开发；Docker 中环境变量由 -e 直接注入）
+    dotenv.config();
+
+    // 2. 从默认值开始
+    let config = structuredClone(DEFAULT_CONFIG);
+
+    // 3. 加载 config.yaml
+    const configPath = join(this.configDir, 'config.yaml');
+    if (existsSync(configPath)) {
+      try {
+        const yamlContent = readFileSync(configPath, 'utf8');
+        const yamlConfig = yaml.load(yamlContent) as Record<string, unknown>;
+        config = deepMerge(config, yamlConfig);
+      } catch (err) {
+        throw new ConfigError(`解析 config.yaml 失败: ${(err as Error).message}`);
+      }
+    }
+
+    // 4. 加载 permissions.yaml
+    const permPath = join(this.configDir, 'permissions.yaml');
+    if (existsSync(permPath)) {
+      try {
+        const permContent = readFileSync(permPath, 'utf8');
+        const permConfig = yaml.load(permContent) as Record<string, unknown>;
+        config.permissions = deepMerge(config.permissions, permConfig);
+      } catch (err) {
+        throw new ConfigError(`解析 permissions.yaml 失败: ${(err as Error).message}`);
+      }
+    }
+
+    // 5. 应用环境变量覆盖
+    config = applyEnvOverrides(config);
+
+    // 6. zod 校验
+    const result = AppConfigSchema.safeParse(config);
+    if (!result.success) {
+      const issues = result.error.issues
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw new ConfigError(`配置校验失败: ${issues}`);
+    }
+
+    this.config = result.data as AppConfig;
+    return this.config;
+  }
+
+  getConfig(): AppConfig {
+    return this.config;
+  }
+
+  setOnReload(callback: () => void): void {
+    this.onReload = callback;
+  }
+
+  /** 启动配置文件监听（热更新） */
+  startWatching(): void {
+    if (!existsSync(this.configDir)) {
+      return;
+    }
+    try {
+      watch(this.configDir, (_eventType, filename) => {
+        if (!filename || !filename.endsWith('.yaml')) {
+          return;
+        }
+        // 500ms 防抖
+        if (this.watchTimer) {
+          clearTimeout(this.watchTimer);
+        }
+        this.watchTimer = setTimeout(() => {
+          try {
+            this.load();
+            this.logger.info(`配置已热更新: ${filename}`);
+            this.onReload?.();
+          } catch (err) {
+            this.logger.error(`配置热更新失败: ${(err as Error).message}`);
+          }
+        }, 500);
+      });
+    } catch {
+      this.logger.warn('配置目录监听启动失败，热更新不可用');
+    }
+  }
+
+  stopWatching(): void {
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+      this.watchTimer = undefined;
+    }
+  }
+}
+
+/**
+ * 深度合并对象（后者覆盖前者）
+ */
+export function deepMerge<T>(target: T, source: unknown): T {
+  if (!source || typeof source !== 'object') {
+    return target;
+  }
+  const result: Record<string, unknown> = { ...(target as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      typeof result[key] === 'object' &&
+      !Array.isArray(result[key])
+    ) {
+      result[key] = deepMerge(
+        result[key] as Record<string, unknown>,
+        value as Record<string, unknown>,
+      );
+    } else if (value !== undefined) {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
+// 环境变量到配置路径的映射
+const ENV_MAP: Record<string, string> = {
+  AGENT_SERVER_PORT: 'server.port',
+  AGENT_SERVER_HOST: 'server.host',
+  AGENT_DINGTALK_WEBHOOK_URL: 'dingtalk.webhookUrl',
+  AGENT_DINGTALK_SECRET: 'dingtalk.secret',
+  AGENT_FEISHU_WEBHOOK_URL: 'feishu.webhookUrl',
+  AGENT_FEISHU_APP_ID: 'feishu.appId',
+  AGENT_FEISHU_APP_SECRET: 'feishu.appSecret',
+  AGENT_GITHUB_TOKEN: 'github.token',
+  AGENT_GITHUB_DEFAULT_REPO: 'github.defaultRepo',
+  AGENT_LOGGING_LEVEL: 'logging.level',
+  AGENT_STORAGE_PATH: 'storage.path',
+};
+
+/**
+ * 应用环境变量覆盖
+ */
+function applyEnvOverrides(config: AppConfig): AppConfig {
+  const result = structuredClone(config);
+  for (const [envKey, configPath] of Object.entries(ENV_MAP)) {
+    const envValue = process.env[envKey];
+    if (envValue === undefined || envValue === '') {
+      continue;
+    }
+    setByPath(result as unknown as Record<string, unknown>, configPath, envValue);
+  }
+  return result;
+}
+
+function setByPath(obj: Record<string, unknown>, path: string, value: string): void {
+  const parts = path.split('.');
+  let current: Record<string, unknown> = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    if (!current[part] || typeof current[part] !== 'object') {
+      current[part] = {};
+    }
+    current = current[part] as Record<string, unknown>;
+  }
+  const lastKey = parts[parts.length - 1];
+  // 数字类型转换
+  if (lastKey === 'port' || lastKey === 'executionTimeout' || lastKey === 'confirmationTtl') {
+    current[lastKey] = parseInt(value, 10);
+  } else {
+    current[lastKey] = value;
+  }
+}

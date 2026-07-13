@@ -1,0 +1,56 @@
+# Agent System 配置示例
+# 复制为 config.yaml 并按需修改
+
+server:
+  port: 3000
+  host: 0.0.0.0
+
+# 钉钉机器人配置
+dingtalk:
+  webhookUrl: ""            # https://oapi.dingtalk.com/robot/send?access_token=xxx
+  secret: ""                # SECxxx 加签密钥
+  enableVerify: true        # 是否校验签名
+
+# 飞书机器人配置
+feishu:
+  webhookUrl: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+  appId: ""
+  appSecret: ""
+  enableVerify: true
+
+# GitHub 配置
+github:
+  token: ""                 # ghp_xxx Personal Access Token
+  defaultRepo: ""           # owner/repo 默认仓库
+  defaultBranch: main
+
+# Skill 插件配置
+skills:
+  installPath: ./data/skills
+  executionTimeout: 30000   # 毫秒
+
+# MCP 服务连接配置
+mcp:
+  connections: []
+  # stdio 传输（本地子进程）
+  # - name: filesystem
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  # websocket 传输
+  # - name: remote-ws
+  #   transport: websocket
+  #   url: ws://localhost:3001
+  # http 传输
+  # - name: remote-http
+  #   transport: http
+  #   url: http://localhost:3002/mcp
+
+# 日志配置
+logging:
+  level: info               # debug | info | warn | error
+  file: ./logs/agent.log
+
+# 存储配置
+storage:
+  path: ./data/agent.db

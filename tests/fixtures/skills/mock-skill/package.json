@@ -1,0 +1,14 @@
+{
+  "name": "mock-skill",
+  "version": "1.0.0",
+  "description": "测试用 Skill",
+  "main": "index.js",
+  "skill": {
+    "permissions": {
+      "github": false,
+      "mcp": false,
+      "network": false,
+      "filesystem": false
+    }
+  }
+}

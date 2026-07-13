@@ -1,0 +1,33 @@
+# Agent System 权限配置示例
+# 复制为 permissions.yaml 并按需修改
+
+git:
+  # 受保护分支（禁止直接操作）
+  protectedBranches:
+    - main
+    - master
+    - production
+
+  # 允许操作的分支（glob 模式，优先级高于禁止）
+  allowedBranches:
+    - feature/*
+    - dev/*
+    - hotfix/*
+
+  # 禁止的操作
+  forbiddenOperations:
+    - force_push
+    - delete_branch
+    - delete_repository
+
+  # 需要二次确认的操作
+  confirmOperations:
+    - delete_file
+    - merge_to_main
+
+operations:
+  # 命令黑名单（禁止执行的命令名）
+  blacklist: []
+
+# 危险操作确认 TTL（秒）
+confirmationTtl: 300
