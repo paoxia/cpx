@@ -9,7 +9,8 @@
   },
   "files": [
     "dist",
-    "config"
+    "config",
+    "public"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

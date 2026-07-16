@@ -1,1 +1,330 @@
-# cpx
+# Agent System（cpx）
+
+智能代理系统：通过钉钉/飞书远程控制、Skill 插件扩展、MCP 连接、GitHub 远程操作。
+
+## 功能特性
+
+- **钉钉/飞书远程控制** - 通过群机器人发送命令，随时随地执行任务
+- **Skill 插件系统** - 从 npm/local/git 安装插件，动态加载执行
+- **MCP 连接器** - 支持 stdio/websocket/http 三种传输协议连接外部 MCP 服务
+- **GitHub 远程操作** - 读取、修改、创建文件并自动创建 PR
+- **AI 开发控制台** - 在隔离工作区委托 Codex 或 Claude Code 完成开发任务，可选创建 PR
+- **权限控制** - 主分支保护、危险操作二次确认、操作审计日志
+- **命令中英双语** - 支持中文和英文命令（如 `修改` / `modify`）
+
+## 环境要求
+
+- Node.js >= 18.0
+- npm >= 8.0
+
+## 快速开始
+
+```bash
+# 安装依赖
+npm install
+
+# 初始化配置文件
+npm run dev init
+# 或: npx tsx src/cli.ts init
+
+# 编辑配置，填写钉钉/飞书 Webhook、GitHub Token 等
+# 编辑 config/config.yaml 和 config/permissions.yaml
+
+# 启动系统
+npm run dev start
+# 或: npx tsx src/cli.ts start
+```
+
+启动后通过 HTTP 接口发送命令测试：
+
+```bash
+curl -X POST http://localhost:3000/command \
+  -H "Content-Type: application/json" \
+  -d '{"text":"version","userId":"u1","userName":"Tester","source":"cli"}'
+```
+
+浏览器访问 `http://localhost:3000/` 可打开 AI 开发控制台。运行控制台任务还需要：
+
+- 本机已安装并登录 `codex` 或 `claude` CLI；也可在控制台中提供仅保存在当前进程内的 API Key。
+- 本机已安装 Git，且能访问目标 GitHub 仓库。
+- 若勾选“创建 Pull Request”，还需安装并登录 GitHub CLI（`gh`），并具备推送分支和创建 PR 的权限。
+
+每个任务会克隆到数据库所在目录下的 `workspaces/<task-id>`，Agent 只在该克隆中执行。任务状态和日志保存在内存中，重启服务后不会恢复；工作区文件仍保留在磁盘。
+
+> 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
+
+## CLI 命令
+
+```bash
+agent-cli version          # 显示版本
+agent-cli init [-d <dir>]  # 初始化配置文件到指定目录（默认 ./config）
+agent-cli start [-d <dir>] # 启动系统
+agent-cli stop             # 提示如何停止（通过 SIGTERM）
+```
+
+开发模式下使用 `npm run dev <command>`，例如 `npm run dev start`。
+
+## 聊天命令
+
+通过钉钉群 @机器人、飞书群 /agent、或 HTTP `/command` 端点发送。支持中英双语。
+
+### 基础命令
+
+| 命令                        | 说明             |
+| --------------------------- | ---------------- |
+| `version` / `版本`          | 查看版本         |
+| `help` / `帮助`             | 显示帮助         |
+| `列出 skill` / `list skill` | 列出已安装 Skill |
+| `列出 mcp` / `list mcp`     | 列出 MCP 连接    |
+
+### GitHub 操作
+
+| 命令                            | 说明                     |
+| ------------------------------- | ------------------------ |
+| `读取文件 <file>`               | 读取 GitHub 仓库文件内容 |
+| `修改 <file> <description>`     | 修改文件并创建 PR        |
+| `新建文件 <file> <description>` | 创建新文件并创建 PR      |
+
+示例：`@agent 修改 README.md 添加安装说明`
+
+### Skill 执行
+
+| 命令                  | 说明                    |
+| --------------------- | ----------------------- |
+| `执行 <skill> [json]` | 执行已安装的 Skill 插件 |
+
+示例：`@agent 执行 code-review {"repo":"owner/repo"}`
+
+### MCP 操作
+
+| 命令                           | 说明                  |
+| ------------------------------ | --------------------- |
+| `连接mcp <名称>`               | 连接配置中的 MCP 服务 |
+| `调用mcp <连接> <方法> [参数]` | 调用 MCP 方法         |
+| `断开mcp <标识>`               | 断开 MCP 连接         |
+
+示例：`@agent 调用mcp filesystem tools/list`
+
+### 确认/取消
+
+| 命令        | 说明         |
+| ----------- | ------------ |
+| `确认 <id>` | 确认危险操作 |
+| `取消 <id>` | 取消危险操作 |
+
+## 配置
+
+配置文件位于 `config/` 目录，优先级从低到高：默认配置 < config.yaml < permissions.yaml < 环境变量。
+
+### config.yaml
+
+```yaml
+server:
+  port: 3000
+  host: 0.0.0.0
+
+dingtalk:
+  webhookUrl: '' # https://oapi.dingtalk.com/robot/send?access_token=xxx
+  secret: '' # SECxxx 加签密钥
+  enableVerify: true # 是否校验签名
+
+feishu:
+  webhookUrl: '' # https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+  appId: ''
+  appSecret: ''
+  enableVerify: true
+
+github:
+  token: '' # ghp_xxx Personal Access Token
+  defaultRepo: '' # owner/repo 默认仓库
+  defaultBranch: main
+
+skills:
+  installPath: ./data/skills
+  executionTimeout: 30000 # 毫秒
+
+mcp:
+  connections: []
+  # stdio 传输（本地子进程）
+  # - name: filesystem
+  #   transport: stdio
+  #   command: npx
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+  # websocket 传输
+  # - name: remote-ws
+  #   transport: websocket
+  #   url: ws://localhost:3001
+  # http 传输
+  # - name: remote-http
+  #   transport: http
+  #   url: http://localhost:3002/mcp
+
+logging:
+  level: info # debug | info | warn | error
+  file: ./logs/agent.log
+
+storage:
+  path: ./data/agent.db
+```
+
+### permissions.yaml
+
+```yaml
+git:
+  protectedBranches: [main, master, production]
+  allowedBranches: [feature/*, dev/*, hotfix/*]
+  forbiddenOperations: [force_push, delete_branch, delete_repository]
+  confirmOperations: [delete_file, merge_to_main]
+
+operations:
+  blacklist: []
+
+confirmationTtl: 300 # 确认超时秒数
+```
+
+### 环境变量
+
+环境变量以 `AGENT_` 前缀覆盖配置文件，适合 Docker 部署：
+
+```bash
+AGENT_SERVER_PORT=3000
+AGENT_DINGTALK_WEBHOOK_URL=https://...
+AGENT_DINGTALK_SECRET=SECxxx
+AGENT_FEISHU_WEBHOOK_URL=https://...
+AGENT_FEISHU_APP_ID=cli_xxx
+AGENT_FEISHU_APP_SECRET=xxx
+AGENT_GITHUB_TOKEN=ghp_xxx
+AGENT_GITHUB_DEFAULT_REPO=owner/repo
+AGENT_LOGGING_LEVEL=info
+AGENT_STORAGE_PATH=./data/agent.db
+```
+
+## HTTP API
+
+### GET /
+
+返回 AI 开发控制台。控制台使用以下 API：
+
+| 端点                             | 说明                                   |
+| -------------------------------- | -------------------------------------- |
+| `GET/POST /api/console/settings` | 读取或更新默认 Agent、模型及进程内密钥 |
+| `GET/POST /api/console/tasks`    | 列出任务或创建任务                     |
+| `GET /api/console/task?id=<id>`  | 读取单个任务及日志                     |
+| `POST /api/console/cancel`       | 取消未结束任务                         |
+
+仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。
+
+### POST /command
+
+测试用命令端点，无需钉钉/飞书即可调试：
+
+```bash
+curl -X POST http://localhost:3000/command \
+  -H "Content-Type: application/json" \
+  -d '{"text":"help","userId":"u1","userName":"Tester","source":"cli"}'
+```
+
+### POST /webhook/dingtalk
+
+钉钉机器人 Webhook 回调端点。需配置 `dingtalk.secret` 进行签名校验。
+
+### POST /webhook/feishu
+
+飞书机器人事件回调端点。需配置 `feishu.appSecret` 进行签名校验。
+
+## Skill 插件开发
+
+Skill 是一个 npm 包，`package.json` 中声明 `skill` 字段：
+
+```json
+{
+  "name": "my-skill",
+  "version": "1.0.0",
+  "main": "index.js",
+  "skill": {
+    "permissions": {
+      "github": false,
+      "mcp": false,
+      "network": false,
+      "filesystem": false
+    }
+  }
+}
+```
+
+入口模块导出 `execute` 方法：
+
+```js
+module.exports = {
+  async execute(ctx) {
+    // ctx.args - 命令参数
+    // ctx.logger - 日志器
+    // ctx.github - GitHub 服务（需 permissions.github: true）
+    // ctx.mcp - MCP 管理器（需 permissions.mcp: true）
+    return { success: true, message: '执行完成', data: {} };
+  },
+};
+```
+
+`SkillInstaller` 已提供从 npm、本地目录和 Git 仓库安装的底层 API；当前 CLI 尚未暴露安装和卸载命令。
+
+## 程序化调用
+
+```typescript
+import { AgentSystem } from 'agent-system';
+
+const system = new AgentSystem('./config');
+await system.start();
+
+const result = await system.processCommand('version', {
+  userId: 'u1',
+  userName: 'Test',
+  source: 'cli',
+});
+
+await system.stop();
+```
+
+## 开发
+
+```bash
+npm run build       # 编译 TypeScript
+npm test            # 运行测试
+npm run test:watch  # 测试监听模式
+npm run coverage    # 测试覆盖率
+npm run lint        # ESLint 检查
+npm run format      # Prettier 格式化
+```
+
+## 项目结构
+
+```
+src/
+├── cli.ts                    # CLI 入口
+├── index.ts                  # 程序化 API 导出
+├── core/                     # 核心模块
+│   ├── AgentSystem.ts        # 系统编排根
+│   ├── CommandParser.ts      # 命令解析（中英双语）
+│   ├── CommandRouter.ts      # 命令路由
+│   ├── EventBus.ts           # 事件总线
+│   ├── HttpServer.ts         # HTTP 服务
+│   └── ResponseFormatter.ts  # 响应格式化
+├── config/                   # 配置管理
+├── mcp/                      # MCP 连接器
+│   ├── MCPManager.ts         # MCP 管理器
+│   ├── JsonRpc.ts            # JSON-RPC 2.0 协议
+│   └── transports/           # 传输层（stdio/websocket/http）
+├── skills/                   # Skill 插件系统
+├── agents/                   # Codex/Claude Code 任务与 Git 工作区
+├── web/                      # AI 开发控制台路由和设置
+├── github/                   # GitHub 操作
+├── integrations/             # 钉钉/飞书集成
+├── permissions/              # 权限控制
+├── storage/                  # SQLite 存储
+└── utils/                    # 工具（Logger、errors 等）
+public/                       # 控制台 HTML、CSS 和浏览器脚本
+```
+
+## License
+
+MIT

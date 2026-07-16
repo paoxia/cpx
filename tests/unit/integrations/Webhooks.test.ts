@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createHmac } from 'crypto';
+import { createHash, createHmac } from 'crypto';
 import { DingTalkWebhook } from '../../../src/integrations/dingtalk/DingTalkWebhook';
 import { FeishuWebhook } from '../../../src/integrations/feishu/FeishuWebhook';
 import { Logger } from '../../../src/utils/Logger';
@@ -84,7 +84,6 @@ describe('FeishuWebhook', () => {
     const timestamp = String(Math.floor(Date.now() / 1000));
     const rawBody = '{"test":1}';
     const stringToSign = `${timestamp}${appSecret}${rawBody}`;
-    const { createHash } = require('crypto');
     const signature = createHash('sha1').update(stringToSign).digest('hex');
     expect(fw.verify(timestamp, rawBody, signature)).toBe(true);
   });

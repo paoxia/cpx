@@ -20,6 +20,7 @@ import { SkillInstaller } from '../skills/SkillInstaller';
 import { SkillLoader } from '../skills/SkillLoader';
 import { SkillManager } from '../skills/SkillManager';
 import { MCPManager } from '../mcp/MCPManager';
+import { WebConsole } from '../web/WebConsole';
 import type { AppConfig, Command, CommandResult, CommandSource } from './types';
 import type { ParsedUserInfo } from './CommandParser';
 
@@ -50,6 +51,7 @@ export class AgentSystem {
   private skillLoader: SkillLoader;
   private skillManager: SkillManager;
   private mcpManager: MCPManager;
+  private webConsole: WebConsole;
   private running = false;
   private resultPusher?: (source: CommandSource, message: unknown) => Promise<void>;
 
@@ -109,11 +111,10 @@ export class AgentSystem {
     this.skillLoader = new SkillLoader(this.config.skills.installPath, this.database, this.logger);
 
     // MCP 服务（在 SkillManager 之前实例化，以便注入）
-    this.mcpManager = new MCPManager(
-      this.config.mcp,
-      this.database,
-      this.logger,
-    );
+    this.mcpManager = new MCPManager(this.config.mcp, this.database, this.logger);
+
+    // Web 开发控制台：模型配置、GitHub 工作区和 Codex/Claude Code 任务
+    this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger);
 
     this.skillManager = new SkillManager(
       this.skillLoader,
@@ -263,6 +264,7 @@ export class AgentSystem {
     this.logger.info('Agent System 停止中...');
     this.confirmationStore.stopExpiryCleanup();
     this.configManager.stopWatching();
+    await this.webConsole.stop();
     await this.mcpManager.stop();
     await this.httpServer.stop();
     this.eventBus.destroy();
@@ -350,7 +352,8 @@ export class AgentSystem {
       if (!skillName) {
         return { commandId: command.id, success: false, message: '缺少 Skill 名称' };
       }
-      const { skill, ...rest } = command.args;
+      const rest = { ...command.args };
+      delete rest.skill;
       try {
         const result = await this.skillManager.execute(skillName, rest, command.id);
         this.auditLogger.record({
@@ -382,7 +385,11 @@ export class AgentSystem {
         (s) =>
           `• ${s.manifest.name}@${s.manifest.version} [${s.source}] ${s.loaded ? '(已加载)' : '(未加载)'}`,
       );
-      return { commandId: command.id, success: true, message: `已安装 Skill (${skills.length}):\n${lines.join('\n')}` };
+      return {
+        commandId: command.id,
+        success: true,
+        message: `已安装 Skill (${skills.length}):\n${lines.join('\n')}`,
+      };
     });
   }
 
@@ -396,7 +403,11 @@ export class AgentSystem {
       const lines = conns.map(
         (c) => `• ${c.name} [${c.transport}] ${c.status}${c.pid ? ` pid=${c.pid}` : ''}`,
       );
-      return { commandId: command.id, success: true, message: `已连接 MCP (${conns.length}):\n${lines.join('\n')}` };
+      return {
+        commandId: command.id,
+        success: true,
+        message: `已连接 MCP (${conns.length}):\n${lines.join('\n')}`,
+      };
     });
 
     this.router.register('mcp_call', async (command) => {

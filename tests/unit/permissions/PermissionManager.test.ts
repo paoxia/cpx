@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
 import { DatabaseService } from '../../../src/storage/Database';
 import { PendingConfirmationStore } from '../../../src/permissions/PendingConfirmationStore';

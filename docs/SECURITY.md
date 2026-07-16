@@ -1,432 +1,80 @@
-# 安全文档
-
-本文档描述项目的安全策略、措施和最佳实践。
-
-## 安全原则
-
-### 核心原则
-
-1. **最小权限**: 只授予必要的最小权限
-2. **纵深防御**: 多层安全防护措施
-3. **安全默认**: 默认配置应该是安全的
-4. **失败安全**: 失败时进入安全状态
-
-### 安全目标
-
-- 保护用户数据安全
-- 防止未授权访问
-- 确保系统可用性
-- 合规性要求
-
-## 威胁模型
-
-### 1. 数据威胁
-
-| 威胁类型 | 描述 | 影响 | 缓解措施 |
-|----------|------|------|----------|
-| 数据泄露 | 敏感数据被未授权访问 | 高 | 加密、访问控制 |
-| 数据篡改 | 数据被恶意修改 | 高 | 完整性校验 |
-| 数据丢失 | 数据意外丢失 | 高 | 备份、冗余 |
-
-### 2. 隐私威胁
-
-| 威胁类型 | 描述 | 影响 | 缓解措施 |
-|----------|------|------|----------|
-| 隐私泄露 | 用户隐私信息泄露 | 高 | 数据脱敏、匿名化 |
-| 跟踪 | 用户行为被跟踪 | 中 | 隐私保护机制 |
-
-### 3. 功能威胁
-
-| 威胁类型 | 描述 | 影响 | 缓解措施 |
-|----------|------|------|----------|
-| XSS | 跨站脚本攻击 | 高 | 输入验证、输出编码 |
-| CSRF | 跨站请求伪造 | 中 | Token 验证 |
-| 注入 | 代码/命令注入 | 高 | 参数化查询 |
-
-## Chrome Extension 安全
-
-### 1. 权限管理
-
-#### 权限声明
-```json
-{
-  "permissions": [
-    "storage",      // 仅申请必要权限
-    "activeTab"     // 优先使用 activeTab
-  ],
-  "optional_permissions": [
-    // 可选权限，按需申请
-  ]
-}
-```
-
-#### 权限原则
-- 申请最小必要权限
-- 使用 optional_permissions
-- 运行时申请权限
-- 说明权限用途
-
-### 2. 内容安全
-
-#### 内容安全策略 (CSP)
-```json
-{
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
-  }
-}
-```
-
-#### 安全实践
-- 不使用 eval()
-- 不使用 innerHTML
-- 不加载外部脚本
-- 使用 HTTPS
-
-### 3. 数据安全
-
-#### 存储安全
-```javascript
-// 敏感数据加密后存储
-async function saveSecureData(key, data) {
-  const encrypted = await encrypt(data);
-  await chrome.storage.local.set({ [key]: encrypted });
-}
-
-// 读取时解密
-async function getSecureData(key) {
-  const result = await chrome.storage.local.get(key);
-  return await decrypt(result[key]);
-}
-```
-
-#### 数据清理
-```javascript
-// 退出时清理敏感数据
-chrome.windows.onRemoved.addListener((windowId) => {
-  chrome.storage.local.remove(['sensitive_key']);
-});
-```
-
-### 4. 消息安全
-
-#### 消息验证
-```javascript
-// 接收消息时验证来源
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  // 验证消息来源
-  if (!sender.id || sender.id !== chrome.runtime.id) {
-    console.warn('Invalid message source');
-    return;
-  }
-
-  // 验证消息格式
-  if (!isValidMessage(message)) {
-    console.warn('Invalid message format');
-    return;
-  }
-
-  // 处理消息
-  handleMessage(message, sendResponse);
-});
-```
-
-#### 消息类型定义
-```javascript
-const MESSAGE_TYPES = {
-  ACTION_1: 'action_1',
-  ACTION_2: 'action_2'
-};
-
-function isValidMessage(message) {
-  return message &&
-    typeof message.type === 'string' &&
-    Object.values(MESSAGE_TYPES).includes(message.type);
-}
-```
-
-## 输入验证
-
-### 1. 验证原则
-
-- **验证所有输入**: 不信任任何外部输入
-- **白名单验证**: 使用白名单而非黑名单
-- **严格验证**: 验证数据类型、长度、格式
-- **及时清理**: 验证失败立即拒绝
-
-### 2. 验证实现
-
-#### 字符串验证
-```javascript
-function validateString(input, options = {}) {
-  const {
-    minLength = 0,
-    maxLength = 1000,
-    pattern = null,
-    required = false
-  } = options;
-
-  if (!input) {
-    return !required;
-  }
-
-  if (typeof input !== 'string') {
-    return false;
-  }
-
-  if (input.length < minLength || input.length > maxLength) {
-    return false;
-  }
-
-  if (pattern && !pattern.test(input)) {
-    return false;
-  }
-
-  return true;
-}
-```
-
-#### URL 验证
-```javascript
-function validateURL(url) {
-  try {
-    const parsed = new URL(url);
-    // 只允许 HTTPS
-    if (parsed.protocol !== 'https:') {
-      return false;
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
-```
-
-### 3. 输出编码
-
-#### HTML 编码
-```javascript
-function escapeHTML(str) {
-  const escapeMap = {
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  };
-  return str.replace(/[&<>"']/g, char => escapeMap[char]);
-}
-```
-
-#### JavaScript 编码
-```javascript
-function escapeJS(str) {
-  return str.replace(/[\\'"]/g, char => '\\' + char);
-}
-```
-
-## XSS 防护
-
-### 1. 防护措施
-
-- 输出编码
-- CSP 策略
-- 不使用危险 API
-- 使用安全的模板引擎
-
-### 2. 危险模式
-
-```javascript
-// 危险: 直接插入 HTML
-element.innerHTML = userInput;
-
-// 危险: 使用 eval
-eval(userInput);
-
-// 危险: 动态执行代码
-new Function(userInput);
-
-// 安全: 使用 textContent
-element.textContent = userInput;
-
-// 安全: 使用安全的 API
-element.setAttribute('data-value', userInput);
-```
-
-## CSRF 防护
-
-### 1. Token 验证
-
-```javascript
-// 生成 Token
-function generateToken() {
-  return crypto.getRandomValues(new Uint8Array(16))
-    .reduce((str, byte) => str + byte.toString(16), '');
-}
-
-// 存储 Token
-async function storeToken(token) {
-  await chrome.storage.local.set({ csrf_token: token });
-}
-
-// 验证 Token
-async function validateToken(token) {
-  const result = await chrome.storage.local.get('csrf_token');
-  return result.csrf_token === token;
-}
-```
-
-### 2. SameSite 属性
-
-```javascript
-// 设置 Cookie 的 SameSite 属性
-document.cookie = 'session=xxx; SameSite=Strict; Secure';
-```
-
-## 数据保护
-
-### 1. 敏感数据识别
-
-| 数据类型 | 敏感级别 | 示例 |
-|----------|----------|------|
-| 高敏感 | 严重 | 密码、密钥、个人信息 |
-| 中敏感 | 高 | 用户 ID、会话 Token |
-| 低敏感 | 中 | 用户偏好、设置 |
-| 公开 | 低 | 公开信息 |
-
-### 2. 数据加密
-
-#### 存储加密
-```javascript
-// 使用 Web Crypto API 加密
-async function encrypt(data, key) {
-  const encoder = new TextEncoder();
-  const dataBuffer = encoder.encode(JSON.stringify(data));
-
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const algorithm = { name: 'AES-GCM', iv };
-
-  const encrypted = await crypto.subtle.encrypt(
-    algorithm,
-    key,
-    dataBuffer
-  );
-
-  return { iv, encrypted };
-}
-```
-
-#### 传输加密
-- 使用 HTTPS
-- 验证证书
-- 避免中间人攻击
-
-### 3. 数据脱敏
-
-```javascript
-// 手机号脱敏
-function maskPhone(phone) {
-  return phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2');
-}
-
-// 邮箱脱敏
-function maskEmail(email) {
-  const [local, domain] = email.split('@');
-  const maskedLocal = local.slice(0, 2) + '***';
-  return `${maskedLocal}@${domain}`;
-}
-```
-
-## 安全审计
-
-### 1. 代码审计
-
-#### 审计项
-- 权限使用合理性
-- 敏感数据处理
-- 输入验证完整性
-- XSS/CSRF 防护
-
-#### 工具
-- ESLint 安全插件
-- 依赖漏洞扫描
-- 静态代码分析
-
-### 2. 依赖审计
-
-```bash
-# 检查依赖漏洞
-npm audit
-
-# 更新依赖
-npm audit fix
-```
-
-### 3. 定期审计
-
-- 每月依赖审计
-- 每季度代码审计
-- 发布前安全审计
-
-## 安全更新
-
-### 1. 更新策略
-
-- 及时更新依赖
-- 关注安全公告
-- 快速响应漏洞
-
-### 2. 漏洞处理
-
-#### 漏洞分级
-| 级别 | 描述 | 响应时间 |
-|------|------|----------|
-| 严重 | 可被远程利用 | 24 小时 |
-| 高 | 可获取敏感数据 | 72 小时 |
-| 中 | 可能影响安全 | 1 周 |
-| 低 | 轻微问题 | 1 月 |
-
-#### 处理流程
-1. 接收漏洞报告
-2. 验证漏洞
-3. 评估影响
-4. 开发修复
-5. 测试验证
-6. 发布更新
-7. 公告通知
-
-## 安全最佳实践
-
-### 1. 开发阶段
-
-- 使用安全的编码规范
-- 进行安全代码审查
-- 编写安全测试用例
-
-### 2. 测试阶段
-
-- 安全功能测试
-- 渗透测试
-- 漏洞扫描
-
-### 3. 发布阶段
-
-- 安全配置检查
-- 依赖漏洞检查
-- 权限最小化验证
-
-### 4. 运维阶段
-
-- 监控异常行为
-- 定期安全审计
-- 及时更新修复
-
-## 参考资源
-
-- [Chrome Extension 安全](https://developer.chrome.com/docs/extensions/mv3/security/)
-- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-- [Web Security Guidelines](https://developer.mozilla.org/en-US/docs/Web/Security)
-
-## 更新日志
-
-- [待补充] 初始化安全文档
+# 安全说明
+
+本文记录当前代码实际提供的安全控制和已知边界。它不是通用 Web 安全清单。
+
+## 需要保护的资产
+
+- 钉钉、飞书和 GitHub 凭据。
+- MCP 连接参数及其可访问的外部资源。
+- Skill 获得的文件系统、网络、GitHub 或 MCP 能力。
+- SQLite 中的命令确认、Skill 元数据、连接状态和审计记录。
+- 控制台中的 Agent API Key、GitHub 工作区、任务提示与执行日志。
+
+## 当前控制
+
+### Webhook 校验
+
+钉钉和飞书处理器支持签名与时间戳校验，默认 `enableVerify: true`。如果对应的 `secret` 或 `appSecret` 为空，当前实现会跳过校验。因此生产环境必须同时配置密钥并保持校验开启。
+
+### Git 操作限制
+
+权限管理器支持：
+
+- 受保护分支列表，默认包含 `main`、`master` 和 `production`。
+- 允许分支的 glob 列表，默认允许 `feature/*`、`dev/*` 和 `hotfix/*`。
+- 禁止 Git 操作列表。
+- 需要二次确认的操作列表。
+
+确认记录保存在 SQLite 中，带过期时间，并校验确认用户与命令来源。权限 YAML 可热更新。
+
+### 审计
+
+系统记录命令接收、完成或失败，以及 Skill、MCP 和危险操作相关事件。审计数据保存在本地 SQLite；当前没有远程防篡改存储或内置清理策略。
+
+### 配置校验
+
+配置按默认值、YAML、环境变量的顺序合并，再通过 Zod 校验。敏感值不应写入版本控制；部署时优先使用环境变量或外部密钥管理系统。
+
+## 重要边界
+
+### HTTP 端点
+
+`/command` 和 `/api/console/*` 没有认证；`/health` 公开返回进程状态。控制台 API 能启动代码执行并在显式选择后推送 GitHub 分支，其权限高于普通只读管理页面。若监听 `0.0.0.0`，必须由防火墙或带认证的反向代理限制访问，不应直接暴露到公网。
+
+HTTP 请求体上限为 10 MB，但当前服务没有内置 TLS、速率限制或通用身份认证。公网部署需要由可信网关提供这些能力。
+
+控制台静态资源设置了 CSP、禁止 MIME 嗅探并拒绝被其他页面嵌入，但这些响应头不能替代访问认证。
+
+### Coding Agent 执行
+
+- 每个任务在数据库相邻目录的独立 Git 克隆中执行，不直接修改 cpx 自身工作区。
+- Codex 使用 `workspace-write` 沙箱参数；Claude Code 使用 `acceptEdits` 权限模式。这些是 CLI 执行约束，不是容器或操作系统级隔离。
+- Agent 会继承服务进程环境。控制台输入的 API Key 只保存在内存中并注入子进程，不写入 `console-settings.json`；任务输出仍可能包含 Agent 或工具主动打印的敏感信息。
+- 未选择创建 Pull Request 时不执行提交和推送。选择后系统会暂存工作区全部改动并使用当前 Git/`gh` 身份推送，因此必须在提交前审查目标仓库、提示和运行日志。
+- 任务状态与日志没有写入 SQLite 审计表，重启即丢失；克隆的仓库和未提交改动会继续保留在磁盘。
+
+### Skill 不是沙箱
+
+Skill 通过 `npm install` 安装并在主 Node.js 进程中使用 `require` 加载。manifest 中的权限决定是否向执行上下文注入 GitHub 和 MCP 服务，但不能阻止恶意 Node.js 代码直接访问进程、文件系统或网络。
+
+只安装可信来源的 Skill。对不可信插件应使用独立容器或受限进程；当前仓库尚未实现这种隔离。
+
+### 外部连接
+
+- GitHub Token 应使用满足任务所需的最小权限，并限制到必要仓库。
+- stdio MCP 可以启动本地进程，配置文件本身应视为可执行权限。
+- WebSocket 与 HTTP MCP 地址应指向可信服务，生产环境使用加密传输。
+- 日志与错误信息不得包含 Token、Webhook 密钥或完整敏感负载。
+
+## 生产部署最低要求
+
+1. 配置钉钉 `secret` 和飞书 `appSecret`，保持签名校验开启。
+2. 不对公网开放 `/command`、控制台页面或 `/api/console/*`；通过网络策略限制管理入口。
+3. 在 TLS 终止、认证和限流网关之后运行服务。
+4. 使用最小权限 GitHub Token，并限制 Skill 与 MCP 来源。
+5. 限制配置、SQLite、日志、Skill 安装目录和 `data/workspaces` 的文件权限。
+6. 定期执行 `npm audit`、备份 SQLite，并审查审计记录。
+
+## 漏洞处理
+
+安全问题不应在公开 Issue 中附带密钥、利用代码或用户数据。项目建立私密报告渠道前，请先联系仓库维护者并仅提供最小复现信息。

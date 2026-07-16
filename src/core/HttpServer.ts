@@ -5,7 +5,12 @@ export type RequestHandler = (
   body: Buffer,
   headers: Record<string, string | string[] | undefined>,
   query: Record<string, string>,
-) => Promise<{ status: number; body: unknown }>;
+) => Promise<{
+  status: number;
+  body: unknown;
+  contentType?: string;
+  headers?: Record<string, string>;
+}>;
 
 /**
  * 基于 Node 内置 http 模块的轻量 HTTP 服务
@@ -71,7 +76,7 @@ export class HttpServer {
     const query = Object.fromEntries(url.searchParams.entries());
 
     // 健康检查
-    if (method === 'GET' && (path === '/health' || path === '/')) {
+    if (method === 'GET' && path === '/health') {
       this.sendJson(res, 200, { status: 'ok', timestamp: Date.now() });
       return;
     }
@@ -89,7 +94,11 @@ export class HttpServer {
 
     try {
       const result = await handler(body, headers, query);
-      this.sendJson(res, result.status, result.body);
+      if (result.contentType) {
+        this.sendRaw(res, result.status, result.body, result.contentType, result.headers);
+      } else {
+        this.sendJson(res, result.status, result.body, result.headers);
+      }
     } catch (err) {
       this.logger.error(`路由处理失败 ${method} ${path}: ${(err as Error).message}`);
       this.sendJson(res, 500, { error: (err as Error).message });
@@ -99,26 +108,63 @@ export class HttpServer {
   private readBody(req: IncomingMessage): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
+      let totalSize = 0;
+      let rejected = false;
       req.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
+        if (rejected) {
+          return;
+        }
+        totalSize += chunk.length;
         // 防止过大请求（10MB 上限）
-        const totalSize = chunks.reduce((sum, c) => sum + c.length, 0);
         if (totalSize > 10 * 1024 * 1024) {
+          rejected = true;
           reject(new Error('请求体过大'));
           req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('end', () => {
+        if (!rejected) {
+          resolve(Buffer.concat(chunks, totalSize));
         }
       });
-      req.on('end', () => resolve(Buffer.concat(chunks)));
-      req.on('error', reject);
+      req.on('error', (error) => {
+        if (!rejected) {
+          reject(error);
+        }
+      });
     });
   }
 
-  private sendJson(res: ServerResponse, status: number, body: unknown): void {
+  private sendJson(
+    res: ServerResponse,
+    status: number,
+    body: unknown,
+    headers?: Record<string, string>,
+  ): void {
     const json = JSON.stringify(body);
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(json),
+      ...headers,
     });
     res.end(json);
+  }
+
+  private sendRaw(
+    res: ServerResponse,
+    status: number,
+    body: unknown,
+    contentType: string,
+    headers?: Record<string, string>,
+  ): void {
+    const payload = Buffer.isBuffer(body) ? body : Buffer.from(String(body), 'utf8');
+    res.writeHead(status, {
+      'Content-Type': contentType,
+      'Content-Length': payload.length,
+      ...headers,
+    });
+    res.end(payload);
   }
 }

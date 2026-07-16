@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>cpx · AI 开发控制台</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><span></span><span></span></div>
+          <div>
+            <strong>cpx</strong>
+            <small>AI DEV CONSOLE</small>
+          </div>
+        </div>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <button class="nav-item active" type="button">
+            <span class="nav-icon">⌁</span>
+            <span>任务控制台</span>
+          </button>
+          <button class="nav-item" id="open-settings" type="button">
+            <span class="nav-icon">◎</span>
+            <span>模型设置</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-section">
+          <div class="section-label">
+            <span>最近任务</span>
+            <span id="task-count">0</span>
+          </div>
+          <div id="task-list" class="task-list">
+            <div class="empty-list">尚未运行任务</div>
+          </div>
+        </div>
+
+        <div class="runtime-card">
+          <span class="status-dot"></span>
+          <div>
+            <strong>本地运行中</strong>
+            <small>Agent 仅操作任务工作区</small>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">DEVELOPMENT WORKSPACE</p>
+            <h1>把想法交给 Agent，<br /><span>让代码真正发生。</span></h1>
+          </div>
+          <button class="icon-button" id="top-settings" type="button" aria-label="打开设置">⚙</button>
+        </header>
+
+        <section class="workspace-grid">
+          <article class="composer-card">
+            <div class="card-heading">
+              <div>
+                <span class="step-index">01</span>
+                <h2>创建开发任务</h2>
+              </div>
+              <div class="agent-switch" role="group" aria-label="选择 Agent">
+                <button type="button" data-provider="codex" class="active">Codex</button>
+                <button type="button" data-provider="claude">Claude Code</button>
+              </div>
+            </div>
+
+            <form id="task-form">
+              <input type="hidden" id="provider" value="codex" />
+              <div class="field-row">
+                <label class="field field-grow">
+                  <span>GitHub 仓库</span>
+                  <input id="repository" type="text" placeholder="owner/repository" autocomplete="off" required />
+                  <small>支持 owner/repo、HTTPS 或 SSH 地址</small>
+                </label>
+                <label class="field branch-field">
+                  <span>基础分支</span>
+                  <input id="base-branch" type="text" placeholder="默认分支" autocomplete="off" />
+                </label>
+              </div>
+
+              <label class="field prompt-field">
+                <span>你想完成什么？</span>
+                <textarea
+                  id="prompt"
+                  rows="8"
+                  required
+                  placeholder="例如：分析现有项目，为用户登录增加基于 JWT 的认证；补充测试，并更新 README。"
+                ></textarea>
+                <div class="prompt-footer">
+                  <div class="suggestions">
+                    <button type="button" data-prompt="先分析当前项目，并修复所有会阻止构建和测试通过的问题。">修复项目</button>
+                    <button type="button" data-prompt="阅读现有架构，实现需求中缺失的核心功能，并补充测试。">实现功能</button>
+                    <button type="button" data-prompt="审查当前代码的安全风险，修复高优先级问题并给出验证结果。">安全审查</button>
+                  </div>
+                  <span id="prompt-count">0 / 20000</span>
+                </div>
+              </label>
+
+              <div class="launch-row">
+                <label class="toggle-option">
+                  <input id="create-pr" type="checkbox" />
+                  <span class="toggle"></span>
+                  <span>
+                    <strong>完成后创建 Pull Request</strong>
+                    <small>将提交并推送 Agent 产生的全部改动</small>
+                  </span>
+                </label>
+                <button class="launch-button" id="launch-button" type="submit">
+                  <span>启动任务</span>
+                  <b>↗</b>
+                </button>
+              </div>
+            </form>
+          </article>
+
+          <aside class="context-panel">
+            <div class="context-header">
+              <span class="step-index">02</span>
+              <h2>执行状态</h2>
+            </div>
+            <div id="task-detail" class="task-detail empty-detail">
+              <div class="orb" aria-hidden="true"><i></i></div>
+              <h3>等待第一个任务</h3>
+              <p>提交任务后，这里会实时展示 Agent 的执行阶段、日志和 Pull Request。</p>
+            </div>
+          </aside>
+        </section>
+
+        <footer class="page-footer">
+          <span>工作区默认保存在 <code>data/workspaces</code></span>
+          <a href="/health" target="_blank" rel="noreferrer">服务状态 ↗</a>
+        </footer>
+      </main>
+    </div>
+
+    <div class="modal-backdrop" id="settings-modal" hidden>
+      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="modal-heading">
+          <div>
+            <p class="eyebrow">AGENT CONFIGURATION</p>
+            <h2 id="settings-title">模型与身份设置</h2>
+          </div>
+          <button class="icon-button" id="close-settings" type="button" aria-label="关闭设置">×</button>
+        </div>
+
+        <form id="settings-form">
+          <label class="field">
+            <span>默认 Agent</span>
+            <select id="default-provider">
+              <option value="codex">Codex</option>
+              <option value="claude">Claude Code</option>
+            </select>
+          </label>
+          <div class="field-row">
+            <label class="field field-grow">
+              <span>Codex 模型</span>
+              <input id="codex-model" type="text" placeholder="留空以使用 Codex 默认模型" autocomplete="off" />
+            </label>
+            <label class="field field-grow">
+              <span>Claude 模型</span>
+              <input id="claude-model" type="text" placeholder="sonnet" autocomplete="off" />
+            </label>
+          </div>
+
+          <div class="secret-section">
+            <div>
+              <h3>运行时密钥</h3>
+              <p>可留空以复用本机 CLI 登录。输入的密钥仅保存在当前服务进程内，不写入磁盘。</p>
+            </div>
+            <label class="field">
+              <span>OpenAI API Key <em id="openai-key-status"></em></span>
+              <input id="openai-key" type="password" placeholder="sk-…" autocomplete="new-password" />
+            </label>
+            <label class="field">
+              <span>Anthropic API Key <em id="anthropic-key-status"></em></span>
+              <input id="anthropic-key" type="password" placeholder="sk-ant-…" autocomplete="new-password" />
+            </label>
+          </div>
+
+          <div class="security-note">
+            <strong>安全提醒</strong>
+            <p>控制台可以执行代码和推送 GitHub，请只在可信网络中运行，不要直接暴露到公网。</p>
+          </div>
+
+          <button class="save-button" type="submit">保存设置</button>
+        </form>
+      </section>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
