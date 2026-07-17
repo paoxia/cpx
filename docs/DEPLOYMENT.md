@@ -38,7 +38,7 @@
 scripts/docker-build.sh
 ```
 
-脚本会执行 `docker build` 并通过 `docker save | gzip` 导出 `cpx-latest.tar.gz`（约 200-300MB）。
+脚本会执行 `docker build` 并通过 `docker save | gzip` 导出 `cpx-latest.tar.gz`（约 500-600MB，取决于 CLI 版本）。
 
 构建产物包含：
 
