@@ -53,6 +53,17 @@ curl -X POST http://localhost:3000/command \
 
 > 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
 
+## 极空间 Docker 部署
+
+通过 Docker 镜像在极空间 NAS 上部署，用手机随时下发任务。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+
+快速步骤：
+
+1. 开发机执行 `scripts/docker-build.sh` 生成 `cpx-latest.tar.gz`
+2. 把 `cpx-latest.tar.gz`、`docker-compose.yml`、`.docker.env.example`、`scripts/docker-deploy.sh` 传到极空间
+3. NAS 上执行 `./docker-deploy.sh`，按提示编辑 `.docker.env` 填入 API Key
+4. 手机浏览器访问 `http://<NAS-IP>:3000`
+
 ## CLI 命令
 
 ```bash

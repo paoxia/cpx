@@ -1,0 +1,17 @@
+services:
+  cpx:
+    image: cpx:latest
+    container_name: cpx
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .docker.env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+      - ./logs:/app/logs
+    # 极空间 Docker 默认以 root 运行；git/gh 在 root 下无需额外权限配置
+    user: "0:0"

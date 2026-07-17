@@ -5,6 +5,7 @@
 ## 文档入口
 
 - `README.md`：安装、配置、命令和公开使用说明
+- `docs/DEPLOYMENT.md`：极空间 Docker 部署、镜像构建和密钥配置说明
 - `ARCHITECTURE.md`：当前系统架构、数据流和扩展边界
 - `docs/README.md`：项目文档的唯一导航入口
 

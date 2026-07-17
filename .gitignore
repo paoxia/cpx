@@ -72,6 +72,14 @@ secrets/
 *.key
 credentials.json
 
+# Docker deployment secrets
+.docker.env
+.docker.env.*
+
+# Docker image artifacts
+*.tar.gz
+cpx-*.tar.gz
+
 # Runtime data (SQLite database and WAL files)
 data/*.db
 data/*.db-shm
