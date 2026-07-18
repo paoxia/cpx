@@ -3,13 +3,24 @@ import { mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
+import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
+import {
+  AgentErrorKind,
+  AgentProcessError,
+  classifyAgentError,
+  kindLabel,
+  lastLine,
+} from './errorClassifier';
 
-export type CodingAgentProvider = 'codex' | 'claude';
+export type CodingAgentProvider = 'codex' | 'claude' | 'codebuddy';
 export type AgentTaskStatus =
   'queued' | 'preparing' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentTaskRequest {
-  provider: CodingAgentProvider;
+  /** 主 Agent(primary)。若同时提供 providers,以此为首项的语义被 providers 覆盖。 */
+  provider?: CodingAgentProvider;
+  /** 完整尝试顺序列表(首项为主,余项为备选)。缺省时回退到 [provider]。 */
+  providers?: CodingAgentProvider[];
   model?: string;
   repository: string;
   baseBranch?: string;
@@ -23,9 +34,22 @@ export interface AgentTaskLog {
   message: string;
 }
 
+export interface AgentAttempt {
+  provider: CodingAgentProvider;
+  startedAt: number;
+  endedAt?: number;
+  status: 'running' | 'success' | 'failed';
+  errorKind?: AgentErrorKind;
+  /** 摘要(非完整 stderr),用于 UI 展示。 */
+  error?: string;
+}
+
 export interface AgentTask {
   id: string;
+  /** 用户首选(primary)。当前正在尝试的 provider 从 attempts[末尾] 取。 */
   provider: CodingAgentProvider;
+  /** 归一化后的完整尝试列表,至少 1 项。 */
+  providers: CodingAgentProvider[];
   model?: string;
   repository: string;
   baseBranch?: string;
@@ -41,11 +65,13 @@ export interface AgentTask {
   pullRequestUrl?: string;
   error?: string;
   logs: AgentTaskLog[];
+  attempts: AgentAttempt[];
 }
 
 export interface AgentRuntimeSecrets {
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  codebuddyApiKey?: string;
 }
 
 const MAX_LOG_ENTRIES = 800;
@@ -88,6 +114,7 @@ export class AgentTaskManager {
       createdAt: now,
       updatedAt: now,
       logs: [],
+      attempts: [],
     };
     this.tasks.set(task.id, task);
     this.addLog(task, 'system', '任务已创建，正在准备 Git 工作区。');
@@ -138,10 +165,11 @@ export class AgentTaskManager {
     this.processes.clear();
   }
 
-  private validateRequest(request: AgentTaskRequest): AgentTaskRequest {
-    if (request.provider !== 'codex' && request.provider !== 'claude') {
-      throw new Error('provider 必须是 codex 或 claude');
-    }
+  private validateRequest(request: AgentTaskRequest): Omit<AgentTaskRequest, 'providers' | 'provider'> & {
+    provider: CodingAgentProvider;
+    providers: CodingAgentProvider[];
+  } {
+    const providers = normalizeProviders(request.provider, request.providers);
     const repository = normalizeRepository(request.repository);
     const prompt = request.prompt?.trim();
     if (!prompt) {
@@ -162,7 +190,8 @@ export class AgentTaskManager {
       throw new Error('基础分支名称无效');
     }
     return {
-      provider: request.provider,
+      provider: providers[0],
+      providers,
       repository,
       baseBranch,
       model,
@@ -194,12 +223,7 @@ export class AgentTaskManager {
 
       task.status = 'running';
       task.updatedAt = Date.now();
-      this.addLog(
-        task,
-        'system',
-        `${task.provider === 'codex' ? 'Codex' : 'Claude Code'} 已开始执行。`,
-      );
-      await this.runAgent(task, workspace);
+      await this.runAgentWithFallback(task, workspace);
       this.assertNotCancelled(task);
 
       if (task.createPullRequest) {
@@ -232,15 +256,85 @@ export class AgentTaskManager {
     }
   }
 
-  private async runAgent(task: AgentTask, workspace: string): Promise<void> {
-    const prompt = [
-      '你正在由 cpx 开发控制台执行任务。',
-      '请只在当前 Git 仓库中工作，先理解现有代码，再实现用户目标并运行相关验证。',
-      '不要执行 git push、创建 PR 或修改仓库外文件；发布步骤由 cpx 在用户授权后处理。',
-      '完成后总结改动、验证结果和仍存在的风险。',
-      '',
-      `用户任务：${task.prompt}`,
-    ].join('\n');
+  /**
+   * 按 task.providers 顺序尝试每个 Agent。额度类(rate_limit/auth)失败才切换;
+   * 其他失败立即抛出。workspace 在循环外创建一次,失败时复用(不 reset)。
+   */
+  private async runAgentWithFallback(task: AgentTask, workspace: string): Promise<void> {
+    const providers = task.providers;
+    for (let i = 0; i < providers.length; i++) {
+      this.assertNotCancelled(task);
+      const provider = providers[i];
+      const adapter = AGENT_ADAPTERS[provider];
+
+      const attempt: AgentAttempt = {
+        provider,
+        startedAt: Date.now(),
+        status: 'running',
+      };
+      task.attempts.push(attempt);
+      this.addLog(
+        task,
+        'system',
+        `${adapter.displayName} 开始执行(第 ${i + 1}/${providers.length} 个 Agent)。`,
+      );
+
+      try {
+        await this.runAgent(task, workspace, provider);
+        attempt.status = 'success';
+        attempt.endedAt = Date.now();
+        return;
+      } catch (error) {
+        attempt.endedAt = Date.now();
+        attempt.status = 'failed';
+
+        if (task.status === 'cancelled') {
+          attempt.errorKind = 'cancelled';
+          attempt.error = '用户取消';
+          throw error;
+        }
+
+        const kind = classifyAgentError(error instanceof Error ? error : new Error(String(error)));
+        attempt.errorKind = kind;
+        const summary =
+          error instanceof AgentProcessError
+            ? `${error.command} 退出码 ${error.exitCode ?? 'null'}${
+                error.stderr.trim() ? `: ${lastLine(error.stderr)}` : ''
+              }`
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        attempt.error = summary;
+        this.addLog(task, 'system', `${adapter.displayName} 失败[${kindLabel(kind)}]: ${summary}`);
+
+        const isFallbackEligible = kind === 'rate_limit' || kind === 'auth';
+        const isLast = i === providers.length - 1;
+
+        if (!isFallbackEligible) {
+          this.addLog(
+            task,
+            'system',
+            `${adapter.displayName} 发生非额度类错误,不再尝试备选 Agent。`,
+          );
+          throw error;
+        }
+        if (isLast) {
+          this.addLog(task, 'system', '所有备选 Agent 均失败。');
+          throw new Error(buildFailureSummary(task.attempts));
+        }
+        const next = AGENT_ADAPTERS[providers[i + 1]];
+        this.addLog(task, 'system', `将切换到备选 Agent: ${next.displayName}`);
+      }
+    }
+  }
+
+  private async runAgent(
+    task: AgentTask,
+    workspace: string,
+    provider: CodingAgentProvider,
+  ): Promise<void> {
+    const adapter = AGENT_ADAPTERS[provider];
+    const prompt = buildPrompt(task.prompt);
     const env: NodeJS.ProcessEnv = { ...process.env };
     if (this.secrets.openaiApiKey) {
       env.OPENAI_API_KEY = this.secrets.openaiApiKey;
@@ -248,29 +342,20 @@ export class AgentTaskManager {
     if (this.secrets.anthropicApiKey) {
       env.ANTHROPIC_API_KEY = this.secrets.anthropicApiKey;
     }
-
-    if (task.provider === 'codex') {
-      const args = ['exec', '--json', '--sandbox', 'workspace-write', '--color', 'never'];
-      if (task.model) {
-        args.push('--model', task.model);
-      }
-      args.push('-');
-      await this.runProcess(task, 'codex', args, workspace, prompt, true, env, true);
-      return;
+    if (this.secrets.codebuddyApiKey) {
+      env.CODEBUDDY_API_KEY = this.secrets.codebuddyApiKey;
     }
-
-    const args = [
-      '-p',
-      '--output-format',
-      'stream-json',
-      '--verbose',
-      '--permission-mode',
-      'acceptEdits',
-    ];
-    if (task.model) {
-      args.push('--model', task.model);
-    }
-    await this.runProcess(task, 'claude', args, workspace, prompt, true, env, true);
+    const args = adapter.buildArgs(task.model);
+    await this.runProcess(
+      task,
+      adapter.command,
+      args,
+      workspace,
+      prompt,
+      true,
+      env,
+      adapter.useShellOnWindows,
+    );
   }
 
   private async publishPullRequest(task: AgentTask, workspace: string): Promise<void> {
@@ -394,9 +479,7 @@ export class AgentTaskManager {
           return;
         }
         if (code !== 0) {
-          reject(
-            new Error(`${command} 退出码 ${code}${stderr.trim() ? `: ${lastLine(stderr)}` : ''}`),
-          );
+          reject(new AgentProcessError(command, code, stderr, stdout));
           return;
         }
         resolvePromise({ stdout, stderr });
@@ -425,7 +508,11 @@ export class AgentTaskManager {
   }
 
   private snapshot(task: AgentTask): AgentTask {
-    return { ...task, logs: task.logs.map((entry) => ({ ...entry })) };
+    return {
+      ...task,
+      logs: task.logs.map((entry) => ({ ...entry })),
+      attempts: task.attempts.map((attempt) => ({ ...attempt })),
+    };
   }
 }
 
@@ -459,8 +546,60 @@ function buildCommitTitle(prompt: string): string {
   return `feat: ${summary || 'complete agent task'}`;
 }
 
-function lastLine(value: string): string {
-  return value.trim().split(/\r?\n/).pop() ?? value.trim();
+function buildPrompt(taskPrompt: string): string {
+  return [
+    '你正在由 cpx 开发控制台执行任务。',
+    '请只在当前 Git 仓库中工作，先理解现有代码，再实现用户目标并运行相关验证。',
+    '不要执行 git push、创建 PR 或修改仓库外文件；发布步骤由 cpx 在用户授权后处理。',
+    '完成后总结改动、验证结果和仍存在的风险。',
+    '',
+    `用户任务：${taskPrompt}`,
+  ].join('\n');
+}
+
+/**
+ * 归一化 providers 列表:去重保序,校验每项合法。
+ * providers 优先;缺省时回退到 [provider]。两者皆空时抛错。
+ */
+function normalizeProviders(
+  provider: CodingAgentProvider | undefined,
+  providers: CodingAgentProvider[] | undefined,
+): CodingAgentProvider[] {
+  const source =
+    providers && providers.length > 0
+      ? providers
+      : provider
+        ? [provider]
+        : undefined;
+  if (!source || source.length === 0) {
+    throw new Error('必须指定 provider 或 providers');
+  }
+  const seen = new Set<CodingAgentProvider>();
+  const result: CodingAgentProvider[] = [];
+  for (const item of source) {
+    if (!ALL_PROVIDERS.includes(item)) {
+      throw new Error(`provider 必须是 ${ALL_PROVIDERS.join('、')} 之一,收到: ${item}`);
+    }
+    if (!seen.has(item)) {
+      seen.add(item);
+      result.push(item);
+    }
+  }
+  if (result.length === 0) {
+    throw new Error('providers 不能为空');
+  }
+  return result;
+}
+
+function buildFailureSummary(attempts: AgentAttempt[]): string {
+  const failed = attempts.filter((a) => a.status === 'failed');
+  const parts = failed.map(
+    (a) =>
+      `${AGENT_ADAPTERS[a.provider].displayName}: ${a.errorKind ?? 'unknown'}${
+        a.error ? ` - ${a.error}` : ''
+      }`,
+  );
+  return `所有 Agent 均失败。${parts.join('; ')}`;
 }
 
 function formatAgentEvent(line: string): string {

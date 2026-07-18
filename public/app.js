@@ -14,6 +14,7 @@ const elements = {
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
   createPr: document.querySelector('#create-pr'),
+  autoFallback: document.querySelector('#auto-fallback'),
   launchButton: document.querySelector('#launch-button'),
   taskList: document.querySelector('#task-list'),
   taskCount: document.querySelector('#task-count'),
@@ -22,10 +23,16 @@ const elements = {
   defaultProvider: document.querySelector('#default-provider'),
   codexModel: document.querySelector('#codex-model'),
   claudeModel: document.querySelector('#claude-model'),
+  codebuddyModel: document.querySelector('#codebuddy-model'),
   openaiKey: document.querySelector('#openai-key'),
   anthropicKey: document.querySelector('#anthropic-key'),
+  codebuddyKey: document.querySelector('#codebuddy-key'),
   openaiKeyStatus: document.querySelector('#openai-key-status'),
   anthropicKeyStatus: document.querySelector('#anthropic-key-status'),
+  codebuddyKeyStatus: document.querySelector('#codebuddy-key-status'),
+  fallbackPriority1: document.querySelector('#fallback-priority-1'),
+  fallbackPriority2: document.querySelector('#fallback-priority-2'),
+  fallbackPriority3: document.querySelector('#fallback-priority-3'),
   toast: document.querySelector('#toast'),
 };
 
@@ -71,10 +78,46 @@ async function loadSettings() {
   elements.defaultProvider.value = state.settings.defaultProvider;
   elements.codexModel.value = state.settings.codexModel || '';
   elements.claudeModel.value = state.settings.claudeModel || '';
+  elements.codebuddyModel.value = state.settings.codebuddyModel || '';
   elements.openaiKeyStatus.textContent = state.settings.hasOpenaiApiKey ? '已配置' : '未配置';
   elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey ? '已配置' : '未配置';
+  elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey ? '已配置' : '未配置';
+  loadFallbackOrder(state.settings.fallbackOrder || ['codex', 'claude', 'codebuddy']);
   selectProvider(state.settings.defaultProvider);
 }
+
+function loadFallbackOrder(order) {
+  const selects = [elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3];
+  const padded = [...order, 'none', 'none'].slice(0, 3);
+  selects.forEach((select, index) => {
+    select.value = padded[index];
+  });
+  refreshFallbackOptions();
+}
+
+function collectFallbackOrder() {
+  return [
+    elements.fallbackPriority1.value,
+    elements.fallbackPriority2.value,
+    elements.fallbackPriority3.value,
+  ].filter((value) => value && value !== 'none');
+}
+
+/** 在三个 fallback 优先级 select 之间禁用彼此已选的 provider,防止重复。 */
+function refreshFallbackOptions() {
+  const selects = [elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3];
+  const chosen = selects.map((select) => select.value);
+  selects.forEach((select, index) => {
+    Array.from(select.options).forEach((option) => {
+      const taken = chosen.findIndex((value, i) => i !== index && value === option.value);
+      option.disabled = option.value !== 'none' && taken !== -1;
+    });
+  });
+}
+
+[elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3].forEach((select) => {
+  select.addEventListener('change', refreshFallbackOptions);
+});
 
 async function refreshTasks() {
   if (state.polling) return;
@@ -99,10 +142,17 @@ async function createTask(event) {
   elements.launchButton.disabled = true;
   elements.launchButton.querySelector('span').textContent = '正在启动…';
   try {
+    const primary = elements.provider.value;
+    const autoFallback = elements.autoFallback.checked;
+    let providers = [primary];
+    if (autoFallback) {
+      const order = collectFallbackOrder().filter((p) => p !== primary);
+      providers = [primary, ...order];
+    }
     const task = await api('/api/console/tasks', {
       method: 'POST',
       body: JSON.stringify({
-        provider: elements.provider.value,
+        providers,
         repository: elements.repository.value,
         baseBranch: elements.baseBranch.value || undefined,
         prompt: elements.prompt.value,
@@ -133,14 +183,20 @@ async function saveSettings(event) {
         defaultProvider: elements.defaultProvider.value,
         codexModel: elements.codexModel.value,
         claudeModel: elements.claudeModel.value,
+        codebuddyModel: elements.codebuddyModel.value,
+        fallbackOrder: collectFallbackOrder(),
         openaiApiKey: elements.openaiKey.value || undefined,
         anthropicApiKey: elements.anthropicKey.value || undefined,
+        codebuddyApiKey: elements.codebuddyKey.value || undefined,
       }),
     });
     elements.openaiKey.value = '';
     elements.anthropicKey.value = '';
+    elements.codebuddyKey.value = '';
     elements.openaiKeyStatus.textContent = state.settings.hasOpenaiApiKey ? '已配置' : '未配置';
     elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey ? '已配置' : '未配置';
+    elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey ? '已配置' : '未配置';
+    loadFallbackOrder(state.settings.fallbackOrder || ['codex', 'claude', 'codebuddy']);
     selectProvider(state.settings.defaultProvider);
     closeSettings();
     showToast('模型设置已保存。');
@@ -197,6 +253,7 @@ function renderTaskDetail() {
       <h3>${escapeHtml(task.prompt)}</h3>
       <div class="detail-meta">${escapeHtml(task.provider.toUpperCase())}${task.model ? ` / ${escapeHtml(task.model)}` : ''}<br />${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(formatTime(task.createdAt))}</div>
     </div>
+    ${renderAttempts(task.attempts)}
     <pre class="task-output" aria-label="任务输出"></pre>
     ${task.pullRequestUrl ? `<a class="pr-link" href="${escapeHtml(task.pullRequestUrl)}" target="_blank" rel="noreferrer"><span>打开 Pull Request</span><b>↗</b></a>` : ''}
     ${task.workspace ? `<div class="workspace-path">WORKSPACE · ${escapeHtml(task.workspace)}</div>` : ''}`;
@@ -222,7 +279,8 @@ function renderTaskDetail() {
 }
 
 function selectProvider(provider) {
-  const normalized = provider === 'claude' ? 'claude' : 'codex';
+  const valid = ['codex', 'claude', 'codebuddy'];
+  const normalized = valid.includes(provider) ? provider : 'codex';
   elements.provider.value = normalized;
   document.querySelectorAll('[data-provider]').forEach((button) => {
     button.classList.toggle('active', button.dataset.provider === normalized);
@@ -273,6 +331,23 @@ function statusLabel(status) {
     failed: '失败',
     cancelled: '已取消',
   }[status] || status;
+}
+
+function renderAttempts(attempts) {
+  if (!attempts || !attempts.length) return '';
+  const rows = attempts
+    .map((a) => {
+      const label = { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[a.provider] || a.provider;
+      return `
+        <div class="attempt ${a.status}">
+          <strong>${escapeHtml(label)}</strong>
+          <span class="attempt-status">${escapeHtml(a.status)}</span>
+          ${a.errorKind ? `<em>${escapeHtml(a.errorKind)}</em>` : ''}
+          ${a.error ? `<small>${escapeHtml(a.error)}</small>` : ''}
+        </div>`;
+    })
+    .join('');
+  return `<div class="attempts-list">${rows}</div>`;
 }
 
 function shortRepository(repository) {

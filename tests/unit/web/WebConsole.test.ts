@@ -114,4 +114,44 @@ describe('WebConsole', () => {
     );
     expect(cancel).toMatchObject({ status: 409 });
   });
+
+  it('应拒绝未知 defaultProvider 与空 fallbackOrder', async () => {
+    const unknownProvider = await server.handler('POST', '/api/console/settings')(
+      Buffer.from(JSON.stringify({ defaultProvider: 'unknown' })),
+      {},
+      {},
+    );
+    expect(unknownProvider).toMatchObject({ status: 400 });
+
+    const emptyOrder = await server.handler('POST', '/api/console/settings')(
+      Buffer.from(JSON.stringify({ fallbackOrder: [] })),
+      {},
+      {},
+    );
+    expect(emptyOrder).toMatchObject({ status: 400 });
+  });
+
+  it('应持久化 codebuddyModel 且不写盘 codebuddyApiKey', async () => {
+    const updateSettings = server.handler('POST', '/api/console/settings');
+    const response = await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          codebuddyModel: 'cb-pro',
+          codebuddyApiKey: 'secret-cb',
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      codebuddyModel: 'cb-pro',
+      hasCodebuddyApiKey: true,
+    });
+
+    const settingsPath = join(TMP_DIR, 'console-settings.json');
+    const stored = readFileSync(settingsPath, 'utf8');
+    expect(stored).toContain('cb-pro');
+    expect(stored).not.toContain('secret-cb');
+  });
 });

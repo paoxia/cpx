@@ -8,17 +8,22 @@ interface ConsoleSettings {
   defaultProvider: CodingAgentProvider;
   codexModel: string;
   claudeModel: string;
+  codebuddyModel: string;
+  fallbackOrder: CodingAgentProvider[];
 }
 
 interface SettingsPayload extends Partial<ConsoleSettings> {
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  codebuddyApiKey?: string;
 }
 
 const DEFAULT_SETTINGS: ConsoleSettings = {
   defaultProvider: 'codex',
   codexModel: '',
   claudeModel: 'sonnet',
+  codebuddyModel: '',
+  fallbackOrder: ['codex', 'claude', 'codebuddy'],
 };
 
 const STATIC_SECURITY_HEADERS = {
@@ -38,6 +43,7 @@ export class WebConsole {
   private logger: Logger;
   private hasOpenaiApiKey = false;
   private hasAnthropicApiKey = false;
+  private hasCodebuddyApiKey = false;
 
   constructor(httpServer: HttpServer, storagePath: string, logger: Logger) {
     this.logger = logger.child('WebConsole');
@@ -111,16 +117,19 @@ export class WebConsole {
       try {
         const payload = parseJson<{
           provider?: CodingAgentProvider;
+          providers?: CodingAgentProvider[];
           model?: string;
           repository?: string;
           baseBranch?: string;
           prompt?: string;
           createPullRequest?: boolean;
         }>(body);
-        const provider = payload.provider ?? this.settings.defaultProvider;
-        const model = payload.model ?? this.modelFor(provider);
+        const primary = payload.provider ?? this.settings.defaultProvider;
+        const providers = payload.providers ?? [primary];
+        const model = payload.model ?? this.modelFor(providers[0]);
         const task = this.taskManager.create({
-          provider,
+          provider: providers[0],
+          providers,
           model,
           repository: payload.repository ?? '',
           baseBranch: payload.baseBranch,
@@ -169,9 +178,14 @@ export class WebConsole {
       ...(payload.defaultProvider ? { defaultProvider: payload.defaultProvider } : {}),
       ...(payload.codexModel !== undefined ? { codexModel: payload.codexModel.trim() } : {}),
       ...(payload.claudeModel !== undefined ? { claudeModel: payload.claudeModel.trim() } : {}),
+      ...(payload.codebuddyModel !== undefined
+        ? { codebuddyModel: payload.codebuddyModel.trim() }
+        : {}),
+      ...(payload.fallbackOrder ? { fallbackOrder: payload.fallbackOrder } : {}),
     });
 
-    const secrets: { openaiApiKey?: string; anthropicApiKey?: string } = {};
+    const secrets: { openaiApiKey?: string; anthropicApiKey?: string; codebuddyApiKey?: string } =
+      {};
     if (payload.openaiApiKey?.trim()) {
       secrets.openaiApiKey = payload.openaiApiKey.trim();
       this.hasOpenaiApiKey = true;
@@ -180,23 +194,33 @@ export class WebConsole {
       secrets.anthropicApiKey = payload.anthropicApiKey.trim();
       this.hasAnthropicApiKey = true;
     }
+    if (payload.codebuddyApiKey?.trim()) {
+      secrets.codebuddyApiKey = payload.codebuddyApiKey.trim();
+      this.hasCodebuddyApiKey = true;
+    }
     this.taskManager.setSecrets(secrets);
     writeFileSync(this.settingsPath, `${JSON.stringify(this.settings, null, 2)}\n`, 'utf8');
   }
 
   private modelFor(provider: CodingAgentProvider): string | undefined {
-    const value = provider === 'codex' ? this.settings.codexModel : this.settings.claudeModel;
-    return value || undefined;
+    const map: Record<CodingAgentProvider, string> = {
+      codex: this.settings.codexModel,
+      claude: this.settings.claudeModel,
+      codebuddy: this.settings.codebuddyModel,
+    };
+    return map[provider] || undefined;
   }
 
   private publicSettings(): ConsoleSettings & {
     hasOpenaiApiKey: boolean;
     hasAnthropicApiKey: boolean;
+    hasCodebuddyApiKey: boolean;
   } {
     return {
       ...this.settings,
       hasOpenaiApiKey: this.hasOpenaiApiKey || Boolean(process.env.OPENAI_API_KEY),
       hasAnthropicApiKey: this.hasAnthropicApiKey || Boolean(process.env.ANTHROPIC_API_KEY),
+      hasCodebuddyApiKey: this.hasCodebuddyApiKey || Boolean(process.env.CODEBUDDY_API_KEY),
     };
   }
 }
@@ -218,17 +242,33 @@ function parseJson<T>(body: Buffer): T {
   }
 }
 
+const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude', 'codebuddy'];
+
 function validateSettings(settings: ConsoleSettings): ConsoleSettings {
-  if (settings.defaultProvider !== 'codex' && settings.defaultProvider !== 'claude') {
-    throw new Error('默认 Agent 必须是 codex 或 claude');
+  if (!VALID_PROVIDERS.includes(settings.defaultProvider)) {
+    throw new Error('默认 Agent 必须是 codex、claude 或 codebuddy');
   }
   for (const [name, value] of [
     ['Codex 模型', settings.codexModel],
     ['Claude 模型', settings.claudeModel],
+    ['CodeBuddy 模型', settings.codebuddyModel],
   ] as const) {
     if (value && !/^[a-zA-Z0-9._:/-]+$/.test(value)) {
       throw new Error(`${name}包含不支持的字符`);
     }
+  }
+  if (!Array.isArray(settings.fallbackOrder) || settings.fallbackOrder.length === 0) {
+    throw new Error('fallback 顺序不能为空');
+  }
+  const seen = new Set<CodingAgentProvider>();
+  for (const provider of settings.fallbackOrder) {
+    if (!VALID_PROVIDERS.includes(provider)) {
+      throw new Error(`fallbackOrder 包含未知 provider: ${provider}`);
+    }
+    if (seen.has(provider)) {
+      throw new Error(`fallbackOrder 包含重复 provider: ${provider}`);
+    }
+    seen.add(provider);
   }
   return settings;
 }

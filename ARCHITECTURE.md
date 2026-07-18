@@ -4,7 +4,7 @@
 
 ## 系统概览
 
-cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过 HTTP 接收钉钉、飞书或本地测试命令，将命令解析后交给统一路由，并按需调用 GitHub、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台，把任务委托给本机 Codex 或 Claude Code CLI。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
+cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过 HTTP 接收钉钉、飞书或本地测试命令，将命令解析后交给统一路由，并按需调用 GitHub、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台，把任务委托给本机 Codex、Claude Code 或 CodeBuddy CLI，并在额度耗尽时按 fallback 顺序自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
 
 ```text
 钉钉 / 飞书 / HTTP
@@ -28,7 +28,7 @@ Webhook 校验 → CommandParser → PermissionManager → CommandRouter
 开发控制台使用独立数据流，不经过聊天命令解析器和权限管理器：
 
 ```text
-浏览器 → WebConsole API → AgentTaskManager → Git 隔离克隆 → Codex / Claude Code
+浏览器 → WebConsole API → AgentTaskManager → Git 隔离克隆 → Codex / Claude Code / CodeBuddy
                                                           └→ Git + gh（显式选择创建 PR 时）
 ```
 

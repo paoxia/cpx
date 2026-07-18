@@ -67,11 +67,20 @@
               <div class="agent-switch" role="group" aria-label="选择 Agent">
                 <button type="button" data-provider="codex" class="active">Codex</button>
                 <button type="button" data-provider="claude">Claude Code</button>
+                <button type="button" data-provider="codebuddy">CodeBuddy</button>
               </div>
             </div>
 
             <form id="task-form">
               <input type="hidden" id="provider" value="codex" />
+              <label class="fallback-toggle">
+                <input id="auto-fallback" type="checkbox" checked />
+                <span class="toggle"></span>
+                <span>
+                  <strong>失败时自动切换到其他 Agent</strong>
+                  <small>额度耗尽或鉴权失败时按 fallback 顺序依次尝试</small>
+                </span>
+              </label>
               <div class="field-row">
                 <label class="field field-grow">
                   <span>GitHub 仓库</span>
@@ -155,6 +164,7 @@
             <select id="default-provider">
               <option value="codex">Codex</option>
               <option value="claude">Claude Code</option>
+              <option value="codebuddy">CodeBuddy</option>
             </select>
           </label>
           <div class="field-row">
@@ -166,6 +176,44 @@
               <span>Claude 模型</span>
               <input id="claude-model" type="text" placeholder="sonnet" autocomplete="off" />
             </label>
+            <label class="field field-grow">
+              <span>CodeBuddy 模型</span>
+              <input id="codebuddy-model" type="text" placeholder="留空以使用默认模型" autocomplete="off" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span>Fallback 顺序</span>
+            <small>从上到下依次尝试,选“无”可跳过该位</small>
+            <div class="fallback-order" id="fallback-order">
+              <label class="fallback-row">
+                <span class="fallback-priority">1</span>
+                <select id="fallback-priority-1">
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                  <option value="codebuddy">CodeBuddy</option>
+                  <option value="none">无</option>
+                </select>
+              </label>
+              <label class="fallback-row">
+                <span class="fallback-priority">2</span>
+                <select id="fallback-priority-2">
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                  <option value="codebuddy">CodeBuddy</option>
+                  <option value="none">无</option>
+                </select>
+              </label>
+              <label class="fallback-row">
+                <span class="fallback-priority">3</span>
+                <select id="fallback-priority-3">
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude Code</option>
+                  <option value="codebuddy">CodeBuddy</option>
+                  <option value="none">无</option>
+                </select>
+              </label>
+            </div>
           </div>
 
           <div class="secret-section">
@@ -180,6 +228,10 @@
             <label class="field">
               <span>Anthropic API Key <em id="anthropic-key-status"></em></span>
               <input id="anthropic-key" type="password" placeholder="sk-ant-…" autocomplete="new-password" />
+            </label>
+            <label class="field">
+              <span>CodeBuddy API Key <em id="codebuddy-key-status"></em></span>
+              <input id="codebuddy-key" type="password" placeholder="sk-…" autocomplete="new-password" />
             </label>
           </div>
 

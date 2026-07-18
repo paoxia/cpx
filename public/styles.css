@@ -993,3 +993,155 @@ select:focus-visible {
     flex-direction: column;
   }
 }
+
+/* Fallback 开关(任务表单) */
+.fallback-toggle {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  cursor: pointer;
+}
+
+.fallback-toggle input {
+  position: absolute;
+  opacity: 0;
+}
+
+.fallback-toggle .toggle {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: #0c0c0d;
+  transition: 160ms ease;
+  flex-shrink: 0;
+}
+
+.fallback-toggle .toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: 160ms ease;
+}
+
+.fallback-toggle input:checked + .toggle {
+  border-color: var(--accent);
+  background: rgba(215, 255, 95, 0.15);
+}
+
+.fallback-toggle input:checked + .toggle::after {
+  background: var(--accent);
+  transform: translateX(16px);
+}
+
+.fallback-toggle strong,
+.fallback-toggle small {
+  display: block;
+}
+
+.fallback-toggle strong {
+  font-size: 11px;
+}
+
+.fallback-toggle small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+/* Fallback 顺序编辑器(设置弹窗) */
+.fallback-order {
+  display: grid;
+  gap: 8px;
+}
+
+.fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fallback-priority {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font: 10px/1 var(--mono);
+}
+
+.fallback-row select {
+  flex: 1;
+}
+
+/* Attempts 历史(任务详情) */
+.attempts-list {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0e0e0f;
+}
+
+.attempt {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 11px;
+}
+
+.attempt strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.attempt .attempt-status {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font: 9px/1 var(--mono);
+  text-transform: uppercase;
+}
+
+.attempt.success .attempt-status {
+  color: var(--accent);
+  background: rgba(215, 255, 95, 0.12);
+}
+
+.attempt.failed .attempt-status {
+  color: #ff8b8b;
+  background: rgba(255, 139, 139, 0.1);
+}
+
+.attempt.running .attempt-status {
+  color: #6cb6ff;
+  background: rgba(108, 182, 255, 0.1);
+}
+
+.attempt em {
+  color: var(--muted);
+  font-style: normal;
+  font: 9px/1 var(--mono);
+}
+
+.attempt small {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
