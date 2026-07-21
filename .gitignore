@@ -71,6 +71,8 @@ secrets/
 *.pem
 *.key
 credentials.json
+/config/config.yaml
+/config/permissions.yaml
 
 # Docker deployment secrets
 .docker.env
@@ -81,6 +83,7 @@ credentials.json
 cpx-*.tar.gz
 
 # Runtime data (SQLite database and WAL files)
+/data/console-settings.json
 data/*.db
 data/*.db-shm
 data/*.db-wal

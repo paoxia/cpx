@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RequestHandler } from '../../../src/core/HttpServer';
 import { WebConsole } from '../../../src/web/WebConsole';
 import { Logger } from '../../../src/utils/Logger';
+import { GitHubError } from '../../../src/utils/errors';
+import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-web-console');
 
@@ -48,6 +50,7 @@ describe('WebConsole', () => {
       'Content-Security-Policy': expect.stringContaining("default-src 'self'"),
       'X-Content-Type-Options': 'nosniff',
     });
+    expect((response.body as Buffer).toString('utf8')).toContain('id="github-tab"');
   });
 
   it('应读取、校验并持久化非敏感设置', async () => {
@@ -153,5 +156,148 @@ describe('WebConsole', () => {
     const stored = readFileSync(settingsPath, 'utf8');
     expect(stored).toContain('cb-pro');
     expect(stored).not.toContain('secret-cb');
+  });
+
+  it('应验证 GitHub Token、分页读取全部仓库并在成功后持久化', async () => {
+    await webConsole.stop();
+    const requestedPages: number[] = [];
+    const tokens: string[] = [];
+    const persistedTokens: string[] = [];
+    const repositories = Array.from({ length: 101 }, (_, index) => ({
+      id: index + 1,
+      name: `repo-${index + 1}`,
+      full_name: `octocat/repo-${index + 1}`,
+      owner: { login: 'octocat' },
+      private: index === 0,
+      html_url: `https://github.com/octocat/repo-${index + 1}`,
+      description: null,
+      fork: false,
+      archived: false,
+      language: 'TypeScript',
+      stargazers_count: index,
+      updated_at: '2026-07-21T00:00:00Z',
+      default_branch: 'main',
+    }));
+    const client: GitHubApiClient = {
+      get: async <T>(url: string, params?: Record<string, unknown>): Promise<T> => {
+        if (url === '/user') {
+          return {
+            login: 'octocat',
+            name: 'The Octocat',
+            avatar_url: 'https://avatars.githubusercontent.com/u/1',
+            html_url: 'https://github.com/octocat',
+          } as T;
+        }
+        const page = Number(params?.page);
+        requestedPages.push(page);
+        return repositories.slice((page - 1) * 100, page * 100) as T;
+      },
+    };
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        githubClientFactory: (token) => {
+          tokens.push(token);
+          return client;
+        },
+        persistGitHubToken: (token) => persistedTokens.push(token),
+      },
+    );
+
+    const response = await server.handler('POST', '/api/console/github/connect')(
+      Buffer.from(JSON.stringify({ token: 'github_pat_runtime-only' })),
+      {},
+      {},
+    );
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: {
+        user: { login: 'octocat', name: 'The Octocat' },
+      },
+      headers: { 'Cache-Control': 'no-store' },
+    });
+    expect((response.body as { repositories: unknown[] }).repositories).toHaveLength(101);
+    expect(requestedPages).toEqual([1, 2]);
+    expect(tokens).toEqual(['github_pat_runtime-only']);
+    expect(persistedTokens).toEqual(['github_pat_runtime-only']);
+    const status = await server.handler('GET', '/api/console/github')(Buffer.alloc(0), {}, {});
+    expect(status.body).toMatchObject({
+      hasToken: true,
+      connected: true,
+      repositoryCount: 101,
+    });
+  });
+
+  it('GitHub Token 无效时应返回鉴权错误且不建立连接或写入配置', async () => {
+    await webConsole.stop();
+    const persistedTokens: string[] = [];
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        githubClientFactory: () => ({
+          get: async () => {
+            throw new GitHubError('GitHub API 错误 (401): Bad credentials', 401);
+          },
+        }),
+        persistGitHubToken: (token) => persistedTokens.push(token),
+      },
+    );
+
+    const response = await server.handler('POST', '/api/console/github/connect')(
+      Buffer.from(JSON.stringify({ token: 'invalid-token' })),
+      {},
+      {},
+    );
+    expect(response).toMatchObject({ status: 401 });
+    const status = await server.handler('GET', '/api/console/github')(Buffer.alloc(0), {}, {});
+    expect(status.body).toMatchObject({ hasToken: false, connected: false });
+    expect(persistedTokens).toEqual([]);
+  });
+
+  it('已有配置 Token 时应直接读取验证且不重复写入配置', async () => {
+    await webConsole.stop();
+    const tokens: string[] = [];
+    const persistedTokens: string[] = [];
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        githubToken: 'github_pat_from_config',
+        githubClientFactory: (token) => {
+          tokens.push(token);
+          return {
+            get: async <T>(url: string): Promise<T> =>
+              (url === '/user'
+                ? {
+                    login: 'octocat',
+                    name: null,
+                    avatar_url: '',
+                    html_url: 'https://github.com/octocat',
+                  }
+                : []) as T,
+          };
+        },
+        persistGitHubToken: (token) => persistedTokens.push(token),
+      },
+    );
+
+    const response = await server.handler('POST', '/api/console/github/connect')(
+      Buffer.from('{}'),
+      {},
+      {},
+    );
+
+    expect(response.status).toBe(200);
+    expect(tokens).toEqual(['github_pat_from_config']);
+    expect(persistedTokens).toEqual([]);
   });
 });

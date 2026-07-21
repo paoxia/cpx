@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, watch } from 'fs';
+import { readFileSync, existsSync, mkdirSync, watch, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
@@ -68,9 +68,7 @@ export class ConfigManager {
     // 6. zod 校验
     const result = AppConfigSchema.safeParse(config);
     if (!result.success) {
-      const issues = result.error.issues
-        .map((i) => `${i.path.join('.')}: ${i.message}`)
-        .join('; ');
+      const issues = result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
       throw new ConfigError(`配置校验失败: ${issues}`);
     }
 
@@ -80,6 +78,52 @@ export class ConfigManager {
 
   getConfig(): AppConfig {
     return this.config;
+  }
+
+  /** 将已验证的 GitHub Token 持久化到 config.yaml。 */
+  saveGitHubToken(token: string): void {
+    const normalizedToken = token.trim();
+    if (!normalizedToken) {
+      throw new ConfigError('GitHub Token 不能为空');
+    }
+
+    const configPath = join(this.configDir, 'config.yaml');
+    let fileConfig: Record<string, unknown> = {};
+    if (existsSync(configPath)) {
+      try {
+        const parsed = yaml.load(readFileSync(configPath, 'utf8'));
+        if (parsed !== undefined && parsed !== null) {
+          if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('根节点必须是对象');
+          }
+          fileConfig = parsed as Record<string, unknown>;
+        }
+      } catch (err) {
+        throw new ConfigError(
+          `无法保存 GitHub Token，解析 config.yaml 失败: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    const githubConfig =
+      fileConfig.github &&
+      typeof fileConfig.github === 'object' &&
+      !Array.isArray(fileConfig.github)
+        ? (fileConfig.github as Record<string, unknown>)
+        : {};
+    fileConfig.github = { ...githubConfig, token: normalizedToken };
+
+    try {
+      mkdirSync(this.configDir, { recursive: true });
+      writeFileSync(
+        configPath,
+        yaml.dump(fileConfig, { noRefs: true, lineWidth: -1, sortKeys: false }),
+        'utf8',
+      );
+      this.config.github.token = normalizedToken;
+    } catch (err) {
+      throw new ConfigError(`无法保存 GitHub Token: ${(err as Error).message}`);
+    }
   }
 
   setOnReload(callback: () => void): void {

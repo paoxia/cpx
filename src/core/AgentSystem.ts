@@ -114,7 +114,10 @@ export class AgentSystem {
     this.mcpManager = new MCPManager(this.config.mcp, this.database, this.logger);
 
     // Web 开发控制台：模型配置、GitHub 工作区和 Codex/Claude Code 任务
-    this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger);
+    this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
+      githubToken: this.config.github.token,
+      persistGitHubToken: (token) => this.configManager.saveGitHubToken(token),
+    });
 
     this.skillManager = new SkillManager(
       this.skillLoader,

@@ -70,6 +70,26 @@ describe('ConfigManager', () => {
     cm.load();
     expect(cm.getConfig().server.port).toBe(3000);
   });
+
+  it('应将 GitHub Token 持久化到 config.yaml 并保留其他配置', () => {
+    writeFileSync(
+      join(TMP_DIR, 'config.yaml'),
+      'server:\n  port: 8080\ngithub:\n  defaultRepo: owner/repo\n  defaultBranch: develop\n',
+    );
+    const cm = new ConfigManager(TMP_DIR);
+    cm.load();
+
+    cm.saveGitHubToken('github_pat_persisted');
+
+    const reloaded = new ConfigManager(TMP_DIR).load();
+    expect(reloaded.server.port).toBe(8080);
+    expect(reloaded.github).toEqual({
+      token: 'github_pat_persisted',
+      defaultRepo: 'owner/repo',
+      defaultBranch: 'develop',
+    });
+    expect(cm.getConfig().github.token).toBe('github_pat_persisted');
+  });
 });
 
 describe('deepMerge', () => {

@@ -22,6 +22,8 @@
 
 - 用户可设置默认 Agent 以及 Codex、Claude 模型；模型设置写入数据库相邻的 `console-settings.json`。
 - 用户输入的 OpenAI 或 Anthropic API Key 只保存在当前进程内，不写入设置文件。未输入时复用服务进程环境变量或本机 CLI 登录状态。
+- 控制台提供独立 GitHub 页签。用户可直接验证 `config.yaml` 或环境变量中的 GitHub Token，也可输入新 Token；新 Token 仅在验证成功后写入 `config/config.yaml`，验证失败不得修改配置。系统分页读取该 Token 可访问的个人、协作及组织仓库。
+- GitHub 仓库列表支持筛选，并可将仓库名称和默认分支带入新任务表单。fine-grained Token 的仓库范围以 GitHub 授权范围为准。
 - 仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 仓库地址。每个任务使用独立浅克隆和 `cpx/task-<id>` 分支。
 - Codex 与 Claude Code 以非交互方式执行。任务可取消，状态包括排队、准备、执行、发布、完成、失败和取消。
 - 默认不提交或推送 Agent 改动。只有用户在创建任务时显式选择创建 Pull Request，系统才提交全部工作区改动、推送任务分支并调用 `gh` 创建 PR。
@@ -84,6 +86,6 @@
 - GitHub/MCP：未配置、远端错误、超时或断连。
 - 生命周期：重复启动、优雅停止和配置热更新。
 - Agent 任务：输入校验、CLI 生命周期、取消、可选 PR 发布和服务停止清理。
-- Web 控制台：静态资源、设置持久化、密钥不落盘和任务 API 错误路径。
+- Web 控制台：静态资源、设置持久化、运行时 Agent 密钥不落盘、GitHub Token 验证后持久化与仓库分页，以及任务 API 错误路径。
 
 具体执行命令见 [开发指南](../DEVELOPMENT.md#改动验证)。

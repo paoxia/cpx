@@ -19,9 +19,13 @@
         </div>
 
         <nav class="primary-nav" aria-label="主导航">
-          <button class="nav-item active" type="button">
+          <button class="nav-item active" id="tasks-tab" data-view="tasks" type="button">
             <span class="nav-icon">⌁</span>
             <span>任务控制台</span>
+          </button>
+          <button class="nav-item" id="github-tab" data-view="github" type="button">
+            <span class="nav-icon">⑂</span>
+            <span>GitHub</span>
           </button>
           <button class="nav-item" id="open-settings" type="button">
             <span class="nav-icon">◎</span>
@@ -49,113 +53,235 @@
       </aside>
 
       <main class="main-content">
-        <header class="topbar">
-          <div>
-            <p class="eyebrow">DEVELOPMENT WORKSPACE</p>
-            <h1>把想法交给 Agent，<br /><span>让代码真正发生。</span></h1>
-          </div>
-          <button class="icon-button" id="top-settings" type="button" aria-label="打开设置">⚙</button>
-        </header>
-
-        <section class="workspace-grid">
-          <article class="composer-card">
-            <div class="card-heading">
-              <div>
-                <span class="step-index">01</span>
-                <h2>创建开发任务</h2>
-              </div>
-              <div class="agent-switch" role="group" aria-label="选择 Agent">
-                <button type="button" data-provider="codex" class="active">Codex</button>
-                <button type="button" data-provider="claude">Claude Code</button>
-                <button type="button" data-provider="codebuddy">CodeBuddy</button>
-              </div>
+        <div class="app-view" id="tasks-view">
+          <header class="topbar">
+            <div>
+              <p class="eyebrow">DEVELOPMENT WORKSPACE</p>
+              <h1>把想法交给 Agent，<br /><span>让代码真正发生。</span></h1>
             </div>
+            <button class="icon-button" id="top-settings" type="button" aria-label="打开设置">
+              ⚙
+            </button>
+          </header>
 
-            <form id="task-form">
-              <input type="hidden" id="provider" value="codex" />
-              <label class="fallback-toggle">
-                <input id="auto-fallback" type="checkbox" checked />
-                <span class="toggle"></span>
-                <span>
-                  <strong>失败时自动切换到其他 Agent</strong>
-                  <small>额度耗尽或鉴权失败时按 fallback 顺序依次尝试</small>
-                </span>
-              </label>
-              <div class="field-row">
-                <label class="field field-grow">
-                  <span>GitHub 仓库</span>
-                  <input id="repository" type="text" placeholder="owner/repository" autocomplete="off" required />
-                  <small>支持 owner/repo、HTTPS 或 SSH 地址</small>
-                </label>
-                <label class="field branch-field">
-                  <span>基础分支</span>
-                  <input id="base-branch" type="text" placeholder="默认分支" autocomplete="off" />
-                </label>
+          <section class="workspace-grid">
+            <article class="composer-card">
+              <div class="card-heading">
+                <div>
+                  <span class="step-index">01</span>
+                  <h2>创建开发任务</h2>
+                </div>
+                <div class="agent-switch" role="group" aria-label="选择 Agent">
+                  <button type="button" data-provider="codex" class="active">Codex</button>
+                  <button type="button" data-provider="claude">Claude Code</button>
+                  <button type="button" data-provider="codebuddy">CodeBuddy</button>
+                </div>
               </div>
 
-              <label class="field prompt-field">
-                <span>你想完成什么？</span>
-                <textarea
-                  id="prompt"
-                  rows="8"
-                  required
-                  placeholder="例如：分析现有项目，为用户登录增加基于 JWT 的认证；补充测试，并更新 README。"
-                ></textarea>
-                <div class="prompt-footer">
-                  <div class="suggestions">
-                    <button type="button" data-prompt="先分析当前项目，并修复所有会阻止构建和测试通过的问题。">修复项目</button>
-                    <button type="button" data-prompt="阅读现有架构，实现需求中缺失的核心功能，并补充测试。">实现功能</button>
-                    <button type="button" data-prompt="审查当前代码的安全风险，修复高优先级问题并给出验证结果。">安全审查</button>
-                  </div>
-                  <span id="prompt-count">0 / 20000</span>
-                </div>
-              </label>
-
-              <div class="launch-row">
-                <label class="toggle-option">
-                  <input id="create-pr" type="checkbox" />
+              <form id="task-form">
+                <input type="hidden" id="provider" value="codex" />
+                <label class="fallback-toggle">
+                  <input id="auto-fallback" type="checkbox" checked />
                   <span class="toggle"></span>
                   <span>
-                    <strong>完成后创建 Pull Request</strong>
-                    <small>将提交并推送 Agent 产生的全部改动</small>
+                    <strong>失败时自动切换到其他 Agent</strong>
+                    <small>额度耗尽或鉴权失败时按 fallback 顺序依次尝试</small>
                   </span>
                 </label>
-                <button class="launch-button" id="launch-button" type="submit">
-                  <span>启动任务</span>
-                  <b>↗</b>
-                </button>
+                <div class="field-row">
+                  <label class="field field-grow">
+                    <span>GitHub 仓库</span>
+                    <input
+                      id="repository"
+                      type="text"
+                      placeholder="owner/repository"
+                      autocomplete="off"
+                      required
+                    />
+                    <small>支持 owner/repo、HTTPS 或 SSH 地址</small>
+                  </label>
+                  <label class="field branch-field">
+                    <span>基础分支</span>
+                    <input id="base-branch" type="text" placeholder="默认分支" autocomplete="off" />
+                  </label>
+                </div>
+
+                <label class="field prompt-field">
+                  <span>你想完成什么？</span>
+                  <textarea
+                    id="prompt"
+                    rows="8"
+                    required
+                    placeholder="例如：分析现有项目，为用户登录增加基于 JWT 的认证；补充测试，并更新 README。"
+                  ></textarea>
+                  <div class="prompt-footer">
+                    <div class="suggestions">
+                      <button
+                        type="button"
+                        data-prompt="先分析当前项目，并修复所有会阻止构建和测试通过的问题。"
+                      >
+                        修复项目
+                      </button>
+                      <button
+                        type="button"
+                        data-prompt="阅读现有架构，实现需求中缺失的核心功能，并补充测试。"
+                      >
+                        实现功能
+                      </button>
+                      <button
+                        type="button"
+                        data-prompt="审查当前代码的安全风险，修复高优先级问题并给出验证结果。"
+                      >
+                        安全审查
+                      </button>
+                    </div>
+                    <span id="prompt-count">0 / 20000</span>
+                  </div>
+                </label>
+
+                <div class="launch-row">
+                  <label class="toggle-option">
+                    <input id="create-pr" type="checkbox" />
+                    <span class="toggle"></span>
+                    <span>
+                      <strong>完成后创建 Pull Request</strong>
+                      <small>将提交并推送 Agent 产生的全部改动</small>
+                    </span>
+                  </label>
+                  <button class="launch-button" id="launch-button" type="submit">
+                    <span>启动任务</span>
+                    <b>↗</b>
+                  </button>
+                </div>
+              </form>
+            </article>
+
+            <aside class="context-panel">
+              <div class="context-header">
+                <span class="step-index">02</span>
+                <h2>执行状态</h2>
               </div>
-            </form>
-          </article>
+              <div id="task-detail" class="task-detail empty-detail">
+                <div class="orb" aria-hidden="true"><i></i></div>
+                <h3>等待第一个任务</h3>
+                <p>提交任务后，这里会实时展示 Agent 的执行阶段、日志和 Pull Request。</p>
+              </div>
+            </aside>
+          </section>
 
-          <aside class="context-panel">
-            <div class="context-header">
-              <span class="step-index">02</span>
-              <h2>执行状态</h2>
-            </div>
-            <div id="task-detail" class="task-detail empty-detail">
-              <div class="orb" aria-hidden="true"><i></i></div>
-              <h3>等待第一个任务</h3>
-              <p>提交任务后，这里会实时展示 Agent 的执行阶段、日志和 Pull Request。</p>
-            </div>
-          </aside>
-        </section>
+          <footer class="page-footer">
+            <span>工作区默认保存在 <code>data/workspaces</code></span>
+            <a href="/health" target="_blank" rel="noreferrer">服务状态 ↗</a>
+          </footer>
+        </div>
 
-        <footer class="page-footer">
-          <span>工作区默认保存在 <code>data/workspaces</code></span>
-          <a href="/health" target="_blank" rel="noreferrer">服务状态 ↗</a>
-        </footer>
+        <div class="app-view" id="github-view" hidden>
+          <header class="topbar github-header">
+            <div>
+              <p class="eyebrow">SOURCE CONTROL</p>
+              <h1>连接 GitHub，<br /><span>找到你的下一项工作。</span></h1>
+            </div>
+            <button class="icon-button" id="github-refresh" type="button" aria-label="刷新仓库">
+              ↻
+            </button>
+          </header>
+
+          <section class="github-layout">
+            <article class="github-connect-card">
+              <div class="card-heading">
+                <div>
+                  <span class="step-index">01</span>
+                  <h2>GitHub 身份</h2>
+                </div>
+                <span class="connection-badge" id="github-connection-badge">未连接</span>
+              </div>
+
+              <div class="github-account" id="github-account">
+                <div class="github-avatar" aria-hidden="true">GH</div>
+                <div>
+                  <strong>等待验证 Token</strong>
+                  <small>连接后显示 GitHub 用户身份</small>
+                </div>
+              </div>
+
+              <form id="github-form">
+                <label class="field">
+                  <span>Personal Access Token</span>
+                  <input
+                    id="github-token"
+                    type="password"
+                    placeholder="github_pat_… 或 ghp_…"
+                    autocomplete="new-password"
+                  />
+                  <small id="github-token-hint"
+                    >验证成功后 Token 将保存到 config/config.yaml。</small
+                  >
+                </label>
+                <button class="save-button" id="github-connect-button" type="submit">
+                  验证并读取仓库
+                </button>
+              </form>
+
+              <div class="security-note github-scope-note">
+                <strong>权限说明</strong>
+                <p>仓库范围由 Token 权限决定。Fine-grained Token 只会返回授权给它的仓库。</p>
+              </div>
+            </article>
+
+            <article class="repository-panel">
+              <div class="repository-toolbar">
+                <div>
+                  <span class="step-index">02</span>
+                  <h2>可访问仓库 <em id="repository-count">0</em></h2>
+                </div>
+                <label class="repository-search">
+                  <span class="sr-only">筛选仓库</span>
+                  <input
+                    id="repository-search"
+                    type="search"
+                    placeholder="筛选仓库…"
+                    autocomplete="off"
+                  />
+                </label>
+              </div>
+              <div class="repository-list empty-repositories" id="repository-list">
+                <div class="repository-empty-state">
+                  <span>⑂</span>
+                  <h3>尚未读取仓库</h3>
+                  <p>输入 GitHub Token 并验证后，这里会列出该 Token 可以访问的全部仓库。</p>
+                </div>
+              </div>
+            </article>
+          </section>
+
+          <footer class="page-footer">
+            <span>在此页输入的 GitHub Token 仅驻留内存，重启服务后需要重新配置</span>
+            <a
+              href="https://github.com/settings/personal-access-tokens"
+              target="_blank"
+              rel="noreferrer"
+              >管理 Token ↗</a
+            >
+          </footer>
+        </div>
       </main>
     </div>
 
     <div class="modal-backdrop" id="settings-modal" hidden>
-      <section class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <section
+        class="settings-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+      >
         <div class="modal-heading">
           <div>
             <p class="eyebrow">AGENT CONFIGURATION</p>
             <h2 id="settings-title">模型与身份设置</h2>
           </div>
-          <button class="icon-button" id="close-settings" type="button" aria-label="关闭设置">×</button>
+          <button class="icon-button" id="close-settings" type="button" aria-label="关闭设置">
+            ×
+          </button>
         </div>
 
         <form id="settings-form">
@@ -170,7 +296,12 @@
           <div class="field-row">
             <label class="field field-grow">
               <span>Codex 模型</span>
-              <input id="codex-model" type="text" placeholder="留空以使用 Codex 默认模型" autocomplete="off" />
+              <input
+                id="codex-model"
+                type="text"
+                placeholder="留空以使用 Codex 默认模型"
+                autocomplete="off"
+              />
             </label>
             <label class="field field-grow">
               <span>Claude 模型</span>
@@ -178,7 +309,12 @@
             </label>
             <label class="field field-grow">
               <span>CodeBuddy 模型</span>
-              <input id="codebuddy-model" type="text" placeholder="留空以使用默认模型" autocomplete="off" />
+              <input
+                id="codebuddy-model"
+                type="text"
+                placeholder="留空以使用默认模型"
+                autocomplete="off"
+              />
             </label>
           </div>
 
@@ -223,15 +359,30 @@
             </div>
             <label class="field">
               <span>OpenAI API Key <em id="openai-key-status"></em></span>
-              <input id="openai-key" type="password" placeholder="sk-…" autocomplete="new-password" />
+              <input
+                id="openai-key"
+                type="password"
+                placeholder="sk-…"
+                autocomplete="new-password"
+              />
             </label>
             <label class="field">
               <span>Anthropic API Key <em id="anthropic-key-status"></em></span>
-              <input id="anthropic-key" type="password" placeholder="sk-ant-…" autocomplete="new-password" />
+              <input
+                id="anthropic-key"
+                type="password"
+                placeholder="sk-ant-…"
+                autocomplete="new-password"
+              />
             </label>
             <label class="field">
               <span>CodeBuddy API Key <em id="codebuddy-key-status"></em></span>
-              <input id="codebuddy-key" type="password" placeholder="sk-…" autocomplete="new-password" />
+              <input
+                id="codebuddy-key"
+                type="password"
+                placeholder="sk-…"
+                autocomplete="new-password"
+              />
             </label>
           </div>
 

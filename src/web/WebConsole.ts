@@ -2,7 +2,9 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { AgentTaskManager, CodingAgentProvider } from '../agents/AgentTaskManager';
 import { HttpServer } from '../core/HttpServer';
+import { GitHubClient } from '../github/GitHubClient';
 import { Logger } from '../utils/Logger';
+import { GitHubClientFactory, GitHubConnection, inspectGitHubAccount } from './GitHubExplorer';
 
 interface ConsoleSettings {
   defaultProvider: CodingAgentProvider;
@@ -35,6 +37,12 @@ const STATIC_SECURITY_HEADERS = {
 
 const API_HEADERS = { 'Cache-Control': 'no-store' };
 
+export interface WebConsoleOptions {
+  githubToken?: string;
+  githubClientFactory?: GitHubClientFactory;
+  persistGitHubToken?: (token: string) => void;
+}
+
 /** 注册开发控制台页面、设置和 Agent 任务 API。 */
 export class WebConsole {
   private settings: ConsoleSettings;
@@ -44,13 +52,26 @@ export class WebConsole {
   private hasOpenaiApiKey = false;
   private hasAnthropicApiKey = false;
   private hasCodebuddyApiKey = false;
+  private githubToken?: string;
+  private githubConnection?: GitHubConnection;
+  private githubClientFactory: GitHubClientFactory;
+  private persistGitHubToken?: (token: string) => void;
 
-  constructor(httpServer: HttpServer, storagePath: string, logger: Logger) {
+  constructor(
+    httpServer: HttpServer,
+    storagePath: string,
+    logger: Logger,
+    options: WebConsoleOptions = {},
+  ) {
     this.logger = logger.child('WebConsole');
     const dataDir = resolve(dirname(storagePath));
     this.settingsPath = join(dataDir, 'console-settings.json');
     this.settings = this.loadSettings();
     this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
+    this.githubToken = options.githubToken?.trim() || undefined;
+    this.githubClientFactory =
+      options.githubClientFactory ?? ((token) => new GitHubClient(token, this.logger));
+    this.persistGitHubToken = options.persistGitHubToken;
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
   }
@@ -94,6 +115,46 @@ export class WebConsole {
         return { status: 200, body: this.publicSettings(), headers: API_HEADERS };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) } };
+      }
+    });
+
+    httpServer.register('GET', '/api/console/github', async () => ({
+      status: 200,
+      body: {
+        hasToken: Boolean(this.githubToken),
+        connected: Boolean(this.githubConnection),
+        user: this.githubConnection?.user,
+        repositoryCount: this.githubConnection?.repositories.length ?? 0,
+      },
+      headers: API_HEADERS,
+    }));
+
+    httpServer.register('POST', '/api/console/github/connect', async (body) => {
+      try {
+        const payload = parseJson<{ token?: string }>(body);
+        const submittedToken = payload.token?.trim();
+        const token = submittedToken || this.githubToken;
+        validateGitHubToken(token);
+        const connection = await inspectGitHubAccount(this.githubClientFactory(token!));
+        if (submittedToken) {
+          this.persistGitHubToken?.(token);
+        }
+        this.githubToken = token;
+        this.githubConnection = connection;
+        return { status: 200, body: connection, headers: API_HEADERS };
+      } catch (error) {
+        return githubErrorResponse(error);
+      }
+    });
+
+    httpServer.register('GET', '/api/console/github/repositories', async () => {
+      try {
+        validateGitHubToken(this.githubToken);
+        const connection = await inspectGitHubAccount(this.githubClientFactory(this.githubToken!));
+        this.githubConnection = connection;
+        return { status: 200, body: connection, headers: API_HEADERS };
+      } catch (error) {
+        return githubErrorResponse(error);
       }
     });
 
@@ -275,4 +336,26 @@ function validateSettings(settings: ConsoleSettings): ConsoleSettings {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function validateGitHubToken(token?: string): asserts token is string {
+  if (!token) {
+    throw new Error('请先输入 GitHub Token');
+  }
+  if (token.length > 1024 || /\s/.test(token)) {
+    throw new Error('GitHub Token 格式无效');
+  }
+}
+
+function githubErrorResponse(error: unknown): {
+  status: number;
+  body: { error: string };
+  headers: Record<string, string>;
+} {
+  const statusCode =
+    error && typeof error === 'object' && 'statusCode' in error
+      ? Number((error as { statusCode: unknown }).statusCode)
+      : 400;
+  const status = statusCode >= 400 && statusCode < 500 ? statusCode : 502;
+  return { status, body: { error: errorMessage(error) }, headers: API_HEADERS };
 }

@@ -49,6 +49,8 @@ curl -X POST http://localhost:3000/command \
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
 - 若勾选“创建 Pull Request”，还需安装并登录 GitHub CLI（`gh`），并具备推送分支和创建 PR 的权限。
 
+控制台的 GitHub 页签可输入 Personal Access Token，验证当前 GitHub 身份并读取该 Token 可访问的全部个人、协作及组织仓库。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。受限的 fine-grained Token 只会显示明确授权的仓库。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
+
 每个任务会克隆到数据库所在目录下的 `workspaces/<task-id>`，Agent 只在该克隆中执行。任务状态和日志保存在内存中，重启服务后不会恢复；工作区文件仍保留在磁盘。
 
 > 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
@@ -216,12 +218,15 @@ AGENT_STORAGE_PATH=./data/agent.db
 
 返回 AI 开发控制台。控制台使用以下 API：
 
-| 端点                             | 说明                                   |
-| -------------------------------- | -------------------------------------- |
-| `GET/POST /api/console/settings` | 读取或更新默认 Agent、模型及进程内密钥 |
-| `GET/POST /api/console/tasks`    | 列出任务或创建任务                     |
-| `GET /api/console/task?id=<id>`  | 读取单个任务及日志                     |
-| `POST /api/console/cancel`       | 取消未结束任务                         |
+| 端点                                   | 说明                                         |
+| -------------------------------------- | -------------------------------------------- |
+| `GET/POST /api/console/settings`       | 读取或更新默认 Agent、模型及进程内密钥       |
+| `GET /api/console/github`              | 读取 GitHub Token 与连接状态                 |
+| `POST /api/console/github/connect`     | 验证 GitHub Token，成功后写入配置并读取仓库  |
+| `GET /api/console/github/repositories` | 使用已配置 Token 刷新全部可访问仓库          |
+| `GET/POST /api/console/tasks`          | 列出任务或创建任务                           |
+| `GET /api/console/task?id=<id>`        | 读取单个任务及日志                           |
+| `POST /api/console/cancel`             | 取消未结束任务                               |
 
 仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。
 

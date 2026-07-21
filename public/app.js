@@ -3,6 +3,11 @@ const state = {
   tasks: [],
   selectedTaskId: null,
   polling: false,
+  activeView: 'tasks',
+  githubStatus: null,
+  githubUser: null,
+  repositories: [],
+  githubLoaded: false,
 };
 
 const elements = {
@@ -30,6 +35,18 @@ const elements = {
   openaiKeyStatus: document.querySelector('#openai-key-status'),
   anthropicKeyStatus: document.querySelector('#anthropic-key-status'),
   codebuddyKeyStatus: document.querySelector('#codebuddy-key-status'),
+  tasksView: document.querySelector('#tasks-view'),
+  githubView: document.querySelector('#github-view'),
+  githubForm: document.querySelector('#github-form'),
+  githubToken: document.querySelector('#github-token'),
+  githubTokenHint: document.querySelector('#github-token-hint'),
+  githubConnectButton: document.querySelector('#github-connect-button'),
+  githubRefresh: document.querySelector('#github-refresh'),
+  githubConnectionBadge: document.querySelector('#github-connection-badge'),
+  githubAccount: document.querySelector('#github-account'),
+  repositoryCount: document.querySelector('#repository-count'),
+  repositorySearch: document.querySelector('#repository-search'),
+  repositoryList: document.querySelector('#repository-list'),
   fallbackPriority1: document.querySelector('#fallback-priority-1'),
   fallbackPriority2: document.querySelector('#fallback-priority-2'),
   fallbackPriority3: document.querySelector('#fallback-priority-3'),
@@ -48,6 +65,10 @@ document.querySelectorAll('[data-prompt]').forEach((button) => {
   });
 });
 
+document.querySelectorAll('[data-view]').forEach((button) => {
+  button.addEventListener('click', () => switchView(button.dataset.view));
+});
+
 document.querySelectorAll('#open-settings, #top-settings').forEach((button) => {
   button.addEventListener('click', openSettings);
 });
@@ -62,6 +83,9 @@ document.addEventListener('keydown', (event) => {
 elements.prompt.addEventListener('input', updatePromptCount);
 elements.taskForm.addEventListener('submit', createTask);
 elements.settingsForm.addEventListener('submit', saveSettings);
+elements.githubForm.addEventListener('submit', connectGitHub);
+elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
+elements.repositorySearch.addEventListener('input', renderRepositories);
 
 async function init() {
   try {
@@ -86,8 +110,169 @@ async function loadSettings() {
   selectProvider(state.settings.defaultProvider);
 }
 
+async function loadGitHubStatus() {
+  state.githubStatus = await api('/api/console/github');
+  renderGitHubConnection();
+  if (state.githubStatus.hasToken && !state.githubLoaded) {
+    await refreshGitHubRepositories();
+  }
+}
+
+async function connectGitHub(event) {
+  event.preventDefault();
+  const token = elements.githubToken.value.trim();
+  setGitHubBusy(true, '正在验证…');
+  try {
+    const connection = await api('/api/console/github/connect', {
+      method: 'POST',
+      body: JSON.stringify({ token: token || undefined }),
+    });
+    applyGitHubConnection(connection);
+    elements.githubToken.value = '';
+    showToast(`GitHub 已连接，共读取 ${state.repositories.length} 个仓库。`);
+  } catch (error) {
+    elements.githubConnectionBadge.textContent = '验证失败';
+    elements.githubConnectionBadge.className = 'connection-badge error';
+    showToast(error.message, true);
+  } finally {
+    setGitHubBusy(false, '验证并读取仓库');
+  }
+}
+
+async function refreshGitHubRepositories() {
+  if (elements.githubRefresh.disabled) return;
+  elements.githubRefresh.disabled = true;
+  elements.githubRefresh.classList.add('spinning');
+  try {
+    const connection = await api('/api/console/github/repositories');
+    applyGitHubConnection(connection);
+    showToast(`已刷新 ${state.repositories.length} 个 GitHub 仓库。`);
+  } catch (error) {
+    state.githubLoaded = false;
+    showToast(error.message, true);
+  } finally {
+    elements.githubRefresh.disabled = false;
+    elements.githubRefresh.classList.remove('spinning');
+  }
+}
+
+function applyGitHubConnection(connection) {
+  state.githubUser = connection.user;
+  state.repositories = connection.repositories || [];
+  state.githubLoaded = true;
+  state.githubStatus = {
+    hasToken: true,
+    connected: true,
+    user: connection.user,
+    repositoryCount: state.repositories.length,
+  };
+  renderGitHubConnection();
+  renderRepositories();
+}
+
+function renderGitHubConnection() {
+  const connected = Boolean(state.githubStatus?.connected && state.githubUser);
+  const configured = Boolean(state.githubStatus?.hasToken);
+  elements.githubConnectionBadge.textContent = connected
+    ? '已连接'
+    : configured
+      ? '待验证'
+      : '未连接';
+  elements.githubConnectionBadge.className = `connection-badge${connected ? ' connected' : ''}`;
+  elements.githubTokenHint.textContent = configured
+    ? '已有配置或环境变量 Token；留空可直接验证。输入新 Token 会在验证成功后保存到配置。'
+    : '输入 Token 并验证成功后，将保存到 config/config.yaml。';
+  if (!connected) {
+    elements.githubAccount.innerHTML = `
+      <div class="github-avatar" aria-hidden="true">GH</div>
+      <div><strong>等待验证 Token</strong><small>连接后显示 GitHub 用户身份</small></div>`;
+    return;
+  }
+  const displayName = state.githubUser.name || state.githubUser.login;
+  const initials = state.githubUser.login.slice(0, 2).toUpperCase();
+  elements.githubAccount.innerHTML = `
+    <div class="github-avatar connected" aria-hidden="true">${escapeHtml(initials)}</div>
+    <div>
+      <strong>${escapeHtml(displayName)}</strong>
+      <a href="${escapeHtml(state.githubUser.htmlUrl)}" target="_blank" rel="noreferrer">@${escapeHtml(state.githubUser.login)} ↗</a>
+    </div>`;
+}
+
+function renderRepositories() {
+  const query = elements.repositorySearch.value.trim().toLocaleLowerCase();
+  const filtered = state.repositories.filter((repository) => {
+    const searchable = `${repository.fullName} ${repository.description || ''} ${repository.language || ''}`;
+    return searchable.toLocaleLowerCase().includes(query);
+  });
+  elements.repositoryCount.textContent = query
+    ? `${filtered.length} / ${state.repositories.length}`
+    : String(state.repositories.length);
+
+  if (!state.githubLoaded) {
+    elements.repositoryList.className = 'repository-list empty-repositories';
+    elements.repositoryList.innerHTML = `
+      <div class="repository-empty-state">
+        <span>⑂</span><h3>尚未读取仓库</h3>
+        <p>输入 GitHub Token 并验证后，这里会列出该 Token 可以访问的全部仓库。</p>
+      </div>`;
+    return;
+  }
+  if (!filtered.length) {
+    elements.repositoryList.className = 'repository-list empty-repositories';
+    elements.repositoryList.innerHTML = `
+      <div class="repository-empty-state">
+        <span>⌕</span><h3>${query ? '没有匹配的仓库' : '没有可访问仓库'}</h3>
+        <p>${query ? '换一个名称、描述或语言关键词试试。' : '请检查 Token 的仓库访问范围。'}</p>
+      </div>`;
+    return;
+  }
+
+  elements.repositoryList.className = 'repository-list';
+  elements.repositoryList.innerHTML = filtered
+    .map(
+      (repository) => `
+        <article class="repository-item">
+          <div class="repository-main">
+            <div class="repository-title">
+              <a href="${escapeHtml(repository.htmlUrl)}" target="_blank" rel="noreferrer">${escapeHtml(repository.fullName)}</a>
+              <span class="repo-visibility">${repository.private ? 'PRIVATE' : 'PUBLIC'}</span>
+              ${repository.archived ? '<span class="repo-archived">ARCHIVED</span>' : ''}
+            </div>
+            <p>${escapeHtml(repository.description || '暂无描述')}</p>
+            <div class="repository-meta">
+              ${repository.language ? `<span><i></i>${escapeHtml(repository.language)}</span>` : ''}
+              <span>★ ${Number(repository.stars).toLocaleString('zh-CN')}</span>
+              <span>${repository.fork ? 'Fork · ' : ''}更新于 ${escapeHtml(formatDate(repository.updatedAt))}</span>
+              <span>默认分支 ${escapeHtml(repository.defaultBranch)}</span>
+            </div>
+          </div>
+          <button class="use-repository" data-use-repository="${escapeHtml(repository.fullName)}" data-default-branch="${escapeHtml(repository.defaultBranch)}" type="button">用于新任务</button>
+        </article>`,
+    )
+    .join('');
+
+  elements.repositoryList.querySelectorAll('[data-use-repository]').forEach((button) => {
+    button.addEventListener('click', () => {
+      elements.repository.value = button.dataset.useRepository;
+      elements.baseBranch.value = button.dataset.defaultBranch || '';
+      switchView('tasks');
+      elements.prompt.focus();
+      showToast(`已选择 ${button.dataset.useRepository}`);
+    });
+  });
+}
+
+function setGitHubBusy(busy, label) {
+  elements.githubConnectButton.disabled = busy;
+  elements.githubConnectButton.textContent = label;
+}
+
 function loadFallbackOrder(order) {
-  const selects = [elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3];
+  const selects = [
+    elements.fallbackPriority1,
+    elements.fallbackPriority2,
+    elements.fallbackPriority3,
+  ];
   const padded = [...order, 'none', 'none'].slice(0, 3);
   selects.forEach((select, index) => {
     select.value = padded[index];
@@ -105,7 +290,11 @@ function collectFallbackOrder() {
 
 /** 在三个 fallback 优先级 select 之间禁用彼此已选的 provider,防止重复。 */
 function refreshFallbackOptions() {
-  const selects = [elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3];
+  const selects = [
+    elements.fallbackPriority1,
+    elements.fallbackPriority2,
+    elements.fallbackPriority3,
+  ];
   const chosen = selects.map((select) => select.value);
   selects.forEach((select, index) => {
     Array.from(select.options).forEach((option) => {
@@ -115,9 +304,11 @@ function refreshFallbackOptions() {
   });
 }
 
-[elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3].forEach((select) => {
-  select.addEventListener('change', refreshFallbackOptions);
-});
+[elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3].forEach(
+  (select) => {
+    select.addEventListener('change', refreshFallbackOptions);
+  },
+);
 
 async function refreshTasks() {
   if (state.polling) return;
@@ -194,8 +385,12 @@ async function saveSettings(event) {
     elements.anthropicKey.value = '';
     elements.codebuddyKey.value = '';
     elements.openaiKeyStatus.textContent = state.settings.hasOpenaiApiKey ? '已配置' : '未配置';
-    elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey ? '已配置' : '未配置';
-    elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey ? '已配置' : '未配置';
+    elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey
+      ? '已配置'
+      : '未配置';
+    elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey
+      ? '已配置'
+      : '未配置';
     loadFallbackOrder(state.settings.fallbackOrder || ['codex', 'claude', 'codebuddy']);
     selectProvider(state.settings.defaultProvider);
     closeSettings();
@@ -260,7 +455,10 @@ function renderTaskDetail() {
 
   const output = elements.taskDetail.querySelector('.task-output');
   output.textContent = task.logs
-    .map((log) => `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`)
+    .map(
+      (log) =>
+        `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`,
+    )
     .join('\n');
   output.scrollTop = output.scrollHeight;
 
@@ -285,6 +483,23 @@ function selectProvider(provider) {
   document.querySelectorAll('[data-provider]').forEach((button) => {
     button.classList.toggle('active', button.dataset.provider === normalized);
   });
+}
+
+async function switchView(view) {
+  const normalized = view === 'github' ? 'github' : 'tasks';
+  state.activeView = normalized;
+  elements.tasksView.hidden = normalized !== 'tasks';
+  elements.githubView.hidden = normalized !== 'github';
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.view === normalized);
+  });
+  if (normalized === 'github' && !state.githubStatus) {
+    try {
+      await loadGitHubStatus();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
 }
 
 function openSettings() {
@@ -322,22 +537,25 @@ function showToast(message, isError = false) {
 }
 
 function statusLabel(status) {
-  return {
-    queued: '排队中',
-    preparing: '准备工作区',
-    running: 'Agent 执行中',
-    publishing: '创建 PR',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  }[status] || status;
+  return (
+    {
+      queued: '排队中',
+      preparing: '准备工作区',
+      running: 'Agent 执行中',
+      publishing: '创建 PR',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已取消',
+    }[status] || status
+  );
 }
 
 function renderAttempts(attempts) {
   if (!attempts || !attempts.length) return '';
   const rows = attempts
     .map((a) => {
-      const label = { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[a.provider] || a.provider;
+      const label =
+        { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[a.provider] || a.provider;
       return `
         <div class="attempt ${a.status}">
           <strong>${escapeHtml(label)}</strong>
@@ -359,6 +577,14 @@ function shortRepository(repository) {
 
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleString('zh-CN', { hour12: false });
+}
+
+function formatDate(timestamp) {
+  return new Date(timestamp).toLocaleDateString('zh-CN', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 function escapeHtml(value) {
