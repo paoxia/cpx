@@ -16,12 +16,23 @@ export type CodingAgentProvider = 'codex' | 'claude' | 'codebuddy';
 export type AgentTaskStatus =
   'queued' | 'preparing' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled';
 
+export interface AgentModelConfiguration {
+  id: string;
+  provider: CodingAgentProvider;
+  model?: string;
+  apiKey?: string;
+}
+
+export type PublicAgentModelConfiguration = Omit<AgentModelConfiguration, 'apiKey'>;
+
 export interface AgentTaskRequest {
   /** 主 Agent(primary)。若同时提供 providers,以此为首项的语义被 providers 覆盖。 */
   provider?: CodingAgentProvider;
   /** 完整尝试顺序列表(首项为主,余项为备选)。缺省时回退到 [provider]。 */
   providers?: CodingAgentProvider[];
   model?: string;
+  /** 有序模型配置。提供时覆盖旧版 provider/providers/model 参数。 */
+  configurations?: AgentModelConfiguration[];
   repository: string;
   baseBranch?: string;
   prompt: string;
@@ -35,7 +46,9 @@ export interface AgentTaskLog {
 }
 
 export interface AgentAttempt {
+  configurationId?: string;
   provider: CodingAgentProvider;
+  model?: string;
   startedAt: number;
   endedAt?: number;
   status: 'running' | 'success' | 'failed';
@@ -51,6 +64,8 @@ export interface AgentTask {
   /** 归一化后的完整尝试列表,至少 1 项。 */
   providers: CodingAgentProvider[];
   model?: string;
+  /** 实际执行顺序，不包含 API Key。 */
+  configurations: PublicAgentModelConfiguration[];
   repository: string;
   baseBranch?: string;
   prompt: string;
@@ -79,7 +94,7 @@ const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 
 /**
- * 为 Codex/Claude Code 准备隔离工作区并管理非交互任务生命周期。
+ * 为 Codex/Claude Code/CodeBuddy 准备隔离工作区并管理非交互任务生命周期。
  * 任务保存在内存中；工作区和 Git 历史保存在 workspaceRoot 下。
  */
 export class AgentTaskManager {
@@ -88,6 +103,7 @@ export class AgentTaskManager {
   private workspaceRoot: string;
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
+  private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
   private stopped = false;
 
   constructor(workspaceRoot: string, logger: Logger) {
@@ -105,11 +121,18 @@ export class AgentTaskManager {
       throw new Error('任务管理器已停止');
     }
     const normalized = this.validateRequest(request);
+    const configurations = normalized.configurations;
     const now = Date.now();
     const task: AgentTask = {
       id: randomUUID(),
-      ...normalized,
-      createPullRequest: normalized.createPullRequest ?? false,
+      provider: configurations[0].provider,
+      providers: configurations.map((configuration) => configuration.provider),
+      model: configurations[0].model,
+      configurations: configurations.map(({ apiKey: _apiKey, ...configuration }) => configuration),
+      repository: normalized.repository,
+      baseBranch: normalized.baseBranch,
+      prompt: normalized.prompt,
+      createPullRequest: normalized.createPullRequest,
       status: 'queued',
       createdAt: now,
       updatedAt: now,
@@ -117,6 +140,7 @@ export class AgentTaskManager {
       attempts: [],
     };
     this.tasks.set(task.id, task);
+    this.executionConfigurations.set(task.id, configurations);
     this.addLog(task, 'system', '任务已创建，正在准备 Git 工作区。');
     queueMicrotask(() => {
       if (task.status !== 'cancelled') {
@@ -147,6 +171,7 @@ export class AgentTaskManager {
     task.completedAt = Date.now();
     this.addLog(task, 'system', '用户已取消任务。');
     this.processes.get(id)?.kill();
+    this.executionConfigurations.delete(id);
     return true;
   }
 
@@ -163,13 +188,17 @@ export class AgentTaskManager {
       process.kill();
     }
     this.processes.clear();
+    this.executionConfigurations.clear();
   }
 
-  private validateRequest(request: AgentTaskRequest): Omit<AgentTaskRequest, 'providers' | 'provider'> & {
-    provider: CodingAgentProvider;
-    providers: CodingAgentProvider[];
+  private validateRequest(request: AgentTaskRequest): {
+    configurations: AgentModelConfiguration[];
+    repository: string;
+    baseBranch?: string;
+    prompt: string;
+    createPullRequest: boolean;
   } {
-    const providers = normalizeProviders(request.provider, request.providers);
+    const configurations = normalizeConfigurations(request);
     const repository = normalizeRepository(request.repository);
     const prompt = request.prompt?.trim();
     if (!prompt) {
@@ -177,10 +206,6 @@ export class AgentTaskManager {
     }
     if (prompt.length > 20_000) {
       throw new Error('任务指令不能超过 20000 个字符');
-    }
-    const model = request.model?.trim() || undefined;
-    if (model && !MODEL_PATTERN.test(model)) {
-      throw new Error('模型名称包含不支持的字符');
     }
     const baseBranch = request.baseBranch?.trim() || undefined;
     if (
@@ -190,11 +215,9 @@ export class AgentTaskManager {
       throw new Error('基础分支名称无效');
     }
     return {
-      provider: providers[0],
-      providers,
+      configurations,
       repository,
       baseBranch,
-      model,
       prompt,
       createPullRequest: Boolean(request.createPullRequest),
     };
@@ -253,22 +276,27 @@ export class AgentTaskManager {
       task.completedAt = Date.now();
       this.addLog(task, 'system', `任务失败：${message}`);
       this.logger.error(`任务 ${task.id} 失败: ${message}`);
+    } finally {
+      this.executionConfigurations.delete(task.id);
     }
   }
 
   /**
-   * 按 task.providers 顺序尝试每个 Agent。额度类(rate_limit/auth)失败才切换;
+   * 按模型配置顺序尝试每个 Agent。额度类(rate_limit/auth)失败才切换;
    * 其他失败立即抛出。workspace 在循环外创建一次,失败时复用(不 reset)。
    */
   private async runAgentWithFallback(task: AgentTask, workspace: string): Promise<void> {
-    const providers = task.providers;
-    for (let i = 0; i < providers.length; i++) {
+    const configurations = this.executionConfigurations.get(task.id) ?? task.configurations;
+    for (let i = 0; i < configurations.length; i++) {
       this.assertNotCancelled(task);
-      const provider = providers[i];
+      const configuration = configurations[i];
+      const provider = configuration.provider;
       const adapter = AGENT_ADAPTERS[provider];
 
       const attempt: AgentAttempt = {
+        configurationId: configuration.id,
         provider,
+        model: configuration.model,
         startedAt: Date.now(),
         status: 'running',
       };
@@ -276,11 +304,11 @@ export class AgentTaskManager {
       this.addLog(
         task,
         'system',
-        `${adapter.displayName} 开始执行(第 ${i + 1}/${providers.length} 个 Agent)。`,
+        `${formatConfigurationLabel(configuration)} 开始执行(第 ${i + 1}/${configurations.length} 个模型配置)。`,
       );
 
       try {
-        await this.runAgent(task, workspace, provider);
+        await this.runAgent(task, workspace, configuration);
         attempt.status = 'success';
         attempt.endedAt = Date.now();
         return;
@@ -308,7 +336,7 @@ export class AgentTaskManager {
         this.addLog(task, 'system', `${adapter.displayName} 失败[${kindLabel(kind)}]: ${summary}`);
 
         const isFallbackEligible = kind === 'rate_limit' || kind === 'auth';
-        const isLast = i === providers.length - 1;
+        const isLast = i === configurations.length - 1;
 
         if (!isFallbackEligible) {
           this.addLog(
@@ -322,8 +350,8 @@ export class AgentTaskManager {
           this.addLog(task, 'system', '所有备选 Agent 均失败。');
           throw new Error(buildFailureSummary(task.attempts));
         }
-        const next = AGENT_ADAPTERS[providers[i + 1]];
-        this.addLog(task, 'system', `将切换到备选 Agent: ${next.displayName}`);
+        const next = configurations[i + 1];
+        this.addLog(task, 'system', `将切换到下一项模型配置: ${formatConfigurationLabel(next)}`);
       }
     }
   }
@@ -331,21 +359,22 @@ export class AgentTaskManager {
   private async runAgent(
     task: AgentTask,
     workspace: string,
-    provider: CodingAgentProvider,
+    configuration: AgentModelConfiguration | PublicAgentModelConfiguration,
   ): Promise<void> {
+    const provider = configuration.provider;
     const adapter = AGENT_ADAPTERS[provider];
     const prompt = buildPrompt(task.prompt);
     const env: NodeJS.ProcessEnv = { ...process.env };
-    if (this.secrets.openaiApiKey) {
-      env.OPENAI_API_KEY = this.secrets.openaiApiKey;
+    const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
+    const legacyApiKey = {
+      codex: this.secrets.openaiApiKey,
+      claude: this.secrets.anthropicApiKey,
+      codebuddy: this.secrets.codebuddyApiKey,
+    }[provider];
+    if (configuredApiKey || legacyApiKey) {
+      env[adapter.apiKeyEnvVar] = configuredApiKey || legacyApiKey;
     }
-    if (this.secrets.anthropicApiKey) {
-      env.ANTHROPIC_API_KEY = this.secrets.anthropicApiKey;
-    }
-    if (this.secrets.codebuddyApiKey) {
-      env.CODEBUDDY_API_KEY = this.secrets.codebuddyApiKey;
-    }
-    const args = adapter.buildArgs(task.model);
+    const args = adapter.buildArgs(configuration.model);
     await this.runProcess(
       task,
       adapter.command,
@@ -557,6 +586,51 @@ function buildPrompt(taskPrompt: string): string {
   ].join('\n');
 }
 
+function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfiguration[] {
+  if (request.configurations) {
+    if (request.configurations.length === 0) {
+      throw new Error('模型配置不能为空');
+    }
+    if (request.configurations.length > 20) {
+      throw new Error('模型配置不能超过 20 条');
+    }
+    const ids = new Set<string>();
+    return request.configurations.map((configuration) => {
+      const id = configuration.id?.trim();
+      if (!id || !/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+        throw new Error('模型配置 ID 无效');
+      }
+      if (ids.has(id)) {
+        throw new Error(`模型配置 ID 重复: ${id}`);
+      }
+      ids.add(id);
+      if (!ALL_PROVIDERS.includes(configuration.provider)) {
+        throw new Error(`provider 必须是 ${ALL_PROVIDERS.join('、')} 之一`);
+      }
+      const model = configuration.model?.trim() || undefined;
+      if (model && !MODEL_PATTERN.test(model)) {
+        throw new Error('模型名称包含不支持的字符');
+      }
+      const apiKey = configuration.apiKey?.trim() || undefined;
+      if (apiKey && (apiKey.length > 4096 || /\s/.test(apiKey))) {
+        throw new Error('API Key 格式无效');
+      }
+      return { id, provider: configuration.provider, model, apiKey };
+    });
+  }
+
+  const providers = normalizeProviders(request.provider, request.providers);
+  const model = request.model?.trim() || undefined;
+  if (model && !MODEL_PATTERN.test(model)) {
+    throw new Error('模型名称包含不支持的字符');
+  }
+  return providers.map((provider, index) => ({
+    id: `legacy-${index + 1}-${provider}`,
+    provider,
+    model,
+  }));
+}
+
 /**
  * 归一化 providers 列表:去重保序,校验每项合法。
  * providers 优先;缺省时回退到 [provider]。两者皆空时抛错。
@@ -565,12 +639,7 @@ function normalizeProviders(
   provider: CodingAgentProvider | undefined,
   providers: CodingAgentProvider[] | undefined,
 ): CodingAgentProvider[] {
-  const source =
-    providers && providers.length > 0
-      ? providers
-      : provider
-        ? [provider]
-        : undefined;
+  const source = providers && providers.length > 0 ? providers : provider ? [provider] : undefined;
   if (!source || source.length === 0) {
     throw new Error('必须指定 provider 或 providers');
   }
@@ -600,6 +669,13 @@ function buildFailureSummary(attempts: AgentAttempt[]): string {
       }`,
   );
   return `所有 Agent 均失败。${parts.join('; ')}`;
+}
+
+function formatConfigurationLabel(
+  configuration: PublicAgentModelConfiguration | AgentModelConfiguration,
+): string {
+  const displayName = AGENT_ADAPTERS[configuration.provider].displayName;
+  return configuration.model ? `${displayName} / ${configuration.model}` : displayName;
 }
 
 function formatAgentEvent(line: string): string {

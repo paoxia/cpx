@@ -1,32 +1,47 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
-import { AgentTaskManager, CodingAgentProvider } from '../agents/AgentTaskManager';
+import {
+  AgentModelConfiguration,
+  AgentTaskManager,
+  CodingAgentProvider,
+} from '../agents/AgentTaskManager';
 import { HttpServer } from '../core/HttpServer';
 import { GitHubClient } from '../github/GitHubClient';
 import { Logger } from '../utils/Logger';
+import {
+  AgentAuthManager,
+  AgentAuthProvider,
+  AgentAuthService,
+  isAgentAuthProvider,
+} from './AgentAuthManager';
 import { GitHubClientFactory, GitHubConnection, inspectGitHubAccount } from './GitHubExplorer';
 
+interface StoredModelConfiguration {
+  id: string;
+  provider: CodingAgentProvider;
+  model: string;
+  apiKey?: string;
+}
+
 interface ConsoleSettings {
-  defaultProvider: CodingAgentProvider;
-  codexModel: string;
-  claudeModel: string;
-  codebuddyModel: string;
-  fallbackOrder: CodingAgentProvider[];
+  version: 2;
+  modelConfigs: StoredModelConfiguration[];
 }
 
-interface SettingsPayload extends Partial<ConsoleSettings> {
-  openaiApiKey?: string;
-  anthropicApiKey?: string;
-  codebuddyApiKey?: string;
+interface ModelConfigurationPayload {
+  id?: string;
+  provider?: CodingAgentProvider;
+  model?: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
 }
 
-const DEFAULT_SETTINGS: ConsoleSettings = {
-  defaultProvider: 'codex',
-  codexModel: '',
-  claudeModel: 'sonnet',
-  codebuddyModel: '',
-  fallbackOrder: ['codex', 'claude', 'codebuddy'],
-};
+interface SettingsPayload {
+  modelConfigs?: ModelConfigurationPayload[];
+}
+
+const DEFAULT_SETTINGS: ConsoleSettings = createDefaultSettings();
 
 const STATIC_SECURITY_HEADERS = {
   'Content-Security-Policy':
@@ -41,6 +56,7 @@ export interface WebConsoleOptions {
   githubToken?: string;
   githubClientFactory?: GitHubClientFactory;
   persistGitHubToken?: (token: string) => void;
+  agentAuth?: Partial<Record<AgentAuthProvider, AgentAuthService>>;
 }
 
 /** 注册开发控制台页面、设置和 Agent 任务 API。 */
@@ -49,13 +65,11 @@ export class WebConsole {
   private settingsPath: string;
   private taskManager: AgentTaskManager;
   private logger: Logger;
-  private hasOpenaiApiKey = false;
-  private hasAnthropicApiKey = false;
-  private hasCodebuddyApiKey = false;
   private githubToken?: string;
   private githubConnection?: GitHubConnection;
   private githubClientFactory: GitHubClientFactory;
   private persistGitHubToken?: (token: string) => void;
+  private agentAuth: Record<AgentAuthProvider, AgentAuthService>;
 
   constructor(
     httpServer: HttpServer,
@@ -72,12 +86,19 @@ export class WebConsole {
     this.githubClientFactory =
       options.githubClientFactory ?? ((token) => new GitHubClient(token, this.logger));
     this.persistGitHubToken = options.persistGitHubToken;
+    this.agentAuth = {
+      codex: options.agentAuth?.codex ?? new AgentAuthManager('codex', this.logger),
+      claude: options.agentAuth?.claude ?? new AgentAuthManager('claude', this.logger),
+    };
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
   }
 
   async stop(): Promise<void> {
-    await this.taskManager.stop();
+    await Promise.all([
+      this.taskManager.stop(),
+      ...Object.values(this.agentAuth).map((service) => service.stop()),
+    ]);
   }
 
   private registerAssets(httpServer: HttpServer): void {
@@ -94,7 +115,7 @@ export class WebConsole {
         body: content,
         contentType: asset.contentType,
         headers: {
-          'Cache-Control': asset.route === '/' ? 'no-cache' : 'public, max-age=300',
+          'Cache-Control': 'no-cache',
           ...STATIC_SECURITY_HEADERS,
         },
       }));
@@ -115,6 +136,51 @@ export class WebConsole {
         return { status: 200, body: this.publicSettings(), headers: API_HEADERS };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) } };
+      }
+    });
+
+    httpServer.register('GET', '/api/console/agent-auth', async (_body, _headers, query) => {
+      try {
+        const service = this.agentAuthService(query.provider);
+        return { status: 200, body: await service.getStatus(), headers: API_HEADERS };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('POST', '/api/console/agent-auth/login', async (body) => {
+      try {
+        const payload = parseJson<{ provider?: string }>(body);
+        const service = this.agentAuthService(payload.provider);
+        return { status: 202, body: await service.startLogin(), headers: API_HEADERS };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('POST', '/api/console/agent-auth/input', async (body) => {
+      try {
+        const payload = parseJson<{ provider?: string; input?: string }>(body);
+        const service = this.agentAuthService(payload.provider);
+        return {
+          status: 200,
+          body: service.submitInput(payload.input ?? ''),
+          headers: API_HEADERS,
+        };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('POST', '/api/console/agent-auth/cancel', async (body) => {
+      try {
+        const payload = parseJson<{ provider?: string }>(body);
+        const service = this.agentAuthService(payload.provider);
+        return service.cancelLogin()
+          ? { status: 200, body: { success: true }, headers: API_HEADERS }
+          : { status: 409, body: { error: '当前没有进行中的登录' }, headers: API_HEADERS };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
       }
     });
 
@@ -184,14 +250,21 @@ export class WebConsole {
           baseBranch?: string;
           prompt?: string;
           createPullRequest?: boolean;
+          useFallback?: boolean;
         }>(body);
-        const primary = payload.provider ?? this.settings.defaultProvider;
-        const providers = payload.providers ?? [primary];
-        const model = payload.model ?? this.modelFor(providers[0]);
+        const usesLegacySelection = Boolean(
+          payload.provider || payload.providers || payload.model !== undefined,
+        );
         const task = this.taskManager.create({
-          provider: providers[0],
-          providers,
-          model,
+          ...(usesLegacySelection
+            ? {
+                provider: payload.provider,
+                providers: payload.providers,
+                model: payload.model,
+              }
+            : {
+                configurations: this.executionConfigurations(payload.useFallback !== false),
+              }),
           repository: payload.repository ?? '',
           baseBranch: payload.baseBranch,
           prompt: payload.prompt ?? '',
@@ -220,68 +293,86 @@ export class WebConsole {
 
   private loadSettings(): ConsoleSettings {
     if (!existsSync(this.settingsPath)) {
-      return { ...DEFAULT_SETTINGS };
+      return structuredClone(DEFAULT_SETTINGS);
     }
     try {
-      const stored = JSON.parse(
-        readFileSync(this.settingsPath, 'utf8'),
-      ) as Partial<ConsoleSettings>;
-      return validateSettings({ ...DEFAULT_SETTINGS, ...stored });
+      const stored = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as unknown;
+      if (isRecord(stored) && Array.isArray(stored.modelConfigs)) {
+        return validateStoredSettings(stored.modelConfigs);
+      }
+      const migrated = migrateLegacySettings(stored);
+      this.persistSettings(migrated);
+      return migrated;
     } catch (error) {
       this.logger.warn(`控制台设置读取失败，使用默认值: ${errorMessage(error)}`);
-      return { ...DEFAULT_SETTINGS };
+      return structuredClone(DEFAULT_SETTINGS);
     }
+  }
+
+  private agentAuthService(provider: unknown): AgentAuthService {
+    if (!isAgentAuthProvider(provider)) {
+      throw new Error('provider 必须是 codex 或 claude');
+    }
+    return this.agentAuth[provider];
   }
 
   private updateSettings(payload: SettingsPayload): void {
-    this.settings = validateSettings({
-      ...this.settings,
-      ...(payload.defaultProvider ? { defaultProvider: payload.defaultProvider } : {}),
-      ...(payload.codexModel !== undefined ? { codexModel: payload.codexModel.trim() } : {}),
-      ...(payload.claudeModel !== undefined ? { claudeModel: payload.claudeModel.trim() } : {}),
-      ...(payload.codebuddyModel !== undefined
-        ? { codebuddyModel: payload.codebuddyModel.trim() }
-        : {}),
-      ...(payload.fallbackOrder ? { fallbackOrder: payload.fallbackOrder } : {}),
-    });
-
-    const secrets: { openaiApiKey?: string; anthropicApiKey?: string; codebuddyApiKey?: string } =
-      {};
-    if (payload.openaiApiKey?.trim()) {
-      secrets.openaiApiKey = payload.openaiApiKey.trim();
-      this.hasOpenaiApiKey = true;
+    if (!Array.isArray(payload.modelConfigs)) {
+      throw new Error('modelConfigs 必须是数组');
     }
-    if (payload.anthropicApiKey?.trim()) {
-      secrets.anthropicApiKey = payload.anthropicApiKey.trim();
-      this.hasAnthropicApiKey = true;
-    }
-    if (payload.codebuddyApiKey?.trim()) {
-      secrets.codebuddyApiKey = payload.codebuddyApiKey.trim();
-      this.hasCodebuddyApiKey = true;
-    }
-    this.taskManager.setSecrets(secrets);
-    writeFileSync(this.settingsPath, `${JSON.stringify(this.settings, null, 2)}\n`, 'utf8');
-  }
-
-  private modelFor(provider: CodingAgentProvider): string | undefined {
-    const map: Record<CodingAgentProvider, string> = {
-      codex: this.settings.codexModel,
-      claude: this.settings.claudeModel,
-      codebuddy: this.settings.codebuddyModel,
+    const nextSettings: ConsoleSettings = {
+      version: 2,
+      modelConfigs: normalizeModelConfigurationPayloads(
+        payload.modelConfigs,
+        this.settings.modelConfigs,
+      ),
     };
-    return map[provider] || undefined;
+    this.persistSettings(nextSettings);
+    this.settings = nextSettings;
   }
 
-  private publicSettings(): ConsoleSettings & {
-    hasOpenaiApiKey: boolean;
-    hasAnthropicApiKey: boolean;
-    hasCodebuddyApiKey: boolean;
+  private persistSettings(settings: ConsoleSettings): void {
+    writeFileSync(this.settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  }
+
+  private executionConfigurations(useFallback: boolean): AgentModelConfiguration[] {
+    const configurations = useFallback
+      ? this.settings.modelConfigs
+      : this.settings.modelConfigs.slice(0, 1);
+    return configurations.map((configuration) => ({
+      id: configuration.id,
+      provider: configuration.provider,
+      model: configuration.model || undefined,
+      apiKey: configuration.apiKey,
+    }));
+  }
+
+  private publicSettings(): {
+    version: 2;
+    modelConfigs: Array<{
+      id: string;
+      provider: CodingAgentProvider;
+      model: string;
+      hasApiKey: boolean;
+      apiKeySource: 'file' | 'environment' | 'none';
+    }>;
   } {
     return {
-      ...this.settings,
-      hasOpenaiApiKey: this.hasOpenaiApiKey || Boolean(process.env.OPENAI_API_KEY),
-      hasAnthropicApiKey: this.hasAnthropicApiKey || Boolean(process.env.ANTHROPIC_API_KEY),
-      hasCodebuddyApiKey: this.hasCodebuddyApiKey || Boolean(process.env.CODEBUDDY_API_KEY),
+      version: 2,
+      modelConfigs: this.settings.modelConfigs.map((configuration) => {
+        const hasEnvironmentApiKey = Boolean(apiKeyFromEnvironment(configuration.provider));
+        return {
+          id: configuration.id,
+          provider: configuration.provider,
+          model: configuration.model,
+          hasApiKey: Boolean(configuration.apiKey) || hasEnvironmentApiKey,
+          apiKeySource: configuration.apiKey
+            ? 'file'
+            : hasEnvironmentApiKey
+              ? 'environment'
+              : 'none',
+        };
+      }),
     };
   }
 }
@@ -304,34 +395,116 @@ function parseJson<T>(body: Buffer): T {
 }
 
 const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude', 'codebuddy'];
+const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 
-function validateSettings(settings: ConsoleSettings): ConsoleSettings {
-  if (!VALID_PROVIDERS.includes(settings.defaultProvider)) {
-    throw new Error('默认 Agent 必须是 codex、claude 或 codebuddy');
+function createDefaultSettings(): ConsoleSettings {
+  return {
+    version: 2,
+    modelConfigs: [
+      { id: 'default-codex', provider: 'codex', model: '' },
+      { id: 'default-claude', provider: 'claude', model: 'sonnet' },
+      { id: 'default-codebuddy', provider: 'codebuddy', model: '' },
+    ],
+  };
+}
+
+function validateStoredSettings(modelConfigs: unknown[]): ConsoleSettings {
+  return {
+    version: 2,
+    modelConfigs: normalizeModelConfigurationPayloads(
+      modelConfigs as ModelConfigurationPayload[],
+      [],
+      true,
+    ),
+  };
+}
+
+function normalizeModelConfigurationPayloads(
+  payloads: ModelConfigurationPayload[],
+  existing: StoredModelConfiguration[],
+  trustStoredApiKeys = false,
+): StoredModelConfiguration[] {
+  if (payloads.length === 0) {
+    throw new Error('至少需要一条模型配置');
   }
-  for (const [name, value] of [
-    ['Codex 模型', settings.codexModel],
-    ['Claude 模型', settings.claudeModel],
-    ['CodeBuddy 模型', settings.codebuddyModel],
-  ] as const) {
-    if (value && !/^[a-zA-Z0-9._:/-]+$/.test(value)) {
-      throw new Error(`${name}包含不支持的字符`);
+  if (payloads.length > 20) {
+    throw new Error('模型配置不能超过 20 条');
+  }
+  const existingById = new Map(existing.map((configuration) => [configuration.id, configuration]));
+  const ids = new Set<string>();
+  return payloads.map((payload, index) => {
+    const id = payload.id?.trim() || randomUUID();
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
+      throw new Error(`第 ${index + 1} 条模型配置 ID 无效`);
     }
-  }
-  if (!Array.isArray(settings.fallbackOrder) || settings.fallbackOrder.length === 0) {
-    throw new Error('fallback 顺序不能为空');
-  }
-  const seen = new Set<CodingAgentProvider>();
-  for (const provider of settings.fallbackOrder) {
-    if (!VALID_PROVIDERS.includes(provider)) {
-      throw new Error(`fallbackOrder 包含未知 provider: ${provider}`);
+    if (ids.has(id)) {
+      throw new Error(`模型配置 ID 重复: ${id}`);
     }
-    if (seen.has(provider)) {
-      throw new Error(`fallbackOrder 包含重复 provider: ${provider}`);
+    ids.add(id);
+    if (!payload.provider || !VALID_PROVIDERS.includes(payload.provider)) {
+      throw new Error(`第 ${index + 1} 条模型配置的 Agent 无效`);
     }
-    seen.add(provider);
+    const model = payload.model?.trim() || '';
+    if (model && !MODEL_PATTERN.test(model)) {
+      throw new Error(`第 ${index + 1} 条模型名称包含不支持的字符`);
+    }
+    const submittedApiKey = payload.apiKey?.trim() || undefined;
+    const apiKey = payload.clearApiKey
+      ? undefined
+      : submittedApiKey || existingById.get(id)?.apiKey;
+    if (apiKey && (apiKey.length > 4096 || /\s/.test(apiKey))) {
+      throw new Error(`第 ${index + 1} 条 API Key 格式无效`);
+    }
+    return {
+      id,
+      provider: payload.provider,
+      model,
+      ...(trustStoredApiKeys || submittedApiKey || existingById.has(id) ? { apiKey } : {}),
+    };
+  });
+}
+
+function migrateLegacySettings(stored: unknown): ConsoleSettings {
+  if (!isRecord(stored)) {
+    return structuredClone(DEFAULT_SETTINGS);
   }
-  return settings;
+  const fallbackOrder = Array.isArray(stored.fallbackOrder)
+    ? stored.fallbackOrder.filter(
+        (provider): provider is CodingAgentProvider =>
+          typeof provider === 'string' && VALID_PROVIDERS.includes(provider as CodingAgentProvider),
+      )
+    : [];
+  const defaultProvider = VALID_PROVIDERS.includes(stored.defaultProvider as CodingAgentProvider)
+    ? (stored.defaultProvider as CodingAgentProvider)
+    : 'codex';
+  const order = [
+    defaultProvider,
+    ...fallbackOrder.filter((provider) => provider !== defaultProvider),
+  ];
+  const modelByProvider: Record<CodingAgentProvider, string> = {
+    codex: typeof stored.codexModel === 'string' ? stored.codexModel : '',
+    claude: typeof stored.claudeModel === 'string' ? stored.claudeModel : 'sonnet',
+    codebuddy: typeof stored.codebuddyModel === 'string' ? stored.codebuddyModel : '',
+  };
+  return validateStoredSettings(
+    order.map((provider) => ({
+      id: `migrated-${provider}`,
+      provider,
+      model: modelByProvider[provider],
+    })),
+  );
+}
+
+function apiKeyFromEnvironment(provider: CodingAgentProvider): string | undefined {
+  return {
+    codex: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY,
+    claude: process.env.ANTHROPIC_API_KEY,
+    codebuddy: process.env.CODEBUDDY_API_KEY,
+  }[provider];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function errorMessage(error: unknown): string {

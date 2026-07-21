@@ -27,7 +27,7 @@
             <span class="nav-icon">⑂</span>
             <span>GitHub</span>
           </button>
-          <button class="nav-item" id="open-settings" type="button">
+          <button class="nav-item" id="models-tab" data-view="models" type="button">
             <span class="nav-icon">◎</span>
             <span>模型设置</span>
           </button>
@@ -59,7 +59,13 @@
               <p class="eyebrow">DEVELOPMENT WORKSPACE</p>
               <h1>把想法交给 Agent，<br /><span>让代码真正发生。</span></h1>
             </div>
-            <button class="icon-button" id="top-settings" type="button" aria-label="打开设置">
+            <button
+              class="icon-button"
+              id="top-settings"
+              data-view="models"
+              type="button"
+              aria-label="打开模型配置"
+            >
               ⚙
             </button>
           </header>
@@ -71,21 +77,18 @@
                   <span class="step-index">01</span>
                   <h2>创建开发任务</h2>
                 </div>
-                <div class="agent-switch" role="group" aria-label="选择 Agent">
-                  <button type="button" data-provider="codex" class="active">Codex</button>
-                  <button type="button" data-provider="claude">Claude Code</button>
-                  <button type="button" data-provider="codebuddy">CodeBuddy</button>
+                <div class="execution-order-preview" id="execution-order-preview">
+                  尚未加载模型配置
                 </div>
               </div>
 
               <form id="task-form">
-                <input type="hidden" id="provider" value="codex" />
                 <label class="fallback-toggle">
                   <input id="auto-fallback" type="checkbox" checked />
                   <span class="toggle"></span>
                   <span>
-                    <strong>失败时自动切换到其他 Agent</strong>
-                    <small>额度耗尽或鉴权失败时按 fallback 顺序依次尝试</small>
+                    <strong>失败时按配置顺序继续尝试</strong>
+                    <small>额度耗尽或鉴权失败时，切换到下一条模型配置</small>
                   </span>
                 </label>
                 <div class="field-row">
@@ -255,7 +258,7 @@
           </section>
 
           <footer class="page-footer">
-            <span>在此页输入的 GitHub Token 仅驻留内存，重启服务后需要重新配置</span>
+            <span>验证成功的 GitHub Token 保存在本地 config/config.yaml</span>
             <a
               href="https://github.com/settings/personal-access-tokens"
               target="_blank"
@@ -264,136 +267,184 @@
             >
           </footer>
         </div>
-      </main>
-    </div>
 
-    <div class="modal-backdrop" id="settings-modal" hidden>
-      <section
-        class="settings-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-      >
-        <div class="modal-heading">
-          <div>
-            <p class="eyebrow">AGENT CONFIGURATION</p>
-            <h2 id="settings-title">模型与身份设置</h2>
-          </div>
-          <button class="icon-button" id="close-settings" type="button" aria-label="关闭设置">
-            ×
-          </button>
-        </div>
-
-        <form id="settings-form">
-          <label class="field">
-            <span>默认 Agent</span>
-            <select id="default-provider">
-              <option value="codex">Codex</option>
-              <option value="claude">Claude Code</option>
-              <option value="codebuddy">CodeBuddy</option>
-            </select>
-          </label>
-          <div class="field-row">
-            <label class="field field-grow">
-              <span>Codex 模型</span>
-              <input
-                id="codex-model"
-                type="text"
-                placeholder="留空以使用 Codex 默认模型"
-                autocomplete="off"
-              />
-            </label>
-            <label class="field field-grow">
-              <span>Claude 模型</span>
-              <input id="claude-model" type="text" placeholder="sonnet" autocomplete="off" />
-            </label>
-            <label class="field field-grow">
-              <span>CodeBuddy 模型</span>
-              <input
-                id="codebuddy-model"
-                type="text"
-                placeholder="留空以使用默认模型"
-                autocomplete="off"
-              />
-            </label>
-          </div>
-
-          <div class="field">
-            <span>Fallback 顺序</span>
-            <small>从上到下依次尝试,选“无”可跳过该位</small>
-            <div class="fallback-order" id="fallback-order">
-              <label class="fallback-row">
-                <span class="fallback-priority">1</span>
-                <select id="fallback-priority-1">
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                  <option value="codebuddy">CodeBuddy</option>
-                  <option value="none">无</option>
-                </select>
-              </label>
-              <label class="fallback-row">
-                <span class="fallback-priority">2</span>
-                <select id="fallback-priority-2">
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                  <option value="codebuddy">CodeBuddy</option>
-                  <option value="none">无</option>
-                </select>
-              </label>
-              <label class="fallback-row">
-                <span class="fallback-priority">3</span>
-                <select id="fallback-priority-3">
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude Code</option>
-                  <option value="codebuddy">CodeBuddy</option>
-                  <option value="none">无</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <div class="secret-section">
+        <div class="app-view" id="models-view" hidden>
+          <header class="topbar models-header">
             <div>
-              <h3>运行时密钥</h3>
-              <p>可留空以复用本机 CLI 登录。输入的密钥仅保存在当前服务进程内，不写入磁盘。</p>
+              <p class="eyebrow">MODEL ROUTING</p>
+              <h1>管理模型配置，<br /><span>定义 Agent 执行顺序。</span></h1>
             </div>
-            <label class="field">
-              <span>OpenAI API Key <em id="openai-key-status"></em></span>
-              <input
-                id="openai-key"
-                type="password"
-                placeholder="sk-…"
-                autocomplete="new-password"
-              />
-            </label>
-            <label class="field">
-              <span>Anthropic API Key <em id="anthropic-key-status"></em></span>
-              <input
-                id="anthropic-key"
-                type="password"
-                placeholder="sk-ant-…"
-                autocomplete="new-password"
-              />
-            </label>
-            <label class="field">
-              <span>CodeBuddy API Key <em id="codebuddy-key-status"></em></span>
-              <input
-                id="codebuddy-key"
-                type="password"
-                placeholder="sk-…"
-                autocomplete="new-password"
-              />
-            </label>
-          </div>
+            <button
+              class="icon-button"
+              id="add-model-config"
+              type="button"
+              aria-label="添加模型配置"
+            >
+              ＋
+            </button>
+          </header>
 
-          <div class="security-note">
-            <strong>安全提醒</strong>
-            <p>控制台可以执行代码和推送 GitHub，请只在可信网络中运行，不要直接暴露到公网。</p>
-          </div>
+          <section class="model-management-layout">
+            <article class="codex-auth-panel">
+              <div class="codex-auth-heading">
+                <div>
+                  <span class="step-index">01</span>
+                  <div>
+                    <h2>Coding Agent 账号连接</h2>
+                    <p>统一管理官方 CLI 登录；凭据刷新仍由各自 CLI 负责。</p>
+                  </div>
+                </div>
+              </div>
 
-          <button class="save-button" type="submit">保存设置</button>
-        </form>
-      </section>
+              <div class="codex-auth-body">
+                <div class="codex-auth-summary">
+                  <div class="agent-auth-summary-title">
+                    <b>Codex</b>
+                    <span class="connection-badge" id="codex-auth-badge">未检查</span>
+                  </div>
+                  <strong id="codex-auth-message">打开此页面后检查 Codex 登录状态。</strong>
+                  <span id="codex-auth-method"></span>
+                  <div class="codex-auth-buttons">
+                    <button class="save-button" id="codex-device-login" type="button">
+                      使用设备码连接
+                    </button>
+                    <button class="secondary-button" id="codex-auth-refresh" type="button">
+                      刷新状态
+                    </button>
+                    <button class="text-button" id="codex-auth-cancel" type="button" hidden>
+                      取消登录
+                    </button>
+                  </div>
+                </div>
+
+                <div class="codex-device-details" id="codex-device-details" hidden>
+                  <div class="device-auth-step">
+                    <span>1</span>
+                    <div>
+                      <strong>打开验证页面</strong>
+                      <a id="codex-verification-link" target="_blank" rel="noreferrer"></a>
+                    </div>
+                  </div>
+                  <div class="device-auth-step">
+                    <span>2</span>
+                    <div>
+                      <strong>输入设备码</strong>
+                      <div class="device-code-row">
+                        <code id="codex-user-code">等待生成…</code>
+                        <button class="text-button" id="copy-codex-code" type="button" hidden>
+                          复制
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <pre id="codex-auth-output" aria-live="polite"></pre>
+                </div>
+              </div>
+
+              <div class="codex-auth-body agent-auth-row">
+                <div class="codex-auth-summary">
+                  <div class="agent-auth-summary-title">
+                    <b>Claude Code</b>
+                    <span class="connection-badge" id="claude-auth-badge">未检查</span>
+                  </div>
+                  <strong id="claude-auth-message">打开此页面后检查 Claude Code 登录状态。</strong>
+                  <span id="claude-auth-method"></span>
+                  <div class="codex-auth-buttons">
+                    <button class="save-button" id="claude-login" type="button">
+                      使用浏览器连接
+                    </button>
+                    <button class="secondary-button" id="claude-auth-refresh" type="button">
+                      刷新状态
+                    </button>
+                    <button class="text-button" id="claude-auth-cancel" type="button" hidden>
+                      取消登录
+                    </button>
+                  </div>
+                </div>
+
+                <div class="codex-device-details" id="claude-auth-details" hidden>
+                  <div class="device-auth-step">
+                    <span>1</span>
+                    <div>
+                      <strong>打开授权页面</strong>
+                      <a id="claude-verification-link" target="_blank" rel="noreferrer"></a>
+                    </div>
+                  </div>
+                  <div class="device-auth-step claude-code-step">
+                    <span>2</span>
+                    <div>
+                      <strong>如 CLI 要求，粘贴授权结果</strong>
+                      <div class="agent-auth-input-row">
+                        <input
+                          id="claude-auth-input"
+                          type="password"
+                          placeholder="完整 callback 地址或授权码"
+                          autocomplete="off"
+                        />
+                        <button class="text-button" id="submit-claude-auth-input" type="button">
+                          提交
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <pre id="claude-auth-output" aria-live="polite"></pre>
+                </div>
+              </div>
+
+              <p class="codex-auth-note">
+                授权信息由 Codex / Claude Code CLI 保存在当前服务用户的凭据目录。本项目不自行交换
+                OAuth token，也不把设备码、callback 地址或账号凭据写入
+                <code>console-settings.json</code>。
+              </p>
+            </article>
+
+            <article class="model-config-panel">
+              <div class="model-config-toolbar">
+                <div>
+                  <span class="step-index">02</span>
+                  <h2>模型配置 <em id="model-config-count">0</em></h2>
+                </div>
+                <p>从上到下依次执行；额度或鉴权失败时自动尝试下一条。</p>
+              </div>
+
+              <form id="model-settings-form">
+                <div class="model-config-list" id="model-config-list"></div>
+                <div class="model-config-actions">
+                  <button class="secondary-button" id="add-model-config-bottom" type="button">
+                    ＋ 添加模型配置
+                  </button>
+                  <button class="save-button" type="submit">保存全部配置</button>
+                </div>
+              </form>
+            </article>
+
+            <aside class="model-help-panel">
+              <span class="step-index">03</span>
+              <h2>执行规则</h2>
+              <ol>
+                <li><strong>第一条</strong><span>作为任务默认使用的模型配置。</span></li>
+                <li><strong>顺序回退</strong><span>仅在额度耗尽或鉴权失败时继续下一条。</span></li>
+                <li>
+                  <strong>独立密钥</strong
+                  ><span>每条配置可使用自己的 API Key，也可留空复用环境变量或 CLI 登录。</span>
+                </li>
+              </ol>
+              <div class="security-note">
+                <strong>本地明文存储</strong>
+                <p>
+                  输入的 API Key 会写入 data/console-settings.json。该文件已被 Git
+                  忽略，请仍限制文件和控制台访问权限。
+                </p>
+              </div>
+            </aside>
+          </section>
+
+          <footer class="page-footer">
+            <span>模型配置保存在 <code>data/console-settings.json</code></span>
+            <button class="text-button" id="reset-model-configs" type="button">恢复默认顺序</button>
+          </footer>
+        </div>
+      </main>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

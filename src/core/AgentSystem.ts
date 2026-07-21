@@ -113,7 +113,7 @@ export class AgentSystem {
     // MCP 服务（在 SkillManager 之前实例化，以便注入）
     this.mcpManager = new MCPManager(this.config.mcp, this.database, this.logger);
 
-    // Web 开发控制台：模型配置、GitHub 工作区和 Codex/Claude Code 任务
+    // Web 开发控制台：模型配置、GitHub 工作区和 Coding Agent 任务
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
       githubToken: this.config.github.token,
       persistGitHubToken: (token) => this.configManager.saveGitHubToken(token),

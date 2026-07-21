@@ -84,7 +84,7 @@ chmod +x docker-deploy.sh
 
 ```bash
 # 至少配一个 Agent API Key
-OPENAI_API_KEY=sk-...
+CODEX_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 
 # GitHub Token（PR 创建必需）
@@ -127,6 +127,20 @@ AGENT_FEISHU_APP_SECRET=xxx
 
 任务状态和日志实时显示在列表中。任务保存在内存，重启容器后丢失；任务对应的 Git 工作区保留在 `/tmp/cpx/data/workspaces/<task-id>/`。
 
+### Codex / Claude Code 登录
+
+在 Web 控制台进入“模型设置”，点击“使用设备码连接”：
+
+1. 页面等待容器内的 Codex CLI 生成验证地址和一次性设备码。
+2. 用手机或电脑的可信浏览器打开验证地址，登录拥有 Codex 权限的 ChatGPT 账号并输入设备码。
+3. 返回控制台等待状态变为“已连接”。
+
+Compose 将容器的 `/root/.codex` 挂载到宿主机 `./data/codex`，因此重新创建容器后仍可复用 Codex CLI 登录。该目录包含敏感凭据，应限制宿主机读取权限且不得备份到不可信位置。设备码流程无需让浏览器访问容器内的 localhost callback。
+
+Claude Code 可在同一区域启动官方浏览器登录；需要手工返回授权结果时，将完整 callback 地址或授权码粘贴回页面。Compose 同时把 `/root/.claude` 挂载到 `./data/claude`，以保留 Claude Code CLI 登录。两个目录都必须按密钥材料保护。
+
+非 Docker 部署同样支持 Linux、macOS 和 Windows，但服务进程必须与登录 CLI 使用同一系统用户。macOS 的 Claude Code OAuth 凭据可能位于系统 Keychain；Windows 原生 Claude Code 需要 Git for Windows，也可以把 cpx 与两个 CLI 全部安装在 WSL 中。不要跨 Windows/WSL 或跨用户复用 HOME 路径。
+
 ### 钉钉机器人
 
 1. 在钉钉群创建自定义机器人，记录 Webhook URL 和加签 Secret
@@ -155,6 +169,8 @@ AGENT_FEISHU_APP_SECRET=xxx
    ```yaml
    volumes:
      - ./data:/app/data
+     - ./data/codex:/root/.codex
+     - ./data/claude:/root/.claude
      - ./config:/app/config
      - ./logs:/app/logs
      - /path/to/.ssh:/root/.ssh:ro
@@ -199,7 +215,8 @@ docker compose logs --tail=100  # 最近 100 行
 | Agent 任务失败：`git clone` 报权限错 | 检查 `GH_TOKEN` 是否有效且有 `repo` 权限；私有仓库必须用 HTTPS + Token 或 SSH Key |
 | Agent 任务失败：`gh pr create` 报未登录 | `gh` 使用 `GH_TOKEN` 环境变量鉴权，确认 `.docker.env` 中已设置 |
 | 钉钉/飞书机器人无响应 | NAS 必须可被钉钉/飞书服务器回调到 3000 端口；内网部署需通过反向代理暴露 |
-| `codex` 或 `claude` 报 401 | 对应的 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` 缺失或无效 |
+| `codex` 或 `claude` 报 401 | 对应的 `CODEX_API_KEY` / `ANTHROPIC_API_KEY` 缺失或无效，或官方 CLI 登录已失效 |
+| Codex 页面显示未连接 | 在“模型设置”重新执行设备码登录；检查 `./data/codex` 是否可由容器 root 用户写入 |
 | `better-sqlite3` 加载失败 | 通常是架构不匹配，确认镜像架构与 NAS 架构一致（`docker inspect cpx --format='{{.Architecture}}'`） |
 
 ## 安全注意事项
@@ -211,5 +228,6 @@ docker compose logs --tail=100  # 最近 100 行
 - 仅在极空间内网使用，路由器关闭 3000 端口的端口转发
 - 若需外网访问，通过极空间自带反向代理或 Nginx 加 Basic Auth / IP 白名单
 - `.docker.env` 文件权限保持 `600`，避免其他用户读取密钥
+- `./data/codex` 包含 Codex 登录凭据，只允许部署管理员读取，不要提交到版本控制或公开备份
 - `GH_TOKEN` 使用最小权限的 fine-grained PAT，仅授权必要仓库的必要权限
 - 部署后定期更新 `@openai/codex` 和 `@anthropic-ai/claude-code`（重新构建镜像即可）

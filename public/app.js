@@ -8,12 +8,13 @@ const state = {
   githubUser: null,
   repositories: [],
   githubLoaded: false,
+  modelConfigs: [],
+  agentAuth: { codex: null, claude: null },
+  agentAuthTimers: { codex: null, claude: null },
 };
 
 const elements = {
   taskForm: document.querySelector('#task-form'),
-  settingsForm: document.querySelector('#settings-form'),
-  provider: document.querySelector('#provider'),
   repository: document.querySelector('#repository'),
   baseBranch: document.querySelector('#base-branch'),
   prompt: document.querySelector('#prompt'),
@@ -24,19 +25,9 @@ const elements = {
   taskList: document.querySelector('#task-list'),
   taskCount: document.querySelector('#task-count'),
   taskDetail: document.querySelector('#task-detail'),
-  settingsModal: document.querySelector('#settings-modal'),
-  defaultProvider: document.querySelector('#default-provider'),
-  codexModel: document.querySelector('#codex-model'),
-  claudeModel: document.querySelector('#claude-model'),
-  codebuddyModel: document.querySelector('#codebuddy-model'),
-  openaiKey: document.querySelector('#openai-key'),
-  anthropicKey: document.querySelector('#anthropic-key'),
-  codebuddyKey: document.querySelector('#codebuddy-key'),
-  openaiKeyStatus: document.querySelector('#openai-key-status'),
-  anthropicKeyStatus: document.querySelector('#anthropic-key-status'),
-  codebuddyKeyStatus: document.querySelector('#codebuddy-key-status'),
   tasksView: document.querySelector('#tasks-view'),
   githubView: document.querySelector('#github-view'),
+  modelsView: document.querySelector('#models-view'),
   githubForm: document.querySelector('#github-form'),
   githubToken: document.querySelector('#github-token'),
   githubTokenHint: document.querySelector('#github-token-hint'),
@@ -47,15 +38,43 @@ const elements = {
   repositoryCount: document.querySelector('#repository-count'),
   repositorySearch: document.querySelector('#repository-search'),
   repositoryList: document.querySelector('#repository-list'),
-  fallbackPriority1: document.querySelector('#fallback-priority-1'),
-  fallbackPriority2: document.querySelector('#fallback-priority-2'),
-  fallbackPriority3: document.querySelector('#fallback-priority-3'),
+  modelSettingsForm: document.querySelector('#model-settings-form'),
+  modelConfigList: document.querySelector('#model-config-list'),
+  modelConfigCount: document.querySelector('#model-config-count'),
+  addModelConfig: document.querySelector('#add-model-config'),
+  addModelConfigBottom: document.querySelector('#add-model-config-bottom'),
+  resetModelConfigs: document.querySelector('#reset-model-configs'),
+  executionOrderPreview: document.querySelector('#execution-order-preview'),
+  agentAuth: {
+    codex: {
+      badge: document.querySelector('#codex-auth-badge'),
+      message: document.querySelector('#codex-auth-message'),
+      method: document.querySelector('#codex-auth-method'),
+      login: document.querySelector('#codex-device-login'),
+      refresh: document.querySelector('#codex-auth-refresh'),
+      cancel: document.querySelector('#codex-auth-cancel'),
+      details: document.querySelector('#codex-device-details'),
+      verificationLink: document.querySelector('#codex-verification-link'),
+      userCode: document.querySelector('#codex-user-code'),
+      copyCode: document.querySelector('#copy-codex-code'),
+      output: document.querySelector('#codex-auth-output'),
+    },
+    claude: {
+      badge: document.querySelector('#claude-auth-badge'),
+      message: document.querySelector('#claude-auth-message'),
+      method: document.querySelector('#claude-auth-method'),
+      login: document.querySelector('#claude-login'),
+      refresh: document.querySelector('#claude-auth-refresh'),
+      cancel: document.querySelector('#claude-auth-cancel'),
+      details: document.querySelector('#claude-auth-details'),
+      verificationLink: document.querySelector('#claude-verification-link'),
+      input: document.querySelector('#claude-auth-input'),
+      submitInput: document.querySelector('#submit-claude-auth-input'),
+      output: document.querySelector('#claude-auth-output'),
+    },
+  },
   toast: document.querySelector('#toast'),
 };
-
-document.querySelectorAll('[data-provider]').forEach((button) => {
-  button.addEventListener('click', () => selectProvider(button.dataset.provider));
-});
 
 document.querySelectorAll('[data-prompt]').forEach((button) => {
   button.addEventListener('click', () => {
@@ -69,28 +88,32 @@ document.querySelectorAll('[data-view]').forEach((button) => {
   button.addEventListener('click', () => switchView(button.dataset.view));
 });
 
-document.querySelectorAll('#open-settings, #top-settings').forEach((button) => {
-  button.addEventListener('click', openSettings);
-});
-document.querySelector('#close-settings').addEventListener('click', closeSettings);
-elements.settingsModal.addEventListener('click', (event) => {
-  if (event.target === elements.settingsModal) closeSettings();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !elements.settingsModal.hidden) closeSettings();
-});
-
 elements.prompt.addEventListener('input', updatePromptCount);
 elements.taskForm.addEventListener('submit', createTask);
-elements.settingsForm.addEventListener('submit', saveSettings);
+elements.modelSettingsForm.addEventListener('submit', saveModelSettings);
+elements.addModelConfig.addEventListener('click', addModelConfiguration);
+elements.addModelConfigBottom.addEventListener('click', addModelConfiguration);
+elements.resetModelConfigs.addEventListener('click', resetModelConfigurations);
 elements.githubForm.addEventListener('submit', connectGitHub);
 elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
 elements.repositorySearch.addEventListener('input', renderRepositories);
+for (const provider of ['codex', 'claude']) {
+  const controls = elements.agentAuth[provider];
+  controls.login.addEventListener('click', () => startAgentLogin(provider));
+  controls.refresh.addEventListener('click', () => loadAgentAuthStatus(provider, true));
+  controls.cancel.addEventListener('click', () => cancelAgentLogin(provider));
+}
+elements.agentAuth.codex.copyCode.addEventListener('click', copyCodexDeviceCode);
+elements.agentAuth.claude.submitInput.addEventListener('click', submitClaudeAuthInput);
 
 async function init() {
   try {
     await loadSettings();
     await refreshTasks();
+    const initialView = window.location.hash.slice(1);
+    if (['github', 'models'].includes(initialView)) {
+      await switchView(initialView);
+    }
     window.setInterval(refreshTasks, 1200);
   } catch (error) {
     showToast(error.message, true);
@@ -99,15 +122,167 @@ async function init() {
 
 async function loadSettings() {
   state.settings = await api('/api/console/settings');
-  elements.defaultProvider.value = state.settings.defaultProvider;
-  elements.codexModel.value = state.settings.codexModel || '';
-  elements.claudeModel.value = state.settings.claudeModel || '';
-  elements.codebuddyModel.value = state.settings.codebuddyModel || '';
-  elements.openaiKeyStatus.textContent = state.settings.hasOpenaiApiKey ? '已配置' : '未配置';
-  elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey ? '已配置' : '未配置';
-  elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey ? '已配置' : '未配置';
-  loadFallbackOrder(state.settings.fallbackOrder || ['codex', 'claude', 'codebuddy']);
-  selectProvider(state.settings.defaultProvider);
+  state.modelConfigs = state.settings.modelConfigs.map((configuration) => ({ ...configuration }));
+  renderModelConfigurations();
+  renderExecutionOrderPreview();
+}
+
+async function loadAgentAuthStatus(provider, showSuccess = false) {
+  setAgentAuthBusy(provider, true);
+  try {
+    state.agentAuth[provider] = await api(`/api/console/agent-auth?provider=${provider}`);
+    renderAgentAuth(provider);
+    scheduleAgentAuthPoll(provider);
+    if (showSuccess && state.agentAuth[provider].authenticated) {
+      showToast(`${providerLabel(provider)} 登录状态验证成功。`);
+    }
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setAgentAuthBusy(provider, false);
+  }
+}
+
+async function startAgentLogin(provider) {
+  setAgentAuthBusy(provider, true);
+  try {
+    state.agentAuth[provider] = await api('/api/console/agent-auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
+    renderAgentAuth(provider);
+    scheduleAgentAuthPoll(provider);
+    showToast(`${providerLabel(provider)} 登录已启动，请按页面提示完成授权。`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setAgentAuthBusy(provider, false);
+  }
+}
+
+async function cancelAgentLogin(provider) {
+  setAgentAuthBusy(provider, true);
+  try {
+    await api('/api/console/agent-auth/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ provider }),
+    });
+    window.clearTimeout(state.agentAuthTimers[provider]);
+    state.agentAuthTimers[provider] = null;
+    await loadAgentAuthStatus(provider);
+    showToast(`已取消 ${providerLabel(provider)} 登录。`);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setAgentAuthBusy(provider, false);
+  }
+}
+
+function renderAgentAuth(provider) {
+  const auth = state.agentAuth[provider];
+  if (!auth) return;
+  const controls = elements.agentAuth[provider];
+  const waiting = auth.state === 'waiting' || auth.state === 'checking';
+  const badge = auth.authenticated
+    ? ['已连接', 'connected']
+    : auth.state === 'failed'
+      ? ['连接失败', 'error']
+      : waiting
+        ? ['等待授权', 'pending']
+        : ['未连接', ''];
+  controls.badge.textContent = badge[0];
+  controls.badge.className = `connection-badge ${badge[1]}`.trim();
+  controls.message.textContent = auth.message || `${providerLabel(provider)} 尚未登录。`;
+  controls.method.textContent = auth.authenticated
+    ? `登录方式：${auth.authMethod || '官方 CLI'}`
+    : auth.cliAvailable === false
+      ? `需要先在服务器安装 ${providerLabel(provider)}`
+      : '';
+  controls.login.textContent = auth.authenticated
+    ? '重新授权'
+    : provider === 'codex'
+      ? '使用设备码连接'
+      : '使用浏览器连接';
+  controls.login.disabled = waiting || auth.cliAvailable === false;
+  controls.cancel.hidden = auth.state !== 'waiting';
+
+  const showDetails = auth.state === 'waiting' && Boolean(auth.output || auth.verificationUrl);
+  controls.details.hidden = !showDetails;
+  const safeUrl = safeExternalUrl(auth.verificationUrl);
+  controls.verificationLink.textContent = safeUrl || `等待 ${providerLabel(provider)} 返回授权地址…`;
+  if (safeUrl) {
+    controls.verificationLink.href = safeUrl;
+  } else {
+    controls.verificationLink.removeAttribute('href');
+  }
+  if (provider === 'codex') {
+    controls.userCode.textContent = auth.userCode || '等待生成…';
+    controls.copyCode.hidden = !auth.userCode;
+  }
+  controls.output.textContent = auth.output || '';
+}
+
+function scheduleAgentAuthPoll(provider) {
+  window.clearTimeout(state.agentAuthTimers[provider]);
+  state.agentAuthTimers[provider] = null;
+  const auth = state.agentAuth[provider];
+  if (!auth || !['waiting', 'checking'].includes(auth.state)) return;
+  state.agentAuthTimers[provider] = window.setTimeout(async () => {
+    await loadAgentAuthStatus(provider);
+  }, 1200);
+}
+
+async function copyCodexDeviceCode() {
+  const code = state.agentAuth.codex?.userCode;
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code);
+    showToast('设备码已复制。');
+  } catch {
+    showToast(`设备码：${code}`);
+  }
+}
+
+async function submitClaudeAuthInput() {
+  const input = elements.agentAuth.claude.input.value.trim();
+  if (!input) {
+    showToast('请粘贴完整 callback 地址或授权码。', true);
+    return;
+  }
+  setAgentAuthBusy('claude', true);
+  try {
+    state.agentAuth.claude = await api('/api/console/agent-auth/input', {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'claude', input }),
+    });
+    elements.agentAuth.claude.input.value = '';
+    renderAgentAuth('claude');
+    scheduleAgentAuthPoll('claude');
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setAgentAuthBusy('claude', false);
+  }
+}
+
+function setAgentAuthBusy(provider, busy) {
+  const controls = elements.agentAuth[provider];
+  controls.refresh.disabled = busy;
+  const auth = state.agentAuth[provider];
+  if (!auth || !['waiting', 'checking'].includes(auth.state)) {
+    controls.login.disabled = busy || auth?.cliAvailable === false;
+  }
+  if (controls.submitInput) controls.submitInput.disabled = busy;
+}
+
+function safeExternalUrl(value) {
+  if (!value) return '';
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' ? url.toString() : '';
+  } catch {
+    return '';
+  }
 }
 
 async function loadGitHubStatus() {
@@ -267,48 +442,154 @@ function setGitHubBusy(busy, label) {
   elements.githubConnectButton.textContent = label;
 }
 
-function loadFallbackOrder(order) {
-  const selects = [
-    elements.fallbackPriority1,
-    elements.fallbackPriority2,
-    elements.fallbackPriority3,
-  ];
-  const padded = [...order, 'none', 'none'].slice(0, 3);
-  selects.forEach((select, index) => {
-    select.value = padded[index];
-  });
-  refreshFallbackOptions();
-}
+function renderModelConfigurations() {
+  elements.modelConfigCount.textContent = String(state.modelConfigs.length);
+  elements.modelConfigList.innerHTML = state.modelConfigs
+    .map((configuration, index) => renderModelConfiguration(configuration, index))
+    .join('');
 
-function collectFallbackOrder() {
-  return [
-    elements.fallbackPriority1.value,
-    elements.fallbackPriority2.value,
-    elements.fallbackPriority3.value,
-  ].filter((value) => value && value !== 'none');
-}
-
-/** 在三个 fallback 优先级 select 之间禁用彼此已选的 provider,防止重复。 */
-function refreshFallbackOptions() {
-  const selects = [
-    elements.fallbackPriority1,
-    elements.fallbackPriority2,
-    elements.fallbackPriority3,
-  ];
-  const chosen = selects.map((select) => select.value);
-  selects.forEach((select, index) => {
-    Array.from(select.options).forEach((option) => {
-      const taken = chosen.findIndex((value, i) => i !== index && value === option.value);
-      option.disabled = option.value !== 'none' && taken !== -1;
+  elements.modelConfigList.querySelectorAll('[data-config-id]').forEach((row) => {
+    const configuration = state.modelConfigs.find((item) => item.id === row.dataset.configId);
+    if (!configuration) return;
+    row.querySelector('[data-field="provider"]').addEventListener('change', (event) => {
+      configuration.provider = event.target.value;
+    });
+    row.querySelector('[data-field="model"]').addEventListener('input', (event) => {
+      configuration.model = event.target.value;
+    });
+    row.querySelector('[data-field="apiKey"]').addEventListener('input', (event) => {
+      configuration.apiKey = event.target.value;
+      configuration.clearApiKey = false;
+    });
+    row.querySelectorAll('[data-config-action]').forEach((button) => {
+      button.addEventListener('click', () =>
+        handleModelConfigurationAction(button.dataset.configAction, configuration.id),
+      );
     });
   });
 }
 
-[elements.fallbackPriority1, elements.fallbackPriority2, elements.fallbackPriority3].forEach(
-  (select) => {
-    select.addEventListener('change', refreshFallbackOptions);
-  },
-);
+function renderModelConfiguration(configuration, index) {
+  const providerOptions = [
+    ['codex', 'Codex'],
+    ['claude', 'Claude Code'],
+    ['codebuddy', 'CodeBuddy'],
+  ]
+    .map(
+      ([value, label]) =>
+        `<option value="${value}"${configuration.provider === value ? ' selected' : ''}>${label}</option>`,
+    )
+    .join('');
+  const keyStatus = configuration.clearApiKey
+    ? '保存后清除密钥'
+    : configuration.apiKeySource === 'file'
+      ? '已保存到文件；留空保持不变'
+      : configuration.apiKeySource === 'environment'
+        ? '当前使用环境变量；输入后改为文件配置'
+        : '可留空使用 CLI 登录或环境变量';
+  return `
+    <article class="model-config-item" data-config-id="${escapeHtml(configuration.id)}">
+      <div class="model-config-rank"><strong>${index + 1}</strong><span>PRIORITY</span></div>
+      <div class="model-config-fields">
+        <label class="field">
+          <span>Agent</span>
+          <select data-field="provider">${providerOptions}</select>
+        </label>
+        <label class="field model-name-field">
+          <span>模型</span>
+          <input data-field="model" type="text" value="${escapeHtml(configuration.model || '')}" placeholder="留空使用 Agent 默认模型" autocomplete="off" />
+        </label>
+        <label class="field model-key-field">
+          <span>API Key</span>
+          <input data-field="apiKey" type="password" value="${escapeHtml(configuration.apiKey || '')}" placeholder="输入新密钥" autocomplete="new-password" />
+          <small>${escapeHtml(keyStatus)}</small>
+        </label>
+      </div>
+      <div class="model-config-controls">
+        <button type="button" data-config-action="up" aria-label="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" data-config-action="down" aria-label="下移" ${index === state.modelConfigs.length - 1 ? 'disabled' : ''}>↓</button>
+        ${configuration.hasApiKey && !configuration.clearApiKey ? '<button type="button" data-config-action="clear-key">清除密钥</button>' : ''}
+        <button class="danger" type="button" data-config-action="delete">删除</button>
+      </div>
+    </article>`;
+}
+
+function handleModelConfigurationAction(action, id) {
+  const index = state.modelConfigs.findIndex((configuration) => configuration.id === id);
+  if (index === -1) return;
+  if (action === 'up' && index > 0) {
+    [state.modelConfigs[index - 1], state.modelConfigs[index]] = [
+      state.modelConfigs[index],
+      state.modelConfigs[index - 1],
+    ];
+  } else if (action === 'down' && index < state.modelConfigs.length - 1) {
+    [state.modelConfigs[index + 1], state.modelConfigs[index]] = [
+      state.modelConfigs[index],
+      state.modelConfigs[index + 1],
+    ];
+  } else if (action === 'clear-key') {
+    state.modelConfigs[index].apiKey = '';
+    state.modelConfigs[index].clearApiKey = true;
+  } else if (action === 'delete') {
+    if (state.modelConfigs.length === 1) {
+      showToast('至少需要保留一条模型配置。', true);
+      return;
+    }
+    state.modelConfigs.splice(index, 1);
+  }
+  renderModelConfigurations();
+}
+
+function addModelConfiguration() {
+  if (state.modelConfigs.length >= 20) {
+    showToast('模型配置不能超过 20 条。', true);
+    return;
+  }
+  state.modelConfigs.push({
+    id: createClientId(),
+    provider: 'codex',
+    model: '',
+    hasApiKey: false,
+    apiKeySource: 'none',
+  });
+  renderModelConfigurations();
+  elements.modelConfigList.lastElementChild?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  });
+}
+
+function resetModelConfigurations() {
+  state.modelConfigs = [
+    { id: createClientId(), provider: 'codex', model: '', hasApiKey: false, apiKeySource: 'none' },
+    {
+      id: createClientId(),
+      provider: 'claude',
+      model: 'sonnet',
+      hasApiKey: false,
+      apiKeySource: 'none',
+    },
+    {
+      id: createClientId(),
+      provider: 'codebuddy',
+      model: '',
+      hasApiKey: false,
+      apiKeySource: 'none',
+    },
+  ];
+  renderModelConfigurations();
+  showToast('已恢复默认顺序，点击“保存全部配置”后生效。');
+}
+
+function renderExecutionOrderPreview() {
+  const configurations = state.settings?.modelConfigs || [];
+  elements.executionOrderPreview.innerHTML = configurations
+    .map(
+      (configuration, index) =>
+        `<span><b>${index + 1}</b>${escapeHtml(providerLabel(configuration.provider))}${configuration.model ? ` / ${escapeHtml(configuration.model)}` : ''}</span>`,
+    )
+    .join('<i>→</i>');
+}
 
 async function refreshTasks() {
   if (state.polling) return;
@@ -333,17 +614,10 @@ async function createTask(event) {
   elements.launchButton.disabled = true;
   elements.launchButton.querySelector('span').textContent = '正在启动…';
   try {
-    const primary = elements.provider.value;
-    const autoFallback = elements.autoFallback.checked;
-    let providers = [primary];
-    if (autoFallback) {
-      const order = collectFallbackOrder().filter((p) => p !== primary);
-      providers = [primary, ...order];
-    }
     const task = await api('/api/console/tasks', {
       method: 'POST',
       body: JSON.stringify({
-        providers,
+        useFallback: elements.autoFallback.checked,
         repository: elements.repository.value,
         baseBranch: elements.baseBranch.value || undefined,
         prompt: elements.prompt.value,
@@ -363,38 +637,27 @@ async function createTask(event) {
   }
 }
 
-async function saveSettings(event) {
+async function saveModelSettings(event) {
   event.preventDefault();
-  const submit = elements.settingsForm.querySelector('button[type="submit"]');
+  const submit = elements.modelSettingsForm.querySelector('button[type="submit"]');
   submit.disabled = true;
   try {
     state.settings = await api('/api/console/settings', {
       method: 'POST',
       body: JSON.stringify({
-        defaultProvider: elements.defaultProvider.value,
-        codexModel: elements.codexModel.value,
-        claudeModel: elements.claudeModel.value,
-        codebuddyModel: elements.codebuddyModel.value,
-        fallbackOrder: collectFallbackOrder(),
-        openaiApiKey: elements.openaiKey.value || undefined,
-        anthropicApiKey: elements.anthropicKey.value || undefined,
-        codebuddyApiKey: elements.codebuddyKey.value || undefined,
+        modelConfigs: state.modelConfigs.map((configuration) => ({
+          id: configuration.id,
+          provider: configuration.provider,
+          model: configuration.model,
+          apiKey: configuration.apiKey || undefined,
+          clearApiKey: Boolean(configuration.clearApiKey),
+        })),
       }),
     });
-    elements.openaiKey.value = '';
-    elements.anthropicKey.value = '';
-    elements.codebuddyKey.value = '';
-    elements.openaiKeyStatus.textContent = state.settings.hasOpenaiApiKey ? '已配置' : '未配置';
-    elements.anthropicKeyStatus.textContent = state.settings.hasAnthropicApiKey
-      ? '已配置'
-      : '未配置';
-    elements.codebuddyKeyStatus.textContent = state.settings.hasCodebuddyApiKey
-      ? '已配置'
-      : '未配置';
-    loadFallbackOrder(state.settings.fallbackOrder || ['codex', 'claude', 'codebuddy']);
-    selectProvider(state.settings.defaultProvider);
-    closeSettings();
-    showToast('模型设置已保存。');
+    state.modelConfigs = state.settings.modelConfigs.map((configuration) => ({ ...configuration }));
+    renderModelConfigurations();
+    renderExecutionOrderPreview();
+    showToast('模型配置和执行顺序已保存。');
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -476,20 +739,13 @@ function renderTaskDetail() {
   });
 }
 
-function selectProvider(provider) {
-  const valid = ['codex', 'claude', 'codebuddy'];
-  const normalized = valid.includes(provider) ? provider : 'codex';
-  elements.provider.value = normalized;
-  document.querySelectorAll('[data-provider]').forEach((button) => {
-    button.classList.toggle('active', button.dataset.provider === normalized);
-  });
-}
-
 async function switchView(view) {
-  const normalized = view === 'github' ? 'github' : 'tasks';
+  const normalized = ['tasks', 'github', 'models'].includes(view) ? view : 'tasks';
   state.activeView = normalized;
+  window.history.replaceState(null, '', normalized === 'tasks' ? '#' : `#${normalized}`);
   elements.tasksView.hidden = normalized !== 'tasks';
   elements.githubView.hidden = normalized !== 'github';
+  elements.modelsView.hidden = normalized !== 'models';
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.classList.toggle('active', button.dataset.view === normalized);
   });
@@ -500,16 +756,10 @@ async function switchView(view) {
       showToast(error.message, true);
     }
   }
-}
-
-function openSettings() {
-  elements.settingsModal.hidden = false;
-  document.body.style.overflow = 'hidden';
-}
-
-function closeSettings() {
-  elements.settingsModal.hidden = true;
-  document.body.style.overflow = '';
+  if (normalized === 'models') {
+    const unloaded = ['codex', 'claude'].filter((provider) => !state.agentAuth[provider]);
+    await Promise.all(unloaded.map((provider) => loadAgentAuthStatus(provider)));
+  }
 }
 
 function updatePromptCount() {
@@ -558,7 +808,7 @@ function renderAttempts(attempts) {
         { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[a.provider] || a.provider;
       return `
         <div class="attempt ${a.status}">
-          <strong>${escapeHtml(label)}</strong>
+          <strong>${escapeHtml(label)}${a.model ? ` / ${escapeHtml(a.model)}` : ''}</strong>
           <span class="attempt-status">${escapeHtml(a.status)}</span>
           ${a.errorKind ? `<em>${escapeHtml(a.errorKind)}</em>` : ''}
           ${a.error ? `<small>${escapeHtml(a.error)}</small>` : ''}
@@ -585,6 +835,15 @@ function formatDate(timestamp) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function providerLabel(provider) {
+  return { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[provider] || provider;
+}
+
+function createClientId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `model-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function escapeHtml(value) {

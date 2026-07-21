@@ -45,7 +45,7 @@ if [ ! -f "${WORKDIR}/.docker.env" ]; then
   chmod 600 "${WORKDIR}/.docker.env"
   echo ""
   echo "==> 已生成 ${WORKDIR}/.docker.env"
-  echo "    请编辑此文件，填入 OPENAI_API_KEY / ANTHROPIC_API_KEY / GH_TOKEN 等"
+  echo "    请编辑此文件，填入 CODEX_API_KEY / ANTHROPIC_API_KEY / GH_TOKEN 等（Agent 也可稍后在模型设置中登录）"
   echo "    然后重新运行本脚本： ${0} ${TAR} ${WORKDIR}"
   exit 0
 fi

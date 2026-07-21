@@ -84,6 +84,8 @@ cpx-*.tar.gz
 
 # Runtime data (SQLite database and WAL files)
 /data/console-settings.json
+/data/codex/
+/data/claude/
 data/*.db
 data/*.db-shm
 data/*.db-wal

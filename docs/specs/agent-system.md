@@ -8,20 +8,22 @@
 
 ## 输入渠道
 
-| 渠道            | 行为                                                            |
-| --------------- | --------------------------------------------------------------- |
-| 钉钉            | 接收文本 Webhook，解析发送者，校验已配置的签名并回传结果        |
-| 飞书            | 完成 URL challenge，接收文本事件，校验已配置的签名并回传结果    |
-| HTTP `/command` | 接收 `text`、`userId`、`userName`、`source`，用于本地调试       |
-| Web 控制台 `/`  | 创建和取消本机 Codex/Claude Code 开发任务，查看进程内状态与日志 |
-| CLI             | 提供 `version`、`init`、`start` 和 `stop` 生命周期命令          |
+| 渠道            | 行为                                                         |
+| --------------- | ------------------------------------------------------------ |
+| 钉钉            | 接收文本 Webhook，解析发送者，校验已配置的签名并回传结果     |
+| 飞书            | 完成 URL challenge，接收文本事件，校验已配置的签名并回传结果 |
+| HTTP `/command` | 接收 `text`、`userId`、`userName`、`source`，用于本地调试    |
+| Web 控制台 `/`  | 管理有序模型配置，创建和取消本机 Coding Agent 任务并查看日志 |
+| CLI             | 提供 `version`、`init`、`start` 和 `stop` 生命周期命令       |
 
 非文本聊天消息不在当前范围内。
 
 ## Web 开发控制台
 
-- 用户可设置默认 Agent 以及 Codex、Claude 模型；模型设置写入数据库相邻的 `console-settings.json`。
-- 用户输入的 OpenAI 或 Anthropic API Key 只保存在当前进程内，不写入设置文件。未输入时复用服务进程环境变量或本机 CLI 登录状态。
+- 控制台提供独立模型管理页。用户可逐条新增、删除、调整 Codex、Claude Code 或 CodeBuddy 配置；每条配置包含模型名和可选 API Key，同一 Agent 可配置多次。
+- 模型配置按页面顺序写入数据库相邻的 `console-settings.json`。第一条是默认配置；启用自动切换时，仅在额度耗尽或鉴权失败后依次尝试后续配置，每次尝试必须使用该条自己的模型和密钥。
+- 输入的 Agent API Key 以明文写入 `console-settings.json`，设置 API 不得返回密钥原文。未输入时复用服务进程环境变量或本机 CLI 登录状态；旧版固定设置读取后自动迁移。
+- 模型管理页允许为当前服务用户启动 Codex 官方设备码登录和 Claude Code 官方浏览器登录，展示对应验证地址，并在授权结束后复核 CLI 登录状态。Claude Code 登录需要手工输入时可接收完整 callback 地址或授权码并写入原等待进程。设备码、callback 地址和账号凭据不得写入项目配置文件；服务停止时必须清理等待中的登录进程。
 - 控制台提供独立 GitHub 页签。用户可直接验证 `config.yaml` 或环境变量中的 GitHub Token，也可输入新 Token；新 Token 仅在验证成功后写入 `config/config.yaml`，验证失败不得修改配置。系统分页读取该 Token 可访问的个人、协作及组织仓库。
 - GitHub 仓库列表支持筛选，并可将仓库名称和默认分支带入新任务表单。fine-grained Token 的仓库范围以 GitHub 授权范围为准。
 - 仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 仓库地址。每个任务使用独立浅克隆和 `cpx/task-<id>` 分支。
@@ -86,6 +88,6 @@
 - GitHub/MCP：未配置、远端错误、超时或断连。
 - 生命周期：重复启动、优雅停止和配置热更新。
 - Agent 任务：输入校验、CLI 生命周期、取消、可选 PR 发布和服务停止清理。
-- Web 控制台：静态资源、设置持久化、运行时 Agent 密钥不落盘、GitHub Token 验证后持久化与仓库分页，以及任务 API 错误路径。
+- Web 控制台：静态资源、有序模型配置与密钥持久化、旧配置迁移、API 密钥脱敏、Codex/Claude Code 官方 CLI 登录的状态/输入/取消/清理、GitHub Token 验证后持久化与仓库分页，以及任务 API 错误路径。
 
 具体执行命令见 [开发指南](../DEVELOPMENT.md#改动验证)。

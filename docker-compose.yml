@@ -11,6 +11,8 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - ./data:/app/data
+      - ./data/codex:/root/.codex
+      - ./data/claude:/root/.claude
       - ./config:/app/config
       - ./logs:/app/logs
     # 极空间 Docker 默认以 root 运行；git/gh 在 root 下无需额外权限配置

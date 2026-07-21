@@ -11,7 +11,7 @@
 - Skill 安装底层能力、动态加载、执行超时和能力注入。
 - MCP stdio、WebSocket、HTTP 传输和 JSON-RPC 调用。
 - 分支保护、操作黑名单、危险操作确认和 SQLite 审计。
-- Web 开发控制台、本机 Codex/Claude Code 任务、隔离 Git 工作区、状态日志和可选 PR 发布。
+- Web 开发控制台、本机 Codex/Claude Code/CodeBuddy 任务、有序模型回退、隔离 Git 工作区、状态日志和可选 PR 发布。
 - 单元测试与跨组件命令流测试。
 
 ## 下一步候选

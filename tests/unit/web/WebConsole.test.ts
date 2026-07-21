@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RequestHandler } from '../../../src/core/HttpServer';
@@ -6,6 +6,7 @@ import { WebConsole } from '../../../src/web/WebConsole';
 import { Logger } from '../../../src/utils/Logger';
 import { GitHubError } from '../../../src/utils/errors';
 import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
+import type { AgentAuthService } from '../../../src/web/AgentAuthManager';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-web-console');
 
@@ -51,24 +52,33 @@ describe('WebConsole', () => {
       'X-Content-Type-Options': 'nosniff',
     });
     expect((response.body as Buffer).toString('utf8')).toContain('id="github-tab"');
+    expect((response.body as Buffer).toString('utf8')).toContain('id="models-tab"');
   });
 
-  it('应读取、校验并持久化非敏感设置', async () => {
+  it('应按顺序持久化模型配置和独立 API Key，且响应不返回密钥', async () => {
     const getSettings = server.handler('GET', '/api/console/settings');
     const updateSettings = server.handler('POST', '/api/console/settings');
     expect((await getSettings(Buffer.alloc(0), {}, {})).body).toMatchObject({
-      defaultProvider: 'codex',
-      claudeModel: 'sonnet',
-      hasOpenaiApiKey: false,
+      version: 2,
+      modelConfigs: [
+        { provider: 'codex', model: '' },
+        { provider: 'claude', model: 'sonnet' },
+        { provider: 'codebuddy', model: '' },
+      ],
     });
 
     const response = await updateSettings(
       Buffer.from(
         JSON.stringify({
-          defaultProvider: 'claude',
-          codexModel: 'gpt-5.1-codex',
-          claudeModel: 'opus',
-          openaiApiKey: 'runtime-only-secret',
+          modelConfigs: [
+            {
+              id: 'claude-opus',
+              provider: 'claude',
+              model: 'opus',
+              apiKey: 'secret-claude',
+            },
+            { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex' },
+          ],
         }),
       ),
       {},
@@ -76,15 +86,27 @@ describe('WebConsole', () => {
     );
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      defaultProvider: 'claude',
-      codexModel: 'gpt-5.1-codex',
-      hasOpenaiApiKey: true,
+      version: 2,
+      modelConfigs: [
+        { id: 'claude-opus', provider: 'claude', model: 'opus', hasApiKey: true },
+        { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex', hasApiKey: false },
+      ],
     });
     expect(response.headers).toEqual({ 'Cache-Control': 'no-store' });
+    expect(JSON.stringify(response.body)).not.toContain('secret-claude');
 
     const settingsPath = join(TMP_DIR, 'console-settings.json');
     expect(existsSync(settingsPath)).toBe(true);
-    expect(readFileSync(settingsPath, 'utf8')).not.toContain('runtime-only-secret');
+    const stored = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
+      version: number;
+      modelConfigs: Array<{ id: string; apiKey?: string }>;
+    };
+    expect(stored.version).toBe(2);
+    expect(stored.modelConfigs.map((configuration) => configuration.id)).toEqual([
+      'claude-opus',
+      'codex-main',
+    ]);
+    expect(stored.modelConfigs[0].apiKey).toBe('secret-claude');
   });
 
   it('应对错误设置和错误任务请求返回 400', async () => {
@@ -118,44 +140,102 @@ describe('WebConsole', () => {
     expect(cancel).toMatchObject({ status: 409 });
   });
 
-  it('应拒绝未知 defaultProvider 与空 fallbackOrder', async () => {
-    const unknownProvider = await server.handler('POST', '/api/console/settings')(
-      Buffer.from(JSON.stringify({ defaultProvider: 'unknown' })),
+  it('应拒绝未知 Agent、空配置列表和重复配置 ID', async () => {
+    const updateSettings = server.handler('POST', '/api/console/settings');
+    const unknownProvider = await updateSettings(
+      Buffer.from(
+        JSON.stringify({ modelConfigs: [{ id: 'bad', provider: 'unknown', model: '' }] }),
+      ),
       {},
       {},
     );
     expect(unknownProvider).toMatchObject({ status: 400 });
 
-    const emptyOrder = await server.handler('POST', '/api/console/settings')(
-      Buffer.from(JSON.stringify({ fallbackOrder: [] })),
-      {},
-      {},
-    );
-    expect(emptyOrder).toMatchObject({ status: 400 });
-  });
+    const empty = await updateSettings(Buffer.from(JSON.stringify({ modelConfigs: [] })), {}, {});
+    expect(empty).toMatchObject({ status: 400 });
 
-  it('应持久化 codebuddyModel 且不写盘 codebuddyApiKey', async () => {
-    const updateSettings = server.handler('POST', '/api/console/settings');
-    const response = await updateSettings(
+    const duplicate = await updateSettings(
       Buffer.from(
         JSON.stringify({
-          codebuddyModel: 'cb-pro',
-          codebuddyApiKey: 'secret-cb',
+          modelConfigs: [
+            { id: 'same', provider: 'codex' },
+            { id: 'same', provider: 'claude' },
+          ],
         }),
       ),
       {},
       {},
     );
-    expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      codebuddyModel: 'cb-pro',
-      hasCodebuddyApiKey: true,
+    expect(duplicate).toMatchObject({ status: 400 });
+  });
+
+  it('更新配置留空时应保留原密钥，显式清除时应删除', async () => {
+    const updateSettings = server.handler('POST', '/api/console/settings');
+    await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-pro', apiKey: 'secret-cb' }],
+        }),
+      ),
+      {},
+      {},
+    );
+    const retained = await updateSettings(
+      Buffer.from(
+        JSON.stringify({ modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-next' }] }),
+      ),
+      {},
+      {},
+    );
+    expect(retained.body).toMatchObject({
+      modelConfigs: [{ id: 'cb', model: 'cb-next', hasApiKey: true }],
     });
 
     const settingsPath = join(TMP_DIR, 'console-settings.json');
-    const stored = readFileSync(settingsPath, 'utf8');
-    expect(stored).toContain('cb-pro');
-    expect(stored).not.toContain('secret-cb');
+    expect(readFileSync(settingsPath, 'utf8')).toContain('secret-cb');
+
+    const cleared = await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-next', clearApiKey: true }],
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(cleared.body).toMatchObject({ modelConfigs: [{ id: 'cb', hasApiKey: false }] });
+    expect(readFileSync(settingsPath, 'utf8')).not.toContain('secret-cb');
+  });
+
+  it('应将旧版固定模型设置迁移为有序模型配置', async () => {
+    await webConsole.stop();
+    writeFileSync(
+      join(TMP_DIR, 'console-settings.json'),
+      JSON.stringify({
+        defaultProvider: 'claude',
+        codexModel: 'gpt-5.1-codex',
+        claudeModel: 'opus',
+        codebuddyModel: 'cb-pro',
+        fallbackOrder: ['codex', 'claude', 'codebuddy'],
+      }),
+    );
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+    );
+
+    const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
+    expect(response.body).toMatchObject({
+      version: 2,
+      modelConfigs: [
+        { provider: 'claude', model: 'opus' },
+        { provider: 'codex', model: 'gpt-5.1-codex' },
+        { provider: 'codebuddy', model: 'cb-pro' },
+      ],
+    });
+    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 2');
   });
 
   it('应验证 GitHub Token、分页读取全部仓库并在成功后持久化', async () => {
@@ -299,5 +379,100 @@ describe('WebConsole', () => {
     expect(response.status).toBe(200);
     expect(tokens).toEqual(['github_pat_from_config']);
     expect(persistedTokens).toEqual([]);
+  });
+
+  it('应通过控制台启动、查询和取消 Codex 设备码登录', async () => {
+    await webConsole.stop();
+    let waiting = false;
+    let cancelled = false;
+    const codexAuth: AgentAuthService = {
+      getStatus: async () =>
+        waiting
+          ? {
+              provider: 'codex',
+              displayName: 'Codex',
+              loginMode: 'device-code',
+              state: 'waiting',
+              authenticated: false,
+              cliAvailable: true,
+              verificationUrl: 'https://auth.openai.com/device',
+              userCode: 'ABCD-EFGH',
+            }
+          : {
+              provider: 'codex',
+              displayName: 'Codex',
+              loginMode: 'device-code',
+              state: 'authenticated',
+              authenticated: true,
+              cliAvailable: true,
+              authMethod: 'chatgpt',
+            },
+      startLogin: async () => {
+        waiting = true;
+        return {
+          provider: 'codex',
+          displayName: 'Codex',
+          loginMode: 'device-code',
+          state: 'waiting',
+          authenticated: false,
+          cliAvailable: true,
+          message: '请在浏览器完成设备授权。',
+        };
+      },
+      submitInput: () => {
+        throw new Error('Codex 不接受输入');
+      },
+      cancelLogin: () => {
+        if (!waiting) return false;
+        waiting = false;
+        cancelled = true;
+        return true;
+      },
+      stop: async () => undefined,
+    };
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      { agentAuth: { codex: codexAuth } },
+    );
+
+    const before = await server.handler('GET', '/api/console/agent-auth')(
+      Buffer.alloc(0),
+      {},
+      { provider: 'codex' },
+    );
+    expect(before.body).toMatchObject({ authenticated: true, authMethod: 'chatgpt' });
+
+    const started = await server.handler('POST', '/api/console/agent-auth/login')(
+      Buffer.from(JSON.stringify({ provider: 'codex' })),
+      {},
+      {},
+    );
+    expect(started).toMatchObject({ status: 202, body: { state: 'waiting' } });
+
+    const waitingStatus = await server.handler('GET', '/api/console/agent-auth')(
+      Buffer.alloc(0),
+      {},
+      { provider: 'codex' },
+    );
+    expect(waitingStatus.body).toMatchObject({
+      verificationUrl: 'https://auth.openai.com/device',
+      userCode: 'ABCD-EFGH',
+    });
+
+    const cancelledResponse = await server.handler(
+      'POST',
+      '/api/console/agent-auth/cancel',
+    )(Buffer.from(JSON.stringify({ provider: 'codex' })), {}, {});
+    expect(cancelledResponse.status).toBe(200);
+    expect(cancelled).toBe(true);
+
+    const duplicateCancel = await server.handler(
+      'POST',
+      '/api/console/agent-auth/cancel',
+    )(Buffer.from(JSON.stringify({ provider: 'codex' })), {}, {});
+    expect(duplicateCancel.status).toBe(409);
   });
 });

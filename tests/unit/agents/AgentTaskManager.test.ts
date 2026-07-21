@@ -107,7 +107,7 @@ describe('AgentTaskManager', () => {
       'codex',
       expect.arrayContaining(['exec', '--json', '--sandbox', 'workspace-write']),
       expect.objectContaining({
-        env: expect.objectContaining({ OPENAI_API_KEY: 'test-openai-key' }),
+        env: expect.objectContaining({ CODEX_API_KEY: 'test-openai-key' }),
       }),
     );
     await manager.stop();
@@ -225,6 +225,55 @@ describe('AgentTaskManager', () => {
       ([command, args]) => command === 'git' && args[0] === 'clone',
     );
     expect(gitCloneCalls).toHaveLength(1);
+    await manager.stop();
+  });
+
+  it('应按模型配置顺序使用各自的模型与 API Key，并允许同一 Agent 重复出现', async () => {
+    let codexCalls = 0;
+    spawnMock.mockReset();
+    spawnMock.mockImplementation((command: string, args: string[]) => {
+      if (command === 'git') return fakeProcess('');
+      if (command === 'codex') {
+        codexCalls += 1;
+        return codexCalls === 1
+          ? fakeProcess('', 'HTTP 429 too many requests\n', 1)
+          : fakeProcess('{"type":"result","result":"done"}\n');
+      }
+      return fakeProcess();
+    });
+
+    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const created = manager.create({
+      configurations: [
+        { id: 'codex-fast', provider: 'codex', model: 'gpt-fast', apiKey: 'key-fast' },
+        { id: 'codex-deep', provider: 'codex', model: 'gpt-deep', apiKey: 'key-deep' },
+      ],
+      repository: 'acme/repo',
+      prompt: '修复构建',
+    });
+
+    expect(JSON.stringify(created)).not.toContain('key-fast');
+    expect(created.configurations).toEqual([
+      { id: 'codex-fast', provider: 'codex', model: 'gpt-fast' },
+      { id: 'codex-deep', provider: 'codex', model: 'gpt-deep' },
+    ]);
+    await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'));
+
+    const task = manager.get(created.id)!;
+    expect(task.attempts).toMatchObject([
+      { configurationId: 'codex-fast', provider: 'codex', model: 'gpt-fast', status: 'failed' },
+      { configurationId: 'codex-deep', provider: 'codex', model: 'gpt-deep', status: 'success' },
+    ]);
+    const calls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+    expect(calls).toHaveLength(2);
+    expect(calls[0][1]).toEqual(expect.arrayContaining(['--model', 'gpt-fast']));
+    expect(calls[0][2]).toEqual(
+      expect.objectContaining({ env: expect.objectContaining({ CODEX_API_KEY: 'key-fast' }) }),
+    );
+    expect(calls[1][1]).toEqual(expect.arrayContaining(['--model', 'gpt-deep']));
+    expect(calls[1][2]).toEqual(
+      expect.objectContaining({ env: expect.objectContaining({ CODEX_API_KEY: 'key-deep' }) }),
+    );
     await manager.stop();
   });
 

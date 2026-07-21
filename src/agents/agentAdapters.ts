@@ -16,17 +16,17 @@ export interface AgentAdapter {
   /** 控制台展示名 */
   readonly displayName: string;
   /** API key 注入到子进程的环境变量名 */
-  readonly apiKeyEnvVar: 'OPENAI_API_KEY' | 'ANTHROPIC_API_KEY' | 'CODEBUDDY_API_KEY';
+  readonly apiKeyEnvVar: 'CODEX_API_KEY' | 'ANTHROPIC_API_KEY' | 'CODEBUDDY_API_KEY';
   /** 构造 CLI 参数(不含 prompt,prompt 通过 stdin 传入) */
   buildArgs(model: string | undefined): string[];
-  /** Windows 上是否需要 shell(目前三个 CLI 都不需要) */
+  /** Windows 上 npm CLI 包装脚本需要通过 shell 解析。 */
   readonly useShellOnWindows: boolean;
 }
 
 const codexAdapter: AgentAdapter = {
   command: 'codex',
   displayName: 'Codex',
-  apiKeyEnvVar: 'OPENAI_API_KEY',
+  apiKeyEnvVar: 'CODEX_API_KEY',
   buildArgs: (model) => {
     const args = ['exec', '--json', '--sandbox', 'workspace-write', '--color', 'never'];
     if (model) {
@@ -35,7 +35,7 @@ const codexAdapter: AgentAdapter = {
     args.push('-');
     return args;
   },
-  useShellOnWindows: false,
+  useShellOnWindows: true,
 };
 
 const claudeAdapter: AgentAdapter = {
@@ -56,7 +56,7 @@ const claudeAdapter: AgentAdapter = {
     }
     return args;
   },
-  useShellOnWindows: false,
+  useShellOnWindows: true,
 };
 
 const codebuddyAdapter: AgentAdapter = {
@@ -77,7 +77,7 @@ const codebuddyAdapter: AgentAdapter = {
     }
     return args;
   },
-  useShellOnWindows: false,
+  useShellOnWindows: true,
 };
 
 export const AGENT_ADAPTERS: Readonly<Record<CodingAgentProvider, AgentAdapter>> = {
