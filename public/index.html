@@ -272,139 +272,31 @@
           <header class="topbar models-header">
             <div>
               <p class="eyebrow">MODEL ROUTING</p>
-              <h1>管理模型配置，<br /><span>定义 Agent 执行顺序。</span></h1>
+              <h1>管理关联模型，<br /><span>定义 Agent 执行顺序。</span></h1>
             </div>
-            <button
-              class="icon-button"
-              id="add-model-config"
-              type="button"
-              aria-label="添加模型配置"
-            >
-              ＋
-            </button>
+            <div class="model-header-actions">
+              <button class="secondary-button model-test-launch" id="open-model-test" type="button">
+                测试模型
+              </button>
+              <button
+                class="icon-button"
+                id="add-model-config"
+                type="button"
+                aria-label="添加模型配置"
+              >
+                ＋
+              </button>
+            </div>
           </header>
 
           <section class="model-management-layout">
-            <article class="codex-auth-panel">
-              <div class="codex-auth-heading">
-                <div>
-                  <span class="step-index">01</span>
-                  <div>
-                    <h2>Coding Agent 账号连接</h2>
-                    <p>统一管理官方 CLI 登录；凭据刷新仍由各自 CLI 负责。</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="codex-auth-body">
-                <div class="codex-auth-summary">
-                  <div class="agent-auth-summary-title">
-                    <b>Codex</b>
-                    <span class="connection-badge" id="codex-auth-badge">未检查</span>
-                  </div>
-                  <strong id="codex-auth-message">打开此页面后检查 Codex 登录状态。</strong>
-                  <span id="codex-auth-method"></span>
-                  <div class="codex-auth-buttons">
-                    <button class="save-button" id="codex-device-login" type="button">
-                      使用设备码连接
-                    </button>
-                    <button class="secondary-button" id="codex-auth-refresh" type="button">
-                      刷新状态
-                    </button>
-                    <button class="text-button" id="codex-auth-cancel" type="button" hidden>
-                      取消登录
-                    </button>
-                  </div>
-                </div>
-
-                <div class="codex-device-details" id="codex-device-details" hidden>
-                  <div class="device-auth-step">
-                    <span>1</span>
-                    <div>
-                      <strong>打开验证页面</strong>
-                      <a id="codex-verification-link" target="_blank" rel="noreferrer"></a>
-                    </div>
-                  </div>
-                  <div class="device-auth-step">
-                    <span>2</span>
-                    <div>
-                      <strong>输入设备码</strong>
-                      <div class="device-code-row">
-                        <code id="codex-user-code">等待生成…</code>
-                        <button class="text-button" id="copy-codex-code" type="button" hidden>
-                          复制
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <pre id="codex-auth-output" aria-live="polite"></pre>
-                </div>
-              </div>
-
-              <div class="codex-auth-body agent-auth-row">
-                <div class="codex-auth-summary">
-                  <div class="agent-auth-summary-title">
-                    <b>Claude Code</b>
-                    <span class="connection-badge" id="claude-auth-badge">未检查</span>
-                  </div>
-                  <strong id="claude-auth-message">打开此页面后检查 Claude Code 登录状态。</strong>
-                  <span id="claude-auth-method"></span>
-                  <div class="codex-auth-buttons">
-                    <button class="save-button" id="claude-login" type="button">
-                      使用浏览器连接
-                    </button>
-                    <button class="secondary-button" id="claude-auth-refresh" type="button">
-                      刷新状态
-                    </button>
-                    <button class="text-button" id="claude-auth-cancel" type="button" hidden>
-                      取消登录
-                    </button>
-                  </div>
-                </div>
-
-                <div class="codex-device-details" id="claude-auth-details" hidden>
-                  <div class="device-auth-step">
-                    <span>1</span>
-                    <div>
-                      <strong>打开授权页面</strong>
-                      <a id="claude-verification-link" target="_blank" rel="noreferrer"></a>
-                    </div>
-                  </div>
-                  <div class="device-auth-step claude-code-step">
-                    <span>2</span>
-                    <div>
-                      <strong>如 CLI 要求，粘贴授权结果</strong>
-                      <div class="agent-auth-input-row">
-                        <input
-                          id="claude-auth-input"
-                          type="password"
-                          placeholder="完整 callback 地址或授权码"
-                          autocomplete="off"
-                        />
-                        <button class="text-button" id="submit-claude-auth-input" type="button">
-                          提交
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <pre id="claude-auth-output" aria-live="polite"></pre>
-                </div>
-              </div>
-
-              <p class="codex-auth-note">
-                授权信息由 Codex / Claude Code CLI 保存在当前服务用户的凭据目录。本项目不自行交换
-                OAuth token，也不把设备码、callback 地址或账号凭据写入
-                <code>console-settings.json</code>。
-              </p>
-            </article>
-
             <article class="model-config-panel">
               <div class="model-config-toolbar">
                 <div>
-                  <span class="step-index">02</span>
-                  <h2>模型配置 <em id="model-config-count">0</em></h2>
+                  <span class="step-index">01</span>
+                  <h2>关联模型 <em id="model-config-count">0</em></h2>
                 </div>
-                <p>从上到下依次执行；额度或鉴权失败时自动尝试下一条。</p>
+                <p>只维护 Agent 与模型的关联关系；从上到下依次执行。</p>
               </div>
 
               <form id="model-settings-form">
@@ -419,21 +311,23 @@
             </article>
 
             <aside class="model-help-panel">
-              <span class="step-index">03</span>
+              <span class="step-index">02</span>
               <h2>执行规则</h2>
               <ol>
                 <li><strong>第一条</strong><span>作为任务默认使用的模型配置。</span></li>
                 <li><strong>顺序回退</strong><span>仅在额度耗尽或鉴权失败时继续下一条。</span></li>
                 <li>
-                  <strong>独立密钥</strong
-                  ><span>每条配置可使用自己的 API Key，也可留空复用环境变量或 CLI 登录。</span>
+                  <strong>运行凭据</strong
+                  ><span>模型页不管理账号凭据，执行时复用环境变量、CLI 登录或已有配置。</span>
+                </li>
+                <li>
+                  <strong>配置测试</strong><span>调用对应模型验证密钥、登录和模型名是否可用。</span>
                 </li>
               </ol>
               <div class="security-note">
-                <strong>本地明文存储</strong>
+                <strong>凭据与模型分离</strong>
                 <p>
-                  输入的 API Key 会写入 data/console-settings.json。该文件已被 Git
-                  忽略，请仍限制文件和控制台访问权限。
+                  此页面不显示或修改 API Key。测试和任务会复用服务环境变量、CLI 登录或已有配置。
                 </p>
               </div>
             </aside>
@@ -445,6 +339,42 @@
           </footer>
         </div>
       </main>
+    </div>
+
+    <div class="model-test-dialog" id="model-test-dialog" hidden>
+      <section
+        class="model-test-dialog-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="model-test-title"
+      >
+        <header class="model-test-dialog-header">
+          <div>
+            <p class="eyebrow">CONNECTION TEST</p>
+            <h2 id="model-test-title">测试模型配置</h2>
+          </div>
+          <button class="icon-button" id="close-model-test" type="button" aria-label="关闭">
+            ×
+          </button>
+        </header>
+
+        <div class="model-test-dialog-body">
+          <div class="model-test-config-summary" id="model-test-config-summary"></div>
+          <label class="field">
+            <span>选择关联模型</span>
+            <select id="model-test-select"></select>
+          </label>
+          <div class="model-test-terminal" id="model-test-terminal" aria-live="polite">
+            <p class="muted">准备测试。选择模型后点击“开始测试”。</p>
+          </div>
+          <p class="model-test-cost-note">测试会通过对应 CLI 发起一次最小真实模型调用。</p>
+        </div>
+
+        <footer class="model-test-dialog-footer">
+          <button class="secondary-button" id="cancel-model-test" type="button">关闭</button>
+          <button class="save-button" id="start-model-test" type="button">开始测试</button>
+        </footer>
+      </section>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

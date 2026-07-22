@@ -850,6 +850,17 @@ select:focus-visible {
   max-width: 980px;
 }
 
+.model-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-test-launch {
+  padding: 10px 14px;
+  color: var(--accent);
+}
+
 .model-management-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(270px, 0.5fr);
@@ -1142,7 +1153,7 @@ select:focus-visible {
 
 .model-config-fields {
   display: grid;
-  grid-template-columns: minmax(140px, 0.6fr) minmax(170px, 0.8fr) minmax(210px, 1fr);
+  grid-template-columns: minmax(140px, 0.55fr) minmax(220px, 1.45fr);
   gap: 10px;
   min-width: 0;
 }
@@ -1233,6 +1244,169 @@ select:focus-visible {
 .model-help-panel li strong,
 .model-help-panel li span {
   display: block;
+}
+
+.model-test-dialog {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.model-test-dialog[hidden] {
+  display: none;
+}
+
+.model-test-dialog-card {
+  width: min(640px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: #111112;
+  box-shadow: 0 32px 110px rgba(0, 0, 0, 0.58);
+}
+
+.model-test-dialog-header,
+.model-test-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 20px 22px;
+}
+
+.model-test-dialog-header {
+  border-bottom: 1px solid var(--line);
+}
+
+.model-test-dialog-header .eyebrow {
+  margin-bottom: 6px;
+}
+
+.model-test-dialog-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.model-test-dialog-header .icon-button {
+  width: 34px;
+  height: 34px;
+  font-size: 20px;
+}
+
+.model-test-dialog-body {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.model-test-config-summary {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.model-test-provider-mark {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  color: #111;
+  border-radius: 10px;
+  background: var(--accent);
+  font: 15px/1 var(--mono);
+  font-weight: 700;
+}
+
+.model-test-config-summary strong,
+.model-test-config-summary span {
+  display: block;
+}
+
+.model-test-config-summary strong {
+  margin-bottom: 5px;
+  font-size: 12px;
+}
+
+.model-test-config-summary span,
+.model-test-config-summary em {
+  color: var(--muted);
+  font: 9px/1.5 var(--mono);
+  font-style: normal;
+}
+
+.model-test-config-summary em {
+  padding: 5px 8px;
+  color: var(--success);
+  border: 1px solid rgba(140, 230, 164, 0.22);
+  border-radius: 999px;
+}
+
+.model-test-terminal {
+  min-height: 170px;
+  max-height: 260px;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid #2d3036;
+  border-radius: 13px;
+  background: #08090a;
+  color: #d7d9de;
+  font: 10px/1.7 var(--mono);
+}
+
+.model-test-terminal p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.model-test-terminal .command {
+  color: #8fc7ff;
+}
+
+.model-test-terminal .pending {
+  color: #f1d46b;
+}
+
+.model-test-terminal .muted {
+  color: #737780;
+}
+
+.model-test-terminal .success {
+  color: var(--success);
+}
+
+.model-test-terminal .error {
+  color: var(--danger);
+}
+
+.model-test-terminal .spacer {
+  height: 10px;
+}
+
+.model-test-cost-note {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.model-test-dialog-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+}
+
+.model-test-dialog-footer .save-button {
+  width: auto;
+  min-width: 120px;
 }
 
 .model-help-panel li strong {
@@ -1812,6 +1986,29 @@ select:focus-visible {
 
   .model-config-actions .save-button {
     width: 100%;
+  }
+
+  .models-header {
+    gap: 24px;
+    flex-direction: column;
+  }
+
+  .model-header-actions {
+    width: 100%;
+  }
+
+  .model-test-launch {
+    flex: 1;
+  }
+
+  .model-test-dialog {
+    padding: 10px;
+  }
+
+  .model-test-dialog-header,
+  .model-test-dialog-body,
+  .model-test-dialog-footer {
+    padding: 16px;
   }
 
   .codex-auth-heading,

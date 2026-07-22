@@ -16,6 +16,7 @@ import {
   isAgentAuthProvider,
 } from './AgentAuthManager';
 import { GitHubClientFactory, GitHubConnection, inspectGitHubAccount } from './GitHubExplorer';
+import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
 
 interface StoredModelConfiguration {
   id: string;
@@ -57,6 +58,7 @@ export interface WebConsoleOptions {
   githubClientFactory?: GitHubClientFactory;
   persistGitHubToken?: (token: string) => void;
   agentAuth?: Partial<Record<AgentAuthProvider, AgentAuthService>>;
+  modelTester?: ModelConfigurationTestRunner;
 }
 
 /** 注册开发控制台页面、设置和 Agent 任务 API。 */
@@ -70,6 +72,7 @@ export class WebConsole {
   private githubClientFactory: GitHubClientFactory;
   private persistGitHubToken?: (token: string) => void;
   private agentAuth: Record<AgentAuthProvider, AgentAuthService>;
+  private modelTester: ModelConfigurationTestRunner;
 
   constructor(
     httpServer: HttpServer,
@@ -90,6 +93,7 @@ export class WebConsole {
       codex: options.agentAuth?.codex ?? new AgentAuthManager('codex', this.logger),
       claude: options.agentAuth?.claude ?? new AgentAuthManager('claude', this.logger),
     };
+    this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
   }
@@ -136,6 +140,38 @@ export class WebConsole {
         return { status: 200, body: this.publicSettings(), headers: API_HEADERS };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) } };
+      }
+    });
+
+    httpServer.register('POST', '/api/console/model-test', async (body) => {
+      let configuration: StoredModelConfiguration;
+      try {
+        const payload = parseJson<ModelConfigurationPayload>(body);
+        configuration = normalizeModelConfigurationPayloads(
+          [payload],
+          this.settings.modelConfigs,
+        )[0];
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+
+      try {
+        return {
+          status: 200,
+          body: await this.modelTester.test({
+            provider: configuration.provider,
+            model: configuration.model || undefined,
+            apiKey: configuration.apiKey,
+          }),
+          headers: API_HEADERS,
+        };
+      } catch (error) {
+        this.logger.error(`模型配置测试失败: ${errorMessage(error)}`);
+        return {
+          status: 502,
+          body: { error: '模型配置测试服务暂时不可用' },
+          headers: API_HEADERS,
+        };
       }
     });
 
@@ -449,9 +485,13 @@ function normalizeModelConfigurationPayloads(
       throw new Error(`第 ${index + 1} 条模型名称包含不支持的字符`);
     }
     const submittedApiKey = payload.apiKey?.trim() || undefined;
+    const existingConfiguration = existingById.get(id);
     const apiKey = payload.clearApiKey
       ? undefined
-      : submittedApiKey || existingById.get(id)?.apiKey;
+      : submittedApiKey ||
+        (existingConfiguration?.provider === payload.provider
+          ? existingConfiguration.apiKey
+          : undefined);
     if (apiKey && (apiKey.length > 4096 || /\s/.test(apiKey))) {
       throw new Error(`第 ${index + 1} 条 API Key 格式无效`);
     }

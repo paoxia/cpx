@@ -45,25 +45,25 @@ curl -X POST http://localhost:3000/command \
 
 浏览器访问 `http://localhost:3000/` 可打开 AI 开发控制台。运行控制台任务还需要：
 
-- 本机已安装并登录 `codex`、`claude` 或 `codebuddy` CLI；也可在“模型设置”页为每条模型配置提供独立 API Key。
+- 本机已安装并登录 `codex`、`claude` 或 `codebuddy` CLI，或已通过服务环境变量提供对应 API Key。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
 - 若勾选“创建 Pull Request”，还需安装并登录 GitHub CLI（`gh`），并具备推送分支和创建 PR 的权限。
 
 控制台的 GitHub 页签可输入 Personal Access Token，验证当前 GitHub 身份并读取该 Token 可访问的全部个人、协作及组织仓库。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。受限的 fine-grained Token 只会显示明确授权的仓库。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
 
-“模型设置”是独立管理页。每条配置包含 Agent、模型名和可选 API Key，支持新增、删除和上下调整顺序。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。模型配置及输入的 API Key 以明文写入 `data/console-settings.json`，该文件默认被 Git 忽略；请限制文件权限及控制台访问范围。旧版固定模型设置会在读取时自动迁移。
+“模型设置”是只管理 Agent 关联模型与执行顺序的独立页面。每条配置只编辑 Agent 和模型名，支持新增、删除及上下调整；页面不显示或修改账号凭据。点击“测试模型”会打开独立弹窗，可从当前关联模型中选择一项，通过对应 CLI 发起最小模型调用并查看终端式结果，以验证 CLI、模型名、密钥或登录状态；测试页面尚未保存的关联关系时不会将其写盘。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。旧版配置或设置 API 已保存的独立 API Key 会继续保留和使用，但不会在模型页面显示。
 
 ### 在远程服务器连接 Codex / Claude Code
 
-打开“模型设置”中的“Codex 账号连接”，点击“使用设备码连接”。服务端会执行官方命令 `codex login --device-auth`，页面随后显示验证地址和一次性设备码：
+模型管理页不管理 CLI 账号。请在运行 cpx 的同一系统用户终端中执行 `codex login --device-auth`，然后按终端显示的验证地址和一次性设备码完成登录：
 
 1. 在任意可信浏览器打开验证地址。
 2. 登录拥有 Codex 权限的 ChatGPT 账号并输入设备码。
-3. 返回控制台；页面会自动轮询并通过 `codex login status` 验证结果。
+3. 执行 `codex login status` 验证结果，再到模型管理页测试对应配置。
 
-Codex CLI 将凭据保存在运行 cpx 的系统用户自己的凭据目录。cpx 只在内存中暂存设备码和命令输出，不将它们写入 `console-settings.json`。如果设备码登录不可用，可在运行 cpx 的同一用户终端直接执行 `codex login`；localhost callback 无法自动到达时，只能把包含 `code` 和 `state` 的完整 callback 地址请求到原本等待的回调进程，不能只复制 `code`。不要把 callback 地址发到聊天、日志或截图中。参见 [Codex Authentication](https://learn.chatgpt.com/docs/auth)。
+Codex CLI 将凭据保存在运行 cpx 的系统用户自己的凭据目录，不写入 `console-settings.json`。如果设备码登录不可用，可在同一用户终端直接执行 `codex login`。不要把 callback 地址发到聊天、日志或截图中。参见 [Codex Authentication](https://learn.chatgpt.com/docs/auth)。
 
-Claude Code 在同一区域点击“使用浏览器连接”，由服务端执行 `claude auth login`。打开页面显示的授权地址；如果 CLI 要求手工返回授权结果，可以粘贴完整 callback 地址或授权码，cpx 会提取 `code` 后写入原登录进程。登录结果通过 `claude auth status --json` 复核。Codex 和 Claude Code 凭据均由官方 CLI 保存和刷新，cpx 不直接持有 OAuth refresh token。
+Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通过 `claude auth status --json` 复核。Codex 和 Claude Code 凭据均由官方 CLI 保存和刷新，cpx 不直接持有 OAuth refresh token。
 
 三端均可运行，但 cpx 服务必须与完成登录的 CLI 使用同一系统用户：
 
@@ -245,6 +245,7 @@ AGENT_STORAGE_PATH=./data/agent.db
 | 端点                                             | 说明                                        |
 | ------------------------------------------------ | ------------------------------------------- |
 | `GET/POST /api/console/settings`                 | 读取或更新有序模型配置及本地持久化密钥      |
+| `POST /api/console/model-test`                   | 用当前或已保存的单条配置发起最小模型测试    |
 | `GET /api/console/agent-auth?provider=...`        | 检查 Codex 或 Claude Code CLI 登录状态      |
 | `POST /api/console/agent-auth/login`              | 启动指定 Agent 的官方 CLI 登录              |
 | `POST /api/console/agent-auth/input`              | 向等待中的 CLI 提交 callback 地址或授权码   |

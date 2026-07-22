@@ -7,6 +7,10 @@ import { Logger } from '../../../src/utils/Logger';
 import { GitHubError } from '../../../src/utils/errors';
 import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
 import type { AgentAuthService } from '../../../src/web/AgentAuthManager';
+import type {
+  ModelConfigurationTestRunner,
+  ModelTestConfiguration,
+} from '../../../src/web/ModelConfigurationTester';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-web-console');
 
@@ -51,8 +55,12 @@ describe('WebConsole', () => {
       'Content-Security-Policy': expect.stringContaining("default-src 'self'"),
       'X-Content-Type-Options': 'nosniff',
     });
-    expect((response.body as Buffer).toString('utf8')).toContain('id="github-tab"');
-    expect((response.body as Buffer).toString('utf8')).toContain('id="models-tab"');
+    const html = (response.body as Buffer).toString('utf8');
+    expect(html).toContain('id="github-tab"');
+    expect(html).toContain('id="models-tab"');
+    expect(html).toContain('关联模型');
+    expect(html).toContain('id="model-test-dialog"');
+    expect(html).not.toContain('id="codex-auth-badge"');
   });
 
   it('应按顺序持久化模型配置和独立 API Key，且响应不返回密钥', async () => {
@@ -107,6 +115,103 @@ describe('WebConsole', () => {
       'codex-main',
     ]);
     expect(stored.modelConfigs[0].apiKey).toBe('secret-claude');
+  });
+
+  it('应使用当前模型配置测试连通性，并复用已保存但未回传的密钥', async () => {
+    await webConsole.stop();
+    const tested: ModelTestConfiguration[] = [];
+    const modelTester: ModelConfigurationTestRunner = {
+      test: async (configuration) => {
+        tested.push(configuration);
+        return {
+          success: true,
+          provider: configuration.provider,
+          model: configuration.model,
+          message: 'Claude Code 已成功响应，模型配置可用。',
+          durationMs: 123,
+        };
+      },
+    };
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      { modelTester },
+    );
+    await server.handler('POST', '/api/console/settings')(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [
+            { id: 'claude-sonnet', provider: 'claude', model: 'sonnet', apiKey: 'secret-key' },
+          ],
+        }),
+      ),
+      {},
+      {},
+    );
+
+    const response = await server.handler('POST', '/api/console/model-test')(
+      Buffer.from(JSON.stringify({ id: 'claude-sonnet', provider: 'claude', model: 'sonnet' })),
+      {},
+      {},
+    );
+
+    expect(response).toMatchObject({
+      status: 200,
+      body: { success: true, provider: 'claude', model: 'sonnet', durationMs: 123 },
+      headers: { 'Cache-Control': 'no-store' },
+    });
+    expect(tested).toEqual([{ provider: 'claude', model: 'sonnet', apiKey: 'secret-key' }]);
+    expect(JSON.stringify(response.body)).not.toContain('secret-key');
+  });
+
+  it('模型测试应校验临时配置，且不持久化页面尚未保存的密钥', async () => {
+    await webConsole.stop();
+    const tested: ModelTestConfiguration[] = [];
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        modelTester: {
+          test: async (configuration) => {
+            tested.push(configuration);
+            return {
+              success: false,
+              provider: configuration.provider,
+              model: configuration.model,
+              message: '鉴权失败，请检查 API Key 或 CLI 登录状态。',
+              durationMs: 50,
+            };
+          },
+        },
+      },
+    );
+
+    const invalid = await server.handler('POST', '/api/console/model-test')(
+      Buffer.from(JSON.stringify({ provider: 'unknown', model: 'bad model' })),
+      {},
+      {},
+    );
+    expect(invalid.status).toBe(400);
+
+    const response = await server.handler('POST', '/api/console/model-test')(
+      Buffer.from(
+        JSON.stringify({
+          id: 'temporary-codex',
+          provider: 'codex',
+          model: 'gpt-test',
+          apiKey: 'temporary-secret',
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(response).toMatchObject({ status: 200, body: { success: false } });
+    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', apiKey: 'temporary-secret' }]);
+    expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
   it('应对错误设置和错误任务请求返回 400', async () => {
@@ -205,6 +310,36 @@ describe('WebConsole', () => {
     );
     expect(cleared.body).toMatchObject({ modelConfigs: [{ id: 'cb', hasApiKey: false }] });
     expect(readFileSync(settingsPath, 'utf8')).not.toContain('secret-cb');
+  });
+
+  it('关联项切换 Agent 时不应沿用原 Agent 的已存密钥', async () => {
+    const updateSettings = server.handler('POST', '/api/console/settings');
+    await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [
+            { id: 'association', provider: 'claude', model: 'sonnet', apiKey: 'claude-secret' },
+          ],
+        }),
+      ),
+      {},
+      {},
+    );
+
+    const changed = await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [{ id: 'association', provider: 'codex', model: 'gpt-test' }],
+        }),
+      ),
+      {},
+      {},
+    );
+
+    expect(changed.body).toMatchObject({ modelConfigs: [{ hasApiKey: false }] });
+    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).not.toContain(
+      'claude-secret',
+    );
   });
 
   it('应将旧版固定模型设置迁移为有序模型配置', async () => {
@@ -462,17 +597,19 @@ describe('WebConsole', () => {
       userCode: 'ABCD-EFGH',
     });
 
-    const cancelledResponse = await server.handler(
-      'POST',
-      '/api/console/agent-auth/cancel',
-    )(Buffer.from(JSON.stringify({ provider: 'codex' })), {}, {});
+    const cancelledResponse = await server.handler('POST', '/api/console/agent-auth/cancel')(
+      Buffer.from(JSON.stringify({ provider: 'codex' })),
+      {},
+      {},
+    );
     expect(cancelledResponse.status).toBe(200);
     expect(cancelled).toBe(true);
 
-    const duplicateCancel = await server.handler(
-      'POST',
-      '/api/console/agent-auth/cancel',
-    )(Buffer.from(JSON.stringify({ provider: 'codex' })), {}, {});
+    const duplicateCancel = await server.handler('POST', '/api/console/agent-auth/cancel')(
+      Buffer.from(JSON.stringify({ provider: 'codex' })),
+      {},
+      {},
+    );
     expect(duplicateCancel.status).toBe(409);
   });
 });

@@ -341,10 +341,14 @@ function extractDeviceCode(output: string): string | undefined {
 }
 
 function stripTerminalControlCharacters(value: string): string {
-  return value
-    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
-    .replace(/\u001b\[[0-?]*[ -\/]*[@-~]/g, '')
-    .replace(/[^\t\n\r\x20-\x7E\u0080-\uFFFF]/g, '');
+  return (
+    value
+      // eslint-disable-next-line no-control-regex
+      .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+      // eslint-disable-next-line no-control-regex
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/[^\t\n\r\x20-\x7E\u0080-\uFFFF]/g, '')
+  );
 }
 
 function lastNonEmptyLine(value?: string): string | undefined {

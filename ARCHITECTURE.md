@@ -59,7 +59,7 @@ Webhook 校验 → CommandParser → PermissionManager → CommandRouter
 4. 对应处理器调用 GitHub、Skill 或 MCP 服务。
 5. 结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。
 
-控制台将有序模型配置持久化到数据库相邻的 `console-settings.json`。每项包含 provider、模型名和可选 API Key；对外设置 API 只返回密钥状态，不返回密钥原文。创建任务后，`AgentTaskManager` 将 GitHub 仓库浅克隆到数据库相邻的 `workspaces/<task-id>`，创建 `cpx/task-<id>` 分支，并按配置顺序以各项自己的模型和密钥启动 CLI。同一 provider 可以在顺序中出现多次。未选择创建 PR 时，改动只保留在本地工作区；选择后才执行提交、推送和 `gh pr create`。任务及最近 800 条日志保存在进程内，工作区保存在磁盘。
+控制台将有序模型配置持久化到数据库相邻的 `console-settings.json`。每项包含 provider、模型名和可选 API Key；模型页面只编辑 provider、模型名和顺序，对外设置 API 只返回密钥状态，不返回密钥原文。独立测试弹窗从当前关联项中选择模型；`ModelConfigurationTester` 使用与任务相同的 CLI 参数、模型和服务端已有密钥环境变量发起最小探测调用，只返回脱敏结果且不持久化页面临时值。创建任务后，`AgentTaskManager` 将 GitHub 仓库浅克隆到数据库相邻的 `workspaces/<task-id>`，创建 `cpx/task-<id>` 分支，并按配置顺序以各项自己的模型和密钥启动 CLI。同一 provider 可以在顺序中出现多次。未选择创建 PR 时，改动只保留在本地工作区；选择后才执行提交、推送和 `gh pr create`。任务及最近 800 条日志保存在进程内，工作区保存在磁盘。
 
 `AgentAuthManager` 以 provider 配置统一管理官方 CLI 登录：Codex 使用 `codex login --device-auth` 与 `codex login status`，Claude Code 使用 `claude auth login` 与 JSON 格式的 `claude auth status`。管理器只在内存中保留受长度限制的终端输出、验证地址和一次性设备码；Claude Code CLI 需要手工输入时，控制台可把完整 callback 地址中的 `code` 或授权码写入等待进程的 stdin。授权进程退出后再次调用对应 status 命令复核；凭据的落盘和刷新完全由官方 CLI 管理。服务停止或用户取消时会终止仍在等待的登录进程。
 

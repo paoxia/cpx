@@ -20,10 +20,11 @@
 
 ## Web 开发控制台
 
-- 控制台提供独立模型管理页。用户可逐条新增、删除、调整 Codex、Claude Code 或 CodeBuddy 配置；每条配置包含模型名和可选 API Key，同一 Agent 可配置多次。
+- 控制台提供只管理 Agent 关联模型与执行顺序的独立页面。用户可逐条新增、删除和上下调整 Codex、Claude Code 或 CodeBuddy 关联项；每条只编辑 Agent 与模型名，同一 Agent 可配置多次。模型页面不得显示或修改 API Key。
 - 模型配置按页面顺序写入数据库相邻的 `console-settings.json`。第一条是默认配置；启用自动切换时，仅在额度耗尽或鉴权失败后依次尝试后续配置，每次尝试必须使用该条自己的模型和密钥。
-- 输入的 Agent API Key 以明文写入 `console-settings.json`，设置 API 不得返回密钥原文。未输入时复用服务进程环境变量或本机 CLI 登录状态；旧版固定设置读取后自动迁移。
-- 模型管理页允许为当前服务用户启动 Codex 官方设备码登录和 Claude Code 官方浏览器登录，展示对应验证地址，并在授权结束后复核 CLI 登录状态。Claude Code 登录需要手工输入时可接收完整 callback 地址或授权码并写入原等待进程。设备码、callback 地址和账号凭据不得写入项目配置文件；服务停止时必须清理等待中的登录进程。
+- 设置 API 仍兼容独立 Agent API Key 并以明文写入 `console-settings.json`，但不得返回密钥原文；模型页面保存关联关系时必须保留同一 Agent 已存的密钥。未配置独立密钥时复用服务进程环境变量或本机 CLI 登录状态；旧版固定设置读取后自动迁移。
+- 模型测试使用独立弹窗，从当前关联项中选择模型并展示终端式过程和结果。探测必须使用当前页面中的 Agent 和模型名及服务端已有凭据；未提交的关联关系不得因测试而持久化。测试响应只返回成功状态、耗时和脱敏摘要，不得返回 API Key 或完整模型输出。
+- CLI 账号登录不在模型管理页展示。服务保留 Codex 官方设备码登录和 Claude Code 官方浏览器登录 API；设备码、callback 地址和账号凭据不得写入项目配置文件，服务停止时必须清理等待中的登录进程。
 - 控制台提供独立 GitHub 页签。用户可直接验证 `config.yaml` 或环境变量中的 GitHub Token，也可输入新 Token；新 Token 仅在验证成功后写入 `config/config.yaml`，验证失败不得修改配置。系统分页读取该 Token 可访问的个人、协作及组织仓库。
 - GitHub 仓库列表支持筛选，并可将仓库名称和默认分支带入新任务表单。fine-grained Token 的仓库范围以 GitHub 授权范围为准。
 - 仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 仓库地址。每个任务使用独立浅克隆和 `cpx/task-<id>` 分支。
@@ -88,6 +89,6 @@
 - GitHub/MCP：未配置、远端错误、超时或断连。
 - 生命周期：重复启动、优雅停止和配置热更新。
 - Agent 任务：输入校验、CLI 生命周期、取消、可选 PR 发布和服务停止清理。
-- Web 控制台：静态资源、有序模型配置与密钥持久化、旧配置迁移、API 密钥脱敏、Codex/Claude Code 官方 CLI 登录的状态/输入/取消/清理、GitHub Token 验证后持久化与仓库分页，以及任务 API 错误路径。
+- Web 控制台：静态资源、有序模型配置与密钥持久化、旧配置迁移、单条模型测试与 API 密钥脱敏、Codex/Claude Code 官方 CLI 登录 API 的状态/输入/取消/清理、GitHub Token 验证后持久化与仓库分页，以及任务 API 错误路径。
 
 具体执行命令见 [开发指南](../DEVELOPMENT.md#改动验证)。

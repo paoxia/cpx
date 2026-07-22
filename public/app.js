@@ -9,8 +9,7 @@ const state = {
   repositories: [],
   githubLoaded: false,
   modelConfigs: [],
-  agentAuth: { codex: null, claude: null },
-  agentAuthTimers: { codex: null, claude: null },
+  modelTestRunning: false,
 };
 
 const elements = {
@@ -45,34 +44,14 @@ const elements = {
   addModelConfigBottom: document.querySelector('#add-model-config-bottom'),
   resetModelConfigs: document.querySelector('#reset-model-configs'),
   executionOrderPreview: document.querySelector('#execution-order-preview'),
-  agentAuth: {
-    codex: {
-      badge: document.querySelector('#codex-auth-badge'),
-      message: document.querySelector('#codex-auth-message'),
-      method: document.querySelector('#codex-auth-method'),
-      login: document.querySelector('#codex-device-login'),
-      refresh: document.querySelector('#codex-auth-refresh'),
-      cancel: document.querySelector('#codex-auth-cancel'),
-      details: document.querySelector('#codex-device-details'),
-      verificationLink: document.querySelector('#codex-verification-link'),
-      userCode: document.querySelector('#codex-user-code'),
-      copyCode: document.querySelector('#copy-codex-code'),
-      output: document.querySelector('#codex-auth-output'),
-    },
-    claude: {
-      badge: document.querySelector('#claude-auth-badge'),
-      message: document.querySelector('#claude-auth-message'),
-      method: document.querySelector('#claude-auth-method'),
-      login: document.querySelector('#claude-login'),
-      refresh: document.querySelector('#claude-auth-refresh'),
-      cancel: document.querySelector('#claude-auth-cancel'),
-      details: document.querySelector('#claude-auth-details'),
-      verificationLink: document.querySelector('#claude-verification-link'),
-      input: document.querySelector('#claude-auth-input'),
-      submitInput: document.querySelector('#submit-claude-auth-input'),
-      output: document.querySelector('#claude-auth-output'),
-    },
-  },
+  openModelTest: document.querySelector('#open-model-test'),
+  modelTestDialog: document.querySelector('#model-test-dialog'),
+  closeModelTest: document.querySelector('#close-model-test'),
+  cancelModelTest: document.querySelector('#cancel-model-test'),
+  startModelTest: document.querySelector('#start-model-test'),
+  modelTestSelect: document.querySelector('#model-test-select'),
+  modelTestSummary: document.querySelector('#model-test-config-summary'),
+  modelTestTerminal: document.querySelector('#model-test-terminal'),
   toast: document.querySelector('#toast'),
 };
 
@@ -97,14 +76,20 @@ elements.resetModelConfigs.addEventListener('click', resetModelConfigurations);
 elements.githubForm.addEventListener('submit', connectGitHub);
 elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
 elements.repositorySearch.addEventListener('input', renderRepositories);
-for (const provider of ['codex', 'claude']) {
-  const controls = elements.agentAuth[provider];
-  controls.login.addEventListener('click', () => startAgentLogin(provider));
-  controls.refresh.addEventListener('click', () => loadAgentAuthStatus(provider, true));
-  controls.cancel.addEventListener('click', () => cancelAgentLogin(provider));
-}
-elements.agentAuth.codex.copyCode.addEventListener('click', copyCodexDeviceCode);
-elements.agentAuth.claude.submitInput.addEventListener('click', submitClaudeAuthInput);
+elements.openModelTest.addEventListener('click', openModelTestDialog);
+elements.closeModelTest.addEventListener('click', closeModelTestDialog);
+elements.cancelModelTest.addEventListener('click', closeModelTestDialog);
+elements.startModelTest.addEventListener('click', startSelectedModelTest);
+elements.modelTestSelect.addEventListener('change', () => {
+  renderModelTestSummary();
+  resetModelTestTerminal();
+});
+elements.modelTestDialog.addEventListener('click', (event) => {
+  if (event.target === elements.modelTestDialog) closeModelTestDialog();
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !elements.modelTestDialog.hidden) closeModelTestDialog();
+});
 
 async function init() {
   try {
@@ -125,164 +110,6 @@ async function loadSettings() {
   state.modelConfigs = state.settings.modelConfigs.map((configuration) => ({ ...configuration }));
   renderModelConfigurations();
   renderExecutionOrderPreview();
-}
-
-async function loadAgentAuthStatus(provider, showSuccess = false) {
-  setAgentAuthBusy(provider, true);
-  try {
-    state.agentAuth[provider] = await api(`/api/console/agent-auth?provider=${provider}`);
-    renderAgentAuth(provider);
-    scheduleAgentAuthPoll(provider);
-    if (showSuccess && state.agentAuth[provider].authenticated) {
-      showToast(`${providerLabel(provider)} 登录状态验证成功。`);
-    }
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    setAgentAuthBusy(provider, false);
-  }
-}
-
-async function startAgentLogin(provider) {
-  setAgentAuthBusy(provider, true);
-  try {
-    state.agentAuth[provider] = await api('/api/console/agent-auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ provider }),
-    });
-    renderAgentAuth(provider);
-    scheduleAgentAuthPoll(provider);
-    showToast(`${providerLabel(provider)} 登录已启动，请按页面提示完成授权。`);
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    setAgentAuthBusy(provider, false);
-  }
-}
-
-async function cancelAgentLogin(provider) {
-  setAgentAuthBusy(provider, true);
-  try {
-    await api('/api/console/agent-auth/cancel', {
-      method: 'POST',
-      body: JSON.stringify({ provider }),
-    });
-    window.clearTimeout(state.agentAuthTimers[provider]);
-    state.agentAuthTimers[provider] = null;
-    await loadAgentAuthStatus(provider);
-    showToast(`已取消 ${providerLabel(provider)} 登录。`);
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    setAgentAuthBusy(provider, false);
-  }
-}
-
-function renderAgentAuth(provider) {
-  const auth = state.agentAuth[provider];
-  if (!auth) return;
-  const controls = elements.agentAuth[provider];
-  const waiting = auth.state === 'waiting' || auth.state === 'checking';
-  const badge = auth.authenticated
-    ? ['已连接', 'connected']
-    : auth.state === 'failed'
-      ? ['连接失败', 'error']
-      : waiting
-        ? ['等待授权', 'pending']
-        : ['未连接', ''];
-  controls.badge.textContent = badge[0];
-  controls.badge.className = `connection-badge ${badge[1]}`.trim();
-  controls.message.textContent = auth.message || `${providerLabel(provider)} 尚未登录。`;
-  controls.method.textContent = auth.authenticated
-    ? `登录方式：${auth.authMethod || '官方 CLI'}`
-    : auth.cliAvailable === false
-      ? `需要先在服务器安装 ${providerLabel(provider)}`
-      : '';
-  controls.login.textContent = auth.authenticated
-    ? '重新授权'
-    : provider === 'codex'
-      ? '使用设备码连接'
-      : '使用浏览器连接';
-  controls.login.disabled = waiting || auth.cliAvailable === false;
-  controls.cancel.hidden = auth.state !== 'waiting';
-
-  const showDetails = auth.state === 'waiting' && Boolean(auth.output || auth.verificationUrl);
-  controls.details.hidden = !showDetails;
-  const safeUrl = safeExternalUrl(auth.verificationUrl);
-  controls.verificationLink.textContent = safeUrl || `等待 ${providerLabel(provider)} 返回授权地址…`;
-  if (safeUrl) {
-    controls.verificationLink.href = safeUrl;
-  } else {
-    controls.verificationLink.removeAttribute('href');
-  }
-  if (provider === 'codex') {
-    controls.userCode.textContent = auth.userCode || '等待生成…';
-    controls.copyCode.hidden = !auth.userCode;
-  }
-  controls.output.textContent = auth.output || '';
-}
-
-function scheduleAgentAuthPoll(provider) {
-  window.clearTimeout(state.agentAuthTimers[provider]);
-  state.agentAuthTimers[provider] = null;
-  const auth = state.agentAuth[provider];
-  if (!auth || !['waiting', 'checking'].includes(auth.state)) return;
-  state.agentAuthTimers[provider] = window.setTimeout(async () => {
-    await loadAgentAuthStatus(provider);
-  }, 1200);
-}
-
-async function copyCodexDeviceCode() {
-  const code = state.agentAuth.codex?.userCode;
-  if (!code) return;
-  try {
-    await navigator.clipboard.writeText(code);
-    showToast('设备码已复制。');
-  } catch {
-    showToast(`设备码：${code}`);
-  }
-}
-
-async function submitClaudeAuthInput() {
-  const input = elements.agentAuth.claude.input.value.trim();
-  if (!input) {
-    showToast('请粘贴完整 callback 地址或授权码。', true);
-    return;
-  }
-  setAgentAuthBusy('claude', true);
-  try {
-    state.agentAuth.claude = await api('/api/console/agent-auth/input', {
-      method: 'POST',
-      body: JSON.stringify({ provider: 'claude', input }),
-    });
-    elements.agentAuth.claude.input.value = '';
-    renderAgentAuth('claude');
-    scheduleAgentAuthPoll('claude');
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    setAgentAuthBusy('claude', false);
-  }
-}
-
-function setAgentAuthBusy(provider, busy) {
-  const controls = elements.agentAuth[provider];
-  controls.refresh.disabled = busy;
-  const auth = state.agentAuth[provider];
-  if (!auth || !['waiting', 'checking'].includes(auth.state)) {
-    controls.login.disabled = busy || auth?.cliAvailable === false;
-  }
-  if (controls.submitInput) controls.submitInput.disabled = busy;
-}
-
-function safeExternalUrl(value) {
-  if (!value) return '';
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' ? url.toString() : '';
-  } catch {
-    return '';
-  }
 }
 
 async function loadGitHubStatus() {
@@ -457,10 +284,6 @@ function renderModelConfigurations() {
     row.querySelector('[data-field="model"]').addEventListener('input', (event) => {
       configuration.model = event.target.value;
     });
-    row.querySelector('[data-field="apiKey"]').addEventListener('input', (event) => {
-      configuration.apiKey = event.target.value;
-      configuration.clearApiKey = false;
-    });
     row.querySelectorAll('[data-config-action]').forEach((button) => {
       button.addEventListener('click', () =>
         handleModelConfigurationAction(button.dataset.configAction, configuration.id),
@@ -480,13 +303,6 @@ function renderModelConfiguration(configuration, index) {
         `<option value="${value}"${configuration.provider === value ? ' selected' : ''}>${label}</option>`,
     )
     .join('');
-  const keyStatus = configuration.clearApiKey
-    ? '保存后清除密钥'
-    : configuration.apiKeySource === 'file'
-      ? '已保存到文件；留空保持不变'
-      : configuration.apiKeySource === 'environment'
-        ? '当前使用环境变量；输入后改为文件配置'
-        : '可留空使用 CLI 登录或环境变量';
   return `
     <article class="model-config-item" data-config-id="${escapeHtml(configuration.id)}">
       <div class="model-config-rank"><strong>${index + 1}</strong><span>PRIORITY</span></div>
@@ -496,19 +312,13 @@ function renderModelConfiguration(configuration, index) {
           <select data-field="provider">${providerOptions}</select>
         </label>
         <label class="field model-name-field">
-          <span>模型</span>
+          <span>关联模型</span>
           <input data-field="model" type="text" value="${escapeHtml(configuration.model || '')}" placeholder="留空使用 Agent 默认模型" autocomplete="off" />
-        </label>
-        <label class="field model-key-field">
-          <span>API Key</span>
-          <input data-field="apiKey" type="password" value="${escapeHtml(configuration.apiKey || '')}" placeholder="输入新密钥" autocomplete="new-password" />
-          <small>${escapeHtml(keyStatus)}</small>
         </label>
       </div>
       <div class="model-config-controls">
         <button type="button" data-config-action="up" aria-label="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
         <button type="button" data-config-action="down" aria-label="下移" ${index === state.modelConfigs.length - 1 ? 'disabled' : ''}>↓</button>
-        ${configuration.hasApiKey && !configuration.clearApiKey ? '<button type="button" data-config-action="clear-key">清除密钥</button>' : ''}
         <button class="danger" type="button" data-config-action="delete">删除</button>
       </div>
     </article>`;
@@ -527,9 +337,6 @@ function handleModelConfigurationAction(action, id) {
       state.modelConfigs[index],
       state.modelConfigs[index + 1],
     ];
-  } else if (action === 'clear-key') {
-    state.modelConfigs[index].apiKey = '';
-    state.modelConfigs[index].clearApiKey = true;
   } else if (action === 'delete') {
     if (state.modelConfigs.length === 1) {
       showToast('至少需要保留一条模型配置。', true);
@@ -538,6 +345,117 @@ function handleModelConfigurationAction(action, id) {
     state.modelConfigs.splice(index, 1);
   }
   renderModelConfigurations();
+}
+
+function openModelTestDialog() {
+  if (!state.modelConfigs.length) {
+    showToast('请先添加关联模型。', true);
+    return;
+  }
+  elements.modelTestSelect.innerHTML = state.modelConfigs
+    .map(
+      (configuration, index) =>
+        `<option value="${escapeHtml(configuration.id)}">${index + 1}. ${escapeHtml(providerLabel(configuration.provider))} / ${escapeHtml(configuration.model || '默认模型')}</option>`,
+    )
+    .join('');
+  renderModelTestSummary();
+  resetModelTestTerminal();
+  elements.modelTestDialog.hidden = false;
+  elements.modelTestSelect.focus();
+}
+
+function closeModelTestDialog() {
+  if (state.modelTestRunning) {
+    showToast('模型正在测试，请等待本次调用结束。', true);
+    return;
+  }
+  elements.modelTestDialog.hidden = true;
+}
+
+function selectedModelTestConfiguration() {
+  return state.modelConfigs.find(
+    (configuration) => configuration.id === elements.modelTestSelect.value,
+  );
+}
+
+function renderModelTestSummary() {
+  const configuration = selectedModelTestConfiguration();
+  if (!configuration) {
+    elements.modelTestSummary.innerHTML = '<span>没有可测试的关联模型</span>';
+    return;
+  }
+  const index = state.modelConfigs.indexOf(configuration);
+  elements.modelTestSummary.innerHTML = `
+    <div class="model-test-provider-mark">${escapeHtml(providerLabel(configuration.provider).slice(0, 1))}</div>
+    <div>
+      <strong>${escapeHtml(providerLabel(configuration.provider))}</strong>
+      <span>${escapeHtml(configuration.model || 'Agent 默认模型')} · 执行顺序 ${index + 1}</span>
+    </div>
+    <em>已关联</em>`;
+}
+
+function resetModelTestTerminal() {
+  elements.modelTestTerminal.className = 'model-test-terminal';
+  elements.modelTestTerminal.innerHTML =
+    '<p class="muted">准备测试。选择模型后点击“开始测试”。</p>';
+  elements.startModelTest.textContent = '开始测试';
+}
+
+function appendModelTestLine(message, tone = '') {
+  const line = document.createElement('p');
+  if (tone) line.className = tone;
+  line.textContent = message;
+  elements.modelTestTerminal.appendChild(line);
+  elements.modelTestTerminal.scrollTop = elements.modelTestTerminal.scrollHeight;
+}
+
+async function startSelectedModelTest() {
+  const configuration = selectedModelTestConfiguration();
+  if (!configuration || state.modelTestRunning) return;
+
+  state.modelTestRunning = true;
+  elements.modelTestSelect.disabled = true;
+  elements.startModelTest.disabled = true;
+  elements.closeModelTest.disabled = true;
+  elements.cancelModelTest.disabled = true;
+  elements.startModelTest.textContent = '测试中…';
+  elements.modelTestTerminal.className = 'model-test-terminal running';
+  elements.modelTestTerminal.innerHTML = '';
+  appendModelTestLine(
+    `> ${providerLabel(configuration.provider)} / ${configuration.model || '默认模型'}`,
+    'command',
+  );
+  appendModelTestLine('正在启动对应 CLI…', 'pending');
+  appendModelTestLine('正在发送最小探测请求…', 'muted');
+
+  try {
+    const result = await api('/api/console/model-test', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: configuration.id,
+        provider: configuration.provider,
+        model: configuration.model,
+      }),
+    });
+    elements.modelTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
+    appendModelTestLine('', 'spacer');
+    appendModelTestLine(result.message, result.success ? 'success' : 'error');
+    appendModelTestLine(`耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
+    elements.startModelTest.textContent = '重新测试';
+    showToast(result.message, !result.success);
+  } catch (error) {
+    elements.modelTestTerminal.className = 'model-test-terminal error';
+    appendModelTestLine('', 'spacer');
+    appendModelTestLine(error.message, 'error');
+    elements.startModelTest.textContent = '重新测试';
+    showToast(error.message, true);
+  } finally {
+    state.modelTestRunning = false;
+    elements.modelTestSelect.disabled = false;
+    elements.startModelTest.disabled = false;
+    elements.closeModelTest.disabled = false;
+    elements.cancelModelTest.disabled = false;
+  }
 }
 
 function addModelConfiguration() {
@@ -649,8 +567,6 @@ async function saveModelSettings(event) {
           id: configuration.id,
           provider: configuration.provider,
           model: configuration.model,
-          apiKey: configuration.apiKey || undefined,
-          clearApiKey: Boolean(configuration.clearApiKey),
         })),
       }),
     });
@@ -755,10 +671,6 @@ async function switchView(view) {
     } catch (error) {
       showToast(error.message, true);
     }
-  }
-  if (normalized === 'models') {
-    const unloaded = ['codex', 'claude'].filter((provider) => !state.agentAuth[provider]);
-    await Promise.all(unloaded.map((provider) => loadAgentAuthStatus(provider)));
   }
 }
 
