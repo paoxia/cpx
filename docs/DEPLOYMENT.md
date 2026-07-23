@@ -127,6 +127,16 @@ AGENT_FEISHU_APP_SECRET=xxx
 
 任务状态和日志实时显示在列表中。任务保存在内存，重启容器后丢失；任务对应的 Git 工作区保留在 `/tmp/cpx/data/workspaces/<task-id>/`。
 
+### GitHub Token
+
+如果没有通过 `AGENT_GITHUB_TOKEN` 提供 Token，可在 Web 控制台进入“GitHub”：
+
+1. 点击“创建 GitHub Token”，在 GitHub 页面选择资源所有者和允许 cpx 操作的仓库。
+2. 检查预填的 Contents、Pull requests、Workflows 写权限和有效期；不需要修改工作流时可取消 Workflows 权限。
+3. 生成并复制 Token，返回控制台粘贴验证。验证成功后写入容器挂载的 `config/config.yaml`。
+
+控制台 Token 会用于 GitHub API、HTTPS 仓库 clone/push 和 `gh pr create`。使用 `git@github.com:...` SSH 地址时仍需按“SSH 仓库访问”配置私钥。
+
 ### Codex / Claude Code 登录
 
 在 Web 控制台进入“模型设置”，点击“使用设备码连接”：

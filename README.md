@@ -47,9 +47,11 @@ curl -X POST http://localhost:3000/command \
 
 - 本机已安装 `codex` 和/或 `claude` CLI，并已完成 CLI 登录、配置服务环境变量 API Key，或在模型设置中保存对应 API Key。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
-- 若勾选“创建 Pull Request”，还需安装并登录 GitHub CLI（`gh`），并具备推送分支和创建 PR 的权限。
+- 若勾选“创建 Pull Request”，还需安装 GitHub CLI（`gh`）；控制台验证的 Token 必须具备推送分支和创建 PR 的权限。
 
-控制台的 GitHub 页签可输入 Personal Access Token，验证当前 GitHub 身份并读取该 Token 可访问的全部个人、协作及组织仓库。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。受限的 fine-grained Token 只会显示明确授权的仓库。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
+控制台的 GitHub 页签在没有 Token 时提供“创建 GitHub Token”入口，打开 GitHub 的 fine-grained PAT 页面并预填 90 天有效期及 Contents、Pull requests、Workflows 写权限；用户仍需在 GitHub 选择资源所有者和仓库，生成后复制回控制台验证。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。页面会区分本地文件与环境变量来源，受限 Token 只显示明确授权的仓库。
+
+验证成功的 Token 同时供 GitHub API、HTTPS `git clone/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
 
 “模型设置”管理 Codex 和 Claude Code 的有序执行配置。每条配置可独立设置 Agent、模型名、可选 Base URL 和可选 API Key，并支持新增、删除及上下调整；同一 Agent 可配置多次，用于组合不同模型或网关。已保存的密钥不会回显，只展示来源和配置状态；新密钥会以明文写入本机 `console-settings.json`，应限制该文件的读取权限。点击“测试模型”可选择关联项、输入最多 4000 字的测试内容，并在终端区域查看 Agent 的实际文本回复；尚未保存的 Base URL 或密钥只用于本次测试，不会被测试接口持久化。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。
 
@@ -252,14 +254,14 @@ Coding Agent 密钥沿用 CLI 的原生环境变量：Codex 使用 `CODEX_API_KE
 | `POST /api/console/agent-auth/login`       | 启动指定 Agent 的官方 CLI 登录                 |
 | `POST /api/console/agent-auth/input`       | 向等待中的 CLI 提交 callback 地址或授权码      |
 | `POST /api/console/agent-auth/cancel`      | 取消指定 Agent 的进行中登录                    |
-| `GET /api/console/github`                  | 读取 GitHub Token 与连接状态                   |
+| `GET /api/console/github`                  | 读取 Token 来源、连接状态和 PAT 创建引导       |
 | `POST /api/console/github/connect`         | 验证 GitHub Token，成功后写入配置并读取仓库    |
 | `GET /api/console/github/repositories`     | 使用已配置 Token 刷新全部可访问仓库            |
 | `GET/POST /api/console/tasks`              | 列出任务或创建任务                             |
 | `GET /api/console/task?id=<id>`            | 读取单个任务及日志                             |
 | `POST /api/console/cancel`                 | 取消未结束任务                                 |
 
-仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。
+仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
 
 ### POST /command
 

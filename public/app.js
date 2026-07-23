@@ -8,6 +8,7 @@ const state = {
   githubUser: null,
   repositories: [],
   githubLoaded: false,
+  githubTokenEntryOpen: false,
   modelConfigs: [],
   modelTestRunning: false,
 };
@@ -28,6 +29,10 @@ const elements = {
   githubView: document.querySelector('#github-view'),
   modelsView: document.querySelector('#models-view'),
   githubForm: document.querySelector('#github-form'),
+  githubTokenSetup: document.querySelector('#github-token-setup'),
+  githubCreateToken: document.querySelector('#github-create-token'),
+  githubExistingToken: document.querySelector('#github-existing-token'),
+  githubTokenSteps: document.querySelector('#github-token-steps'),
   githubToken: document.querySelector('#github-token'),
   githubTokenHint: document.querySelector('#github-token-hint'),
   githubConnectButton: document.querySelector('#github-connect-button'),
@@ -75,6 +80,8 @@ elements.addModelConfig.addEventListener('click', addModelConfiguration);
 elements.addModelConfigBottom.addEventListener('click', addModelConfiguration);
 elements.resetModelConfigs.addEventListener('click', resetModelConfigurations);
 elements.githubForm.addEventListener('submit', connectGitHub);
+elements.githubCreateToken.addEventListener('click', () => openGitHubTokenEntry(true));
+elements.githubExistingToken.addEventListener('click', () => openGitHubTokenEntry(false));
 elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
 elements.repositorySearch.addEventListener('input', renderRepositories);
 elements.openModelTest.addEventListener('click', openModelTestDialog);
@@ -131,6 +138,7 @@ async function connectGitHub(event) {
       body: JSON.stringify({ token: token || undefined }),
     });
     applyGitHubConnection(connection);
+    state.githubTokenEntryOpen = false;
     elements.githubToken.value = '';
     showToast(`GitHub 已连接，共读取 ${state.repositories.length} 个仓库。`);
   } catch (error) {
@@ -164,8 +172,10 @@ function applyGitHubConnection(connection) {
   state.repositories = connection.repositories || [];
   state.githubLoaded = true;
   state.githubStatus = {
+    ...state.githubStatus,
     hasToken: true,
     connected: true,
+    tokenSource: connection.tokenSource || state.githubStatus?.tokenSource || 'file',
     user: connection.user,
     repositoryCount: state.repositories.length,
   };
@@ -176,19 +186,33 @@ function applyGitHubConnection(connection) {
 function renderGitHubConnection() {
   const connected = Boolean(state.githubStatus?.connected && state.githubUser);
   const configured = Boolean(state.githubStatus?.hasToken);
+  const tokenSource = state.githubStatus?.tokenSource || 'none';
+  if (state.githubStatus?.createTokenUrl) {
+    elements.githubCreateToken.href = state.githubStatus.createTokenUrl;
+  }
+  elements.githubTokenSetup.hidden = configured;
+  elements.githubForm.hidden = !configured && !state.githubTokenEntryOpen;
+  elements.githubToken.disabled = tokenSource === 'environment';
+  if (configured) elements.githubTokenSteps.hidden = true;
   elements.githubConnectionBadge.textContent = connected
     ? '已连接'
     : configured
       ? '待验证'
       : '未连接';
   elements.githubConnectionBadge.className = `connection-badge${connected ? ' connected' : ''}`;
-  elements.githubTokenHint.textContent = configured
-    ? '已有配置或环境变量 Token；留空可直接验证。输入新 Token 会在验证成功后保存到配置。'
-    : '输入 Token 并验证成功后，将保存到 config/config.yaml。';
+  elements.githubTokenHint.textContent =
+    tokenSource === 'environment'
+      ? 'Token 由 AGENT_GITHUB_TOKEN 环境变量管理；留空可直接验证，更换后需重启服务。'
+      : configured
+        ? '已有本地 Token；留空可直接验证，输入新 Token 会在验证成功后替换。'
+        : '粘贴 Token 并验证成功后，将保存到 config/config.yaml。';
   if (!connected) {
     elements.githubAccount.innerHTML = `
       <div class="github-avatar" aria-hidden="true">GH</div>
-      <div><strong>等待验证 Token</strong><small>连接后显示 GitHub 用户身份</small></div>`;
+      <div>
+        <strong>${configured ? '等待验证已配置 Token' : '尚未连接 GitHub'}</strong>
+        <small>${configured ? '正在等待读取 GitHub 身份' : '创建或填写 Token 后显示 GitHub 身份'}</small>
+      </div>`;
     return;
   }
   const displayName = state.githubUser.name || state.githubUser.login;
@@ -199,6 +223,13 @@ function renderGitHubConnection() {
       <strong>${escapeHtml(displayName)}</strong>
       <a href="${escapeHtml(state.githubUser.htmlUrl)}" target="_blank" rel="noreferrer">@${escapeHtml(state.githubUser.login)} ↗</a>
     </div>`;
+}
+
+function openGitHubTokenEntry(showSteps) {
+  state.githubTokenEntryOpen = true;
+  elements.githubTokenSteps.hidden = !showSteps;
+  renderGitHubConnection();
+  window.setTimeout(() => elements.githubToken.focus(), 0);
 }
 
 function renderRepositories() {

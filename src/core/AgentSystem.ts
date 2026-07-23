@@ -91,13 +91,7 @@ export class AgentSystem {
 
     // GitHub 服务
     if (this.config.github.token) {
-      const ghClient = new GitHubClient(this.config.github.token, this.logger);
-      this.githubService = new GitHubService(
-        ghClient,
-        this.logger,
-        this.config.github.defaultRepo,
-        this.config.github.defaultBranch,
-      );
+      this.activateGitHubToken(this.config.github.token);
     } else {
       this.logger.warn('GitHub token 未配置，github_* 命令不可用');
     }
@@ -116,7 +110,13 @@ export class AgentSystem {
     // Web 开发控制台：模型配置、GitHub 工作区和 Coding Agent 任务
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
       githubToken: this.config.github.token,
+      githubTokenSource: process.env.AGENT_GITHUB_TOKEN?.trim()
+        ? 'environment'
+        : this.config.github.token
+          ? 'file'
+          : 'none',
       persistGitHubToken: (token) => this.configManager.saveGitHubToken(token),
+      onGitHubTokenConnected: (token) => this.activateGitHubToken(token),
     });
 
     this.skillManager = new SkillManager(
@@ -496,6 +496,17 @@ export class AgentSystem {
 
   getMcpManager(): MCPManager {
     return this.mcpManager;
+  }
+
+  private activateGitHubToken(token: string): void {
+    const ghClient = new GitHubClient(token, this.logger);
+    this.githubService = new GitHubService(
+      ghClient,
+      this.logger,
+      this.config.github.defaultRepo,
+      this.config.github.defaultBranch,
+    );
+    this.skillManager?.setGitHubService(this.githubService);
   }
 
   /** 注册 GitHub 命令处理器 */

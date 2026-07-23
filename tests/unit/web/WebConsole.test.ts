@@ -60,7 +60,27 @@ describe('WebConsole', () => {
     expect(html).toContain('id="models-tab"');
     expect(html).toContain('关联模型');
     expect(html).toContain('id="model-test-dialog"');
+    expect(html).toContain('id="github-create-token"');
+    expect(html).toContain('contents=write');
+    expect(html).toContain('pull_requests=write');
     expect(html).not.toContain('id="codex-auth-badge"');
+  });
+
+  it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
+    const response = await server.handler('GET', '/api/console/github')(Buffer.alloc(0), {}, {});
+    expect(response.body).toMatchObject({
+      hasToken: false,
+      connected: false,
+      tokenSource: 'none',
+      requiredPermissions: {
+        contents: 'write',
+        pullRequests: 'write',
+        workflows: 'write',
+      },
+    });
+    expect((response.body as { createTokenUrl: string }).createTokenUrl).toContain(
+      'https://github.com/settings/personal-access-tokens/new?',
+    );
   });
 
   it('应按顺序持久化模型配置和独立 API Key，且响应不返回密钥', async () => {
@@ -435,6 +455,7 @@ describe('WebConsole', () => {
     const requestedPages: number[] = [];
     const tokens: string[] = [];
     const persistedTokens: string[] = [];
+    const activatedTokens: string[] = [];
     const repositories = Array.from({ length: 101 }, (_, index) => ({
       id: index + 1,
       name: `repo-${index + 1}`,
@@ -476,6 +497,7 @@ describe('WebConsole', () => {
           return client;
         },
         persistGitHubToken: (token) => persistedTokens.push(token),
+        onGitHubTokenConnected: (token) => activatedTokens.push(token),
       },
     );
 
@@ -496,10 +518,12 @@ describe('WebConsole', () => {
     expect(requestedPages).toEqual([1, 2]);
     expect(tokens).toEqual(['github_pat_runtime-only']);
     expect(persistedTokens).toEqual(['github_pat_runtime-only']);
+    expect(activatedTokens).toEqual(['github_pat_runtime-only']);
     const status = await server.handler('GET', '/api/console/github')(Buffer.alloc(0), {}, {});
     expect(status.body).toMatchObject({
       hasToken: true,
       connected: true,
+      tokenSource: 'file',
       repositoryCount: 101,
     });
   });
@@ -571,6 +595,37 @@ describe('WebConsole', () => {
     expect(response.status).toBe(200);
     expect(tokens).toEqual(['github_pat_from_config']);
     expect(persistedTokens).toEqual([]);
+  });
+
+  it('应标识由环境变量管理的 GitHub Token', async () => {
+    await webConsole.stop();
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        githubToken: 'github_pat_from_environment',
+        githubTokenSource: 'environment',
+      },
+    );
+
+    const status = await server.handler('GET', '/api/console/github')(Buffer.alloc(0), {}, {});
+    expect(status.body).toMatchObject({
+      hasToken: true,
+      connected: false,
+      tokenSource: 'environment',
+    });
+
+    const replace = await server.handler('POST', '/api/console/github/connect')(
+      Buffer.from(JSON.stringify({ token: 'github_pat_replacement' })),
+      {},
+      {},
+    );
+    expect(replace).toMatchObject({
+      status: 400,
+      body: { error: expect.stringContaining('环境变量管理') },
+    });
   });
 
   it('应通过控制台启动、查询和取消 Codex 设备码登录', async () => {

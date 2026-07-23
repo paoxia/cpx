@@ -61,6 +61,8 @@ Webhook 校验 → CommandParser → PermissionManager → CommandRouter
 
 控制台将有序模型配置持久化到数据库相邻的 `console-settings.json`。每项包含 provider、模型名、可选 Base URL 和可选 API Key；模型页面可编辑这些字段与执行顺序，对外设置 API 只返回 Base URL、密钥状态和来源，不返回密钥原文。独立测试弹窗从当前关联项中选择模型；`ModelConfigurationTester` 使用页面当前的 CLI 参数、模型、Base URL 和密钥发送用户提供的测试内容，从 Codex 或 Claude Code JSONL 事件中提取最终文本回复，并在密钥脱敏和长度限制后返回页面。测试内容、回复和页面临时配置不持久化。创建任务后，`AgentTaskManager` 将 GitHub 仓库浅克隆到数据库相邻的 `workspaces/<task-id>`，创建 `cpx/task-<id>` 分支，并按配置顺序以各项自己的模型、Base URL 和密钥启动 CLI。同一 provider 可以在顺序中出现多次。Codex 的自定义地址通过 `openai_base_url` 配置传给 CLI，密钥使用 `CODEX_API_KEY`；Claude Code 的自定义地址使用 `ANTHROPIC_BASE_URL`，网关密钥使用 `ANTHROPIC_AUTH_TOKEN`，未配置地址时继续使用 `ANTHROPIC_API_KEY`。未选择创建 PR 时，改动只保留在本地工作区；选择后才执行提交、推送和 `gh pr create`。任务及最近 800 条日志保存在进程内，工作区保存在磁盘。
 
+GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
+
 `AgentAuthManager` 以 provider 配置统一管理官方 CLI 登录：Codex 使用 `codex login --device-auth` 与 `codex login status`，Claude Code 使用 `claude auth login` 与 JSON 格式的 `claude auth status`。管理器只在内存中保留受长度限制的终端输出、验证地址和一次性设备码；Claude Code CLI 需要手工输入时，控制台可把完整 callback 地址中的 `code` 或授权码写入等待进程的 stdin。授权进程退出后再次调用对应 status 命令复核；凭据的落盘和刷新完全由官方 CLI 管理。服务停止或用户取消时会终止仍在等待的登录进程。
 
 ## 配置与状态

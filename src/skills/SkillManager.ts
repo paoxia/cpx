@@ -28,6 +28,10 @@ export class SkillManager {
     this.mcpManager = mcpManager;
   }
 
+  setGitHubService(githubService: GitHubService): void {
+    this.githubService = githubService;
+  }
+
   /** 执行 Skill */
   async execute(
     name: string,

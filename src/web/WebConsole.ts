@@ -56,10 +56,31 @@ const STATIC_SECURITY_HEADERS = {
 
 const API_HEADERS = { 'Cache-Control': 'no-store' };
 
+export type GitHubTokenSource = 'none' | 'file' | 'environment';
+
+export const GITHUB_TOKEN_CREATE_URL =
+  'https://github.com/settings/personal-access-tokens/new?' +
+  new URLSearchParams({
+    name: 'cpx',
+    description: 'Used by cpx to modify code and create pull requests',
+    expires_in: '90',
+    contents: 'write',
+    pull_requests: 'write',
+    workflows: 'write',
+  }).toString();
+
+const GITHUB_TOKEN_PERMISSIONS = {
+  contents: 'write',
+  pullRequests: 'write',
+  workflows: 'write',
+} as const;
+
 export interface WebConsoleOptions {
   githubToken?: string;
+  githubTokenSource?: GitHubTokenSource;
   githubClientFactory?: GitHubClientFactory;
   persistGitHubToken?: (token: string) => void;
+  onGitHubTokenConnected?: (token: string) => void;
   agentAuth?: Partial<Record<AgentAuthProvider, AgentAuthService>>;
   modelTester?: ModelConfigurationTestRunner;
 }
@@ -71,9 +92,11 @@ export class WebConsole {
   private taskManager: AgentTaskManager;
   private logger: Logger;
   private githubToken?: string;
+  private githubTokenSource: GitHubTokenSource;
   private githubConnection?: GitHubConnection;
   private githubClientFactory: GitHubClientFactory;
   private persistGitHubToken?: (token: string) => void;
+  private onGitHubTokenConnected?: (token: string) => void;
   private agentAuth: Record<AgentAuthProvider, AgentAuthService>;
   private modelTester: ModelConfigurationTestRunner;
 
@@ -89,9 +112,14 @@ export class WebConsole {
     this.settings = this.loadSettings();
     this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
     this.githubToken = options.githubToken?.trim() || undefined;
+    this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
+    if (this.githubToken) {
+      this.taskManager.setSecrets({ githubToken: this.githubToken });
+    }
     this.githubClientFactory =
       options.githubClientFactory ?? ((token) => new GitHubClient(token, this.logger));
     this.persistGitHubToken = options.persistGitHubToken;
+    this.onGitHubTokenConnected = options.onGitHubTokenConnected;
     this.agentAuth = {
       codex: options.agentAuth?.codex ?? new AgentAuthManager('codex', this.logger),
       claude: options.agentAuth?.claude ?? new AgentAuthManager('claude', this.logger),
@@ -232,6 +260,9 @@ export class WebConsole {
       body: {
         hasToken: Boolean(this.githubToken),
         connected: Boolean(this.githubConnection),
+        tokenSource: this.githubTokenSource,
+        createTokenUrl: GITHUB_TOKEN_CREATE_URL,
+        requiredPermissions: GITHUB_TOKEN_PERMISSIONS,
         user: this.githubConnection?.user,
         repositoryCount: this.githubConnection?.repositories.length ?? 0,
       },
@@ -242,15 +273,27 @@ export class WebConsole {
       try {
         const payload = parseJson<{ token?: string }>(body);
         const submittedToken = payload.token?.trim();
+        if (submittedToken && this.githubTokenSource === 'environment') {
+          throw new Error(
+            'GitHub Token 由 AGENT_GITHUB_TOKEN 环境变量管理，请更新环境变量并重启服务',
+          );
+        }
         const token = submittedToken || this.githubToken;
         validateGitHubToken(token);
         const connection = await inspectGitHubAccount(this.githubClientFactory(token!));
         if (submittedToken) {
           this.persistGitHubToken?.(token);
+          this.githubTokenSource = 'file';
         }
         this.githubToken = token;
         this.githubConnection = connection;
-        return { status: 200, body: connection, headers: API_HEADERS };
+        this.taskManager.setSecrets({ githubToken: token });
+        this.onGitHubTokenConnected?.(token);
+        return {
+          status: 200,
+          body: { ...connection, tokenSource: this.githubTokenSource },
+          headers: API_HEADERS,
+        };
       } catch (error) {
         return githubErrorResponse(error);
       }

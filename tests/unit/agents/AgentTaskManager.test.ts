@@ -116,6 +116,7 @@ describe('AgentTaskManager', () => {
   it('有改动且获授权时应提交、推送并创建 Pull Request', async () => {
     gitStatusOutput = ' M README.md\n';
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    manager.setSecrets({ githubToken: 'github_pat_task-secret' });
     const created = manager.create({
       provider: 'claude',
       repository: 'https://github.com/acme/repo',
@@ -127,9 +128,33 @@ describe('AgentTaskManager', () => {
     expect(manager.get(created.id)?.pullRequestUrl).toBe('https://github.com/acme/repo/pull/42');
     expect(spawnMock).toHaveBeenCalledWith(
       'git',
-      ['push', '-u', 'origin', expect.stringMatching(/^cpx\/task-/)],
-      expect.any(Object),
+      ['clone', '--depth', '1', 'https://github.com/acme/repo.git', expect.any(String)],
+      expect.objectContaining({
+        env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
+      }),
     );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['push', '-u', 'origin', expect.stringMatching(/^cpx\/task-/)],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GH_TOKEN: 'github_pat_task-secret',
+          CPX_GITHUB_TOKEN: 'github_pat_task-secret',
+          GIT_TERMINAL_PROMPT: '0',
+          GIT_CONFIG_KEY_0: 'credential.helper',
+          GIT_CONFIG_VALUE_0: '',
+          GIT_ASKPASS: expect.stringContaining('.github-askpass'),
+        }),
+      }),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'create', '--fill', '--head', expect.stringMatching(/^cpx\/task-/)],
+      expect.objectContaining({
+        env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
+      }),
+    );
+    expect(JSON.stringify(manager.get(created.id)?.logs)).not.toContain('github_pat_task-secret');
     await manager.stop();
   });
 

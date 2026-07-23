@@ -202,12 +202,35 @@
               <div class="github-account" id="github-account">
                 <div class="github-avatar" aria-hidden="true">GH</div>
                 <div>
-                  <strong>等待验证 Token</strong>
-                  <small>连接后显示 GitHub 用户身份</small>
+                  <strong>尚未连接 GitHub</strong>
+                  <small>创建或填写 Token 后显示 GitHub 身份</small>
                 </div>
               </div>
 
-              <form id="github-form">
+              <div class="github-token-setup" id="github-token-setup">
+                <strong>还没有可用的 GitHub Token？</strong>
+                <p>创建一个只允许 cpx 访问指定仓库的 fine-grained Token。</p>
+                <div class="github-token-actions">
+                  <a
+                    class="save-button"
+                    id="github-create-token"
+                    href="https://github.com/settings/personal-access-tokens/new?name=cpx&amp;description=Used+by+cpx+to+modify+code+and+create+pull+requests&amp;expires_in=90&amp;contents=write&amp;pull_requests=write&amp;workflows=write"
+                    target="_blank"
+                    rel="noreferrer"
+                    >创建 GitHub Token ↗</a
+                  >
+                  <button class="secondary-button" id="github-existing-token" type="button">
+                    我已有 Token
+                  </button>
+                </div>
+                <ol class="github-token-steps" id="github-token-steps" hidden>
+                  <li><span>1</span>在 GitHub 选择资源所有者和需要授权的仓库</li>
+                  <li><span>2</span>确认预填权限并生成 Token</li>
+                  <li><span>3</span>复制 Token，返回这里粘贴并验证</li>
+                </ol>
+              </div>
+
+              <form id="github-form" hidden>
                 <label class="field">
                   <span>Personal Access Token</span>
                   <input
@@ -227,7 +250,10 @@
 
               <div class="security-note github-scope-note">
                 <strong>权限说明</strong>
-                <p>仓库范围由 Token 权限决定。Fine-grained Token 只会返回授权给它的仓库。</p>
+                <p>
+                  默认申请 Contents、Pull requests 和 Workflows 写权限；可在 GitHub
+                  生成页面缩小仓库范围或取消不需要的权限。
+                </p>
               </div>
             </article>
 

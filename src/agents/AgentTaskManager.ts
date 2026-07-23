@@ -1,5 +1,5 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
-import { mkdirSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
@@ -87,6 +87,7 @@ export interface AgentTask {
 export interface AgentRuntimeSecrets {
   openaiApiKey?: string;
   anthropicApiKey?: string;
+  githubToken?: string;
 }
 
 const MAX_LOG_ENTRIES = 800;
@@ -104,6 +105,7 @@ export class AgentTaskManager {
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
   private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
+  private gitAskPassPath?: string;
   private stopped = false;
 
   constructor(workspaceRoot: string, logger: Logger) {
@@ -236,7 +238,15 @@ export class AgentTaskManager {
         cloneArgs.push('--branch', task.baseBranch);
       }
       cloneArgs.push(task.repository, workspace);
-      await this.runProcess(task, 'git', cloneArgs, this.workspaceRoot);
+      await this.runProcess(
+        task,
+        'git',
+        cloneArgs,
+        this.workspaceRoot,
+        undefined,
+        false,
+        this.githubEnvironment(),
+      );
       this.assertNotCancelled(task);
 
       const branch = `cpx/task-${task.id.slice(0, 8)}`;
@@ -415,18 +425,82 @@ export class AgentTaskManager {
       ],
       workspace,
     );
-    await this.runProcess(task, 'git', ['push', '-u', 'origin', task.agentBranch!], workspace);
+    const githubEnvironment = this.githubEnvironment();
+    await this.runProcess(
+      task,
+      'git',
+      ['push', '-u', 'origin', task.agentBranch!],
+      workspace,
+      undefined,
+      false,
+      githubEnvironment,
+    );
     const pr = await this.runProcess(
       task,
       'gh',
       ['pr', 'create', '--fill', '--head', task.agentBranch!],
       workspace,
+      undefined,
+      false,
+      githubEnvironment,
     );
     const url = pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (!url) {
       throw new Error('gh 已执行，但没有返回 Pull Request URL');
     }
     task.pullRequestUrl = url;
+  }
+
+  /**
+   * 仅向需要访问 GitHub 的 git/gh 子进程注入凭据。
+   * Token 由 askpass 脚本从环境变量读取，不会出现在 Git URL、命令参数或任务日志中。
+   */
+  private githubEnvironment(): NodeJS.ProcessEnv {
+    const token =
+      this.secrets.githubToken?.trim() ||
+      process.env.GH_TOKEN?.trim() ||
+      process.env.AGENT_GITHUB_TOKEN?.trim();
+    if (!token) return process.env;
+
+    return {
+      ...process.env,
+      GH_TOKEN: token,
+      CPX_GITHUB_TOKEN: token,
+      GIT_ASKPASS: this.ensureGitAskPass(),
+      GIT_ASKPASS_REQUIRE: 'force',
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'credential.helper',
+      GIT_CONFIG_VALUE_0: '',
+      GIT_TERMINAL_PROMPT: '0',
+    };
+  }
+
+  private ensureGitAskPass(): string {
+    if (this.gitAskPassPath) return this.gitAskPassPath;
+
+    const windows = process.platform === 'win32';
+    const path = join(this.workspaceRoot, windows ? '.github-askpass.cmd' : '.github-askpass.sh');
+    if (!existsSync(path)) {
+      const content = windows
+        ? [
+            '@echo off',
+            'echo %~1 | findstr /I "username" >nul',
+            'if not errorlevel 1 (echo x-access-token) else (echo %CPX_GITHUB_TOKEN%)',
+            '',
+          ].join('\r\n')
+        : [
+            '#!/bin/sh',
+            'case "$1" in',
+            '  *Username*|*username*) printf "%s\\n" "x-access-token" ;;',
+            '  *) printf "%s\\n" "$CPX_GITHUB_TOKEN" ;;',
+            'esac',
+            '',
+          ].join('\n');
+      writeFileSync(path, content, { encoding: 'utf8', mode: 0o700 });
+      if (!windows) chmodSync(path, 0o700);
+    }
+    this.gitAskPassPath = path;
+    return path;
   }
 
   private runProcess(

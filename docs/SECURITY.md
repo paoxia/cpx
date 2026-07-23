@@ -65,6 +65,8 @@ Skill 通过 `npm install` 安装并在主 Node.js 进程中使用 `require` 加
 ### 外部连接
 
 - GitHub Token 应使用满足任务所需的最小权限，并限制到必要仓库。
+- GitHub 页生成的是外部 PAT 创建链接，Token 必须由用户从 GitHub 手工复制回填；服务不会接收 GitHub 账号密码或 OAuth refresh token。
+- 验证成功的 GitHub Token 以明文保存在 `config/config.yaml`（环境变量来源除外），应限制配置目录读取权限。HTTPS Git 子进程通过环境变量和不含 Token 的 askpass helper 鉴权，不得把 Token 拼入远端 URL 或记录到任务日志。
 - stdio MCP 可以启动本地进程，配置文件本身应视为可执行权限。
 - WebSocket 与 HTTP MCP 地址应指向可信服务，生产环境使用加密传输。
 - 日志与错误信息不得包含 Token、Webhook 密钥或完整敏感负载。
