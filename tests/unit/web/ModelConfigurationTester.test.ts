@@ -29,7 +29,9 @@ describe('ModelConfigurationTester', () => {
     const resultPromise = tester.test({
       provider: 'codex',
       model: 'gpt-test',
+      baseUrl: 'https://gateway.example.com/v1',
       apiKey: 'secret-test-key',
+      prompt: '请回复：测试成功',
     });
     child.stdout.write('{"type":"message","text":"CPX_MODEL_OK"}\n');
     child.emit('close', 0);
@@ -38,28 +40,62 @@ describe('ModelConfigurationTester', () => {
       success: true,
       provider: 'codex',
       model: 'gpt-test',
+      response: 'CPX_MODEL_OK',
     });
     expect(spawnMock).toHaveBeenCalledWith(
       'codex',
-      expect.arrayContaining(['--model', 'gpt-test']),
+      expect.arrayContaining([
+        '--model',
+        'gpt-test',
+        '--config',
+        'openai_base_url="https://gateway.example.com/v1"',
+      ]),
       expect.objectContaining({
         cwd: process.cwd(),
         env: expect.objectContaining({ CODEX_API_KEY: 'secret-test-key' }),
         windowsHide: true,
       }),
     );
-    expect(child.stdin.read()?.toString()).toContain('CPX_MODEL_OK');
+    expect(child.stdin.read()?.toString()).toContain('请回复：测试成功');
+  });
+
+  it('应从 Claude JSONL 结果中提取回复并限制密钥泄露', async () => {
+    const child = fakeProcess();
+    const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
+    const tester = new ModelConfigurationTester(process.cwd(), new Logger('error'), spawnMock);
+
+    const resultPromise = tester.test({
+      provider: 'claude',
+      apiKey: 'secret-value',
+      prompt: '你好',
+    });
+    child.stdout.write(
+      `${JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: '中间回复' }] },
+      })}\n`,
+    );
+    child.stdout.write(`${JSON.stringify({ type: 'result', result: '最终回复 secret-value' })}\n`);
+    child.emit('close', 0);
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({
+      success: true,
+      provider: 'claude',
+      response: '最终回复 [REDACTED]',
+    });
   });
 
   it('鉴权失败时应返回可展示结果且不泄露密钥', async () => {
     const child = fakeProcess();
-    const tester = new ModelConfigurationTester(
-      process.cwd(),
-      new Logger('error'),
-      vi.fn(() => child) as unknown as typeof spawn,
-    );
+    const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
+    const tester = new ModelConfigurationTester(process.cwd(), new Logger('error'), spawnMock);
 
-    const resultPromise = tester.test({ provider: 'claude', apiKey: 'secret-value' });
+    const resultPromise = tester.test({
+      provider: 'claude',
+      baseUrl: 'https://gateway.example.com',
+      apiKey: 'secret-value',
+    });
     child.stderr.write('401 unauthorized: secret-value\n');
     child.emit('close', 1);
 
@@ -67,5 +103,15 @@ describe('ModelConfigurationTester', () => {
     expect(result).toMatchObject({ success: false, provider: 'claude' });
     expect(result.message).toContain('鉴权失败');
     expect(result.message).not.toContain('secret-value');
+    expect(spawnMock).toHaveBeenCalledWith(
+      'claude',
+      expect.any(Array),
+      expect.objectContaining({
+        env: expect.objectContaining({
+          ANTHROPIC_BASE_URL: 'https://gateway.example.com',
+          ANTHROPIC_AUTH_TOKEN: 'secret-value',
+        }),
+      }),
+    );
   });
 });

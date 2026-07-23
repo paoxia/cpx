@@ -67,11 +67,10 @@ describe('WebConsole', () => {
     const getSettings = server.handler('GET', '/api/console/settings');
     const updateSettings = server.handler('POST', '/api/console/settings');
     expect((await getSettings(Buffer.alloc(0), {}, {})).body).toMatchObject({
-      version: 2,
+      version: 3,
       modelConfigs: [
         { provider: 'codex', model: '' },
         { provider: 'claude', model: 'sonnet' },
-        { provider: 'codebuddy', model: '' },
       ],
     });
 
@@ -83,6 +82,7 @@ describe('WebConsole', () => {
               id: 'claude-opus',
               provider: 'claude',
               model: 'opus',
+              baseUrl: 'https://gateway.example.com/',
               apiKey: 'secret-claude',
             },
             { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex' },
@@ -94,9 +94,15 @@ describe('WebConsole', () => {
     );
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      version: 2,
+      version: 3,
       modelConfigs: [
-        { id: 'claude-opus', provider: 'claude', model: 'opus', hasApiKey: true },
+        {
+          id: 'claude-opus',
+          provider: 'claude',
+          model: 'opus',
+          baseUrl: 'https://gateway.example.com',
+          hasApiKey: true,
+        },
         { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex', hasApiKey: false },
       ],
     });
@@ -109,7 +115,7 @@ describe('WebConsole', () => {
       version: number;
       modelConfigs: Array<{ id: string; apiKey?: string }>;
     };
-    expect(stored.version).toBe(2);
+    expect(stored.version).toBe(3);
     expect(stored.modelConfigs.map((configuration) => configuration.id)).toEqual([
       'claude-opus',
       'codex-main',
@@ -128,6 +134,7 @@ describe('WebConsole', () => {
           provider: configuration.provider,
           model: configuration.model,
           message: 'Claude Code 已成功响应，模型配置可用。',
+          response: '你好，我是 Claude。',
           durationMs: 123,
         };
       },
@@ -143,7 +150,13 @@ describe('WebConsole', () => {
       Buffer.from(
         JSON.stringify({
           modelConfigs: [
-            { id: 'claude-sonnet', provider: 'claude', model: 'sonnet', apiKey: 'secret-key' },
+            {
+              id: 'claude-sonnet',
+              provider: 'claude',
+              model: 'sonnet',
+              baseUrl: 'https://gateway.example.com',
+              apiKey: 'secret-key',
+            },
           ],
         }),
       ),
@@ -152,17 +165,39 @@ describe('WebConsole', () => {
     );
 
     const response = await server.handler('POST', '/api/console/model-test')(
-      Buffer.from(JSON.stringify({ id: 'claude-sonnet', provider: 'claude', model: 'sonnet' })),
+      Buffer.from(
+        JSON.stringify({
+          id: 'claude-sonnet',
+          provider: 'claude',
+          model: 'sonnet',
+          baseUrl: 'https://gateway.example.com',
+          prompt: '请介绍一下自己',
+        }),
+      ),
       {},
       {},
     );
 
     expect(response).toMatchObject({
       status: 200,
-      body: { success: true, provider: 'claude', model: 'sonnet', durationMs: 123 },
+      body: {
+        success: true,
+        provider: 'claude',
+        model: 'sonnet',
+        response: '你好，我是 Claude。',
+        durationMs: 123,
+      },
       headers: { 'Cache-Control': 'no-store' },
     });
-    expect(tested).toEqual([{ provider: 'claude', model: 'sonnet', apiKey: 'secret-key' }]);
+    expect(tested).toEqual([
+      {
+        provider: 'claude',
+        model: 'sonnet',
+        baseUrl: 'https://gateway.example.com',
+        apiKey: 'secret-key',
+        prompt: '请介绍一下自己',
+      },
+    ]);
     expect(JSON.stringify(response.body)).not.toContain('secret-key');
   });
 
@@ -272,6 +307,23 @@ describe('WebConsole', () => {
       {},
     );
     expect(duplicate).toMatchObject({ status: 400 });
+
+    const unsafeBaseUrl = await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [
+            {
+              id: 'unsafe',
+              provider: 'claude',
+              baseUrl: 'https://user:password@gateway.example.com/v1#secret',
+            },
+          ],
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(unsafeBaseUrl).toMatchObject({ status: 400 });
   });
 
   it('更新配置留空时应保留原密钥，显式清除时应删除', async () => {
@@ -279,7 +331,9 @@ describe('WebConsole', () => {
     await updateSettings(
       Buffer.from(
         JSON.stringify({
-          modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-pro', apiKey: 'secret-cb' }],
+          modelConfigs: [
+            { id: 'claude', provider: 'claude', model: 'opus', apiKey: 'secret-claude' },
+          ],
         }),
       ),
       {},
@@ -287,29 +341,33 @@ describe('WebConsole', () => {
     );
     const retained = await updateSettings(
       Buffer.from(
-        JSON.stringify({ modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-next' }] }),
-      ),
-      {},
-      {},
-    );
-    expect(retained.body).toMatchObject({
-      modelConfigs: [{ id: 'cb', model: 'cb-next', hasApiKey: true }],
-    });
-
-    const settingsPath = join(TMP_DIR, 'console-settings.json');
-    expect(readFileSync(settingsPath, 'utf8')).toContain('secret-cb');
-
-    const cleared = await updateSettings(
-      Buffer.from(
         JSON.stringify({
-          modelConfigs: [{ id: 'cb', provider: 'codebuddy', model: 'cb-next', clearApiKey: true }],
+          modelConfigs: [{ id: 'claude', provider: 'claude', model: 'sonnet' }],
         }),
       ),
       {},
       {},
     );
-    expect(cleared.body).toMatchObject({ modelConfigs: [{ id: 'cb', hasApiKey: false }] });
-    expect(readFileSync(settingsPath, 'utf8')).not.toContain('secret-cb');
+    expect(retained.body).toMatchObject({
+      modelConfigs: [{ id: 'claude', model: 'sonnet', hasApiKey: true }],
+    });
+
+    const settingsPath = join(TMP_DIR, 'console-settings.json');
+    expect(readFileSync(settingsPath, 'utf8')).toContain('secret-claude');
+
+    const cleared = await updateSettings(
+      Buffer.from(
+        JSON.stringify({
+          modelConfigs: [{ id: 'claude', provider: 'claude', model: 'sonnet', clearApiKey: true }],
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(cleared.body).toMatchObject({
+      modelConfigs: [{ id: 'claude', hasApiKey: false }],
+    });
+    expect(readFileSync(settingsPath, 'utf8')).not.toContain('secret-claude');
   });
 
   it('关联项切换 Agent 时不应沿用原 Agent 的已存密钥', async () => {
@@ -363,14 +421,13 @@ describe('WebConsole', () => {
 
     const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
     expect(response.body).toMatchObject({
-      version: 2,
+      version: 3,
       modelConfigs: [
         { provider: 'claude', model: 'opus' },
         { provider: 'codex', model: 'gpt-5.1-codex' },
-        { provider: 'codebuddy', model: 'cb-pro' },
       ],
     });
-    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 2');
+    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 3');
   });
 
   it('应验证 GitHub Token、分页读取全部仓库并在成功后持久化', async () => {

@@ -45,17 +45,17 @@ curl -X POST http://localhost:3000/command \
 
 浏览器访问 `http://localhost:3000/` 可打开 AI 开发控制台。运行控制台任务还需要：
 
-- 本机已安装并登录 `codex`、`claude` 或 `codebuddy` CLI，或已通过服务环境变量提供对应 API Key。
+- 本机已安装 `codex` 和/或 `claude` CLI，并已完成 CLI 登录、配置服务环境变量 API Key，或在模型设置中保存对应 API Key。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
 - 若勾选“创建 Pull Request”，还需安装并登录 GitHub CLI（`gh`），并具备推送分支和创建 PR 的权限。
 
 控制台的 GitHub 页签可输入 Personal Access Token，验证当前 GitHub 身份并读取该 Token 可访问的全部个人、协作及组织仓库。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。受限的 fine-grained Token 只会显示明确授权的仓库。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
 
-“模型设置”是只管理 Agent 关联模型与执行顺序的独立页面。每条配置只编辑 Agent 和模型名，支持新增、删除及上下调整；页面不显示或修改账号凭据。点击“测试模型”会打开独立弹窗，可从当前关联模型中选择一项，通过对应 CLI 发起最小模型调用并查看终端式结果，以验证 CLI、模型名、密钥或登录状态；测试页面尚未保存的关联关系时不会将其写盘。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。旧版配置或设置 API 已保存的独立 API Key 会继续保留和使用，但不会在模型页面显示。
+“模型设置”管理 Codex 和 Claude Code 的有序执行配置。每条配置可独立设置 Agent、模型名、可选 Base URL 和可选 API Key，并支持新增、删除及上下调整；同一 Agent 可配置多次，用于组合不同模型或网关。已保存的密钥不会回显，只展示来源和配置状态；新密钥会以明文写入本机 `console-settings.json`，应限制该文件的读取权限。点击“测试模型”可选择关联项、输入最多 4000 字的测试内容，并在终端区域查看 Agent 的实际文本回复；尚未保存的 Base URL 或密钥只用于本次测试，不会被测试接口持久化。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。
 
 ### 在远程服务器连接 Codex / Claude Code
 
-模型管理页不管理 CLI 账号。请在运行 cpx 的同一系统用户终端中执行 `codex login --device-auth`，然后按终端显示的验证地址和一次性设备码完成登录：
+如果不在模型配置中保存 API Key，也可以使用官方 CLI 登录。请在运行 cpx 的同一系统用户终端中执行 `codex login --device-auth`，然后按终端显示的验证地址和一次性设备码完成登录：
 
 1. 在任意可信浏览器打开验证地址。
 2. 登录拥有 Codex 权限的 ChatGPT 账号并输入设备码。
@@ -67,10 +67,10 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 三端均可运行，但 cpx 服务必须与完成登录的 CLI 使用同一系统用户：
 
-| 平台 | 支持方式 | 注意事项 |
-| ---- | -------- | -------- |
-| Linux | 原生 Node.js / Docker | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex` 和 `/root/.claude`。 |
-| macOS | 原生 Node.js | Codex 可使用系统钥匙串或 `~/.codex`；Claude Code OAuth 凭据可能存入 macOS Keychain，因此后台服务需以完成授权的登录用户运行并具备钥匙串访问权。 |
+| 平台    | 支持方式                | 注意事项                                                                                                                                                            |
+| ------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Linux   | 原生 Node.js / Docker   | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex` 和 `/root/.claude`。                                                                        |
+| macOS   | 原生 Node.js            | Codex 可使用系统钥匙串或 `~/.codex`；Claude Code OAuth 凭据可能存入 macOS Keychain，因此后台服务需以完成授权的登录用户运行并具备钥匙串访问权。                      |
 | Windows | 原生 PowerShell，或 WSL | cpx 会通过 shell 解析 npm 的 `.cmd` 包装脚本。Claude Code 原生 Windows 还需要 Git for Windows；也可把整套 cpx 部署在 WSL 中，避免混用 Windows 与 WSL 的 HOME/凭据。 |
 
 不要在一个系统用户下授权、再让另一个服务账户运行 cpx，否则状态检查会显示未登录。
@@ -87,7 +87,7 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 1. 开发机执行 `scripts/docker-build.sh` 生成 `cpx-latest.tar.gz`
 2. 把 `cpx-latest.tar.gz`、`docker-compose.yml`、`.docker.env.example`、`scripts/docker-deploy.sh` 传到极空间
-3. NAS 上执行 `./docker-deploy.sh`，按提示编辑 `.docker.env` 填入 API Key
+3. NAS 上执行 `./docker-deploy.sh`，按提示编辑 `.docker.env`；Agent API Key 也可在启动后的模型设置中填写
 4. 手机浏览器访问 `http://<NAS-IP>:3000`
 
 ## CLI 命令
@@ -236,26 +236,28 @@ AGENT_LOGGING_LEVEL=info
 AGENT_STORAGE_PATH=./data/agent.db
 ```
 
+Coding Agent 密钥沿用 CLI 的原生环境变量：Codex 使用 `CODEX_API_KEY`，Claude Code 使用 `ANTHROPIC_API_KEY`。它们也可以在每条模型配置中单独保存；自定义 Base URL 仅在模型设置中逐项配置。
+
 ## HTTP API
 
 ### GET /
 
 返回 AI 开发控制台。控制台使用以下 API：
 
-| 端点                                             | 说明                                        |
-| ------------------------------------------------ | ------------------------------------------- |
-| `GET/POST /api/console/settings`                 | 读取或更新有序模型配置及本地持久化密钥      |
-| `POST /api/console/model-test`                   | 用当前或已保存的单条配置发起最小模型测试    |
-| `GET /api/console/agent-auth?provider=...`        | 检查 Codex 或 Claude Code CLI 登录状态      |
-| `POST /api/console/agent-auth/login`              | 启动指定 Agent 的官方 CLI 登录              |
-| `POST /api/console/agent-auth/input`              | 向等待中的 CLI 提交 callback 地址或授权码   |
-| `POST /api/console/agent-auth/cancel`             | 取消指定 Agent 的进行中登录                 |
-| `GET /api/console/github`                        | 读取 GitHub Token 与连接状态                |
-| `POST /api/console/github/connect`               | 验证 GitHub Token，成功后写入配置并读取仓库 |
-| `GET /api/console/github/repositories`           | 使用已配置 Token 刷新全部可访问仓库         |
-| `GET/POST /api/console/tasks`                    | 列出任务或创建任务                          |
-| `GET /api/console/task?id=<id>`                  | 读取单个任务及日志                          |
-| `POST /api/console/cancel`                       | 取消未结束任务                              |
+| 端点                                       | 说明                                           |
+| ------------------------------------------ | ---------------------------------------------- |
+| `GET/POST /api/console/settings`           | 读取或更新有序模型、Base URL 及本地持久化密钥  |
+| `POST /api/console/model-test`             | 向当前或已保存的单条配置发送内容并返回文本回复 |
+| `GET /api/console/agent-auth?provider=...` | 检查 Codex 或 Claude Code CLI 登录状态         |
+| `POST /api/console/agent-auth/login`       | 启动指定 Agent 的官方 CLI 登录                 |
+| `POST /api/console/agent-auth/input`       | 向等待中的 CLI 提交 callback 地址或授权码      |
+| `POST /api/console/agent-auth/cancel`      | 取消指定 Agent 的进行中登录                    |
+| `GET /api/console/github`                  | 读取 GitHub Token 与连接状态                   |
+| `POST /api/console/github/connect`         | 验证 GitHub Token，成功后写入配置并读取仓库    |
+| `GET /api/console/github/repositories`     | 使用已配置 Token 刷新全部可访问仓库            |
+| `GET/POST /api/console/tasks`              | 列出任务或创建任务                             |
+| `GET /api/console/task?id=<id>`            | 读取单个任务及日志                             |
+| `POST /api/console/cancel`                 | 取消未结束任务                                 |
 
 仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。
 

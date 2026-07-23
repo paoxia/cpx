@@ -20,13 +20,13 @@
 - 已安装 Docker（用于构建镜像）
 - 已 `git clone` cpx 仓库到本地
 
-### 必备密钥
+### 必备凭据
 
 - **GitHub Personal Access Token**：需要 `repo` 和 `workflow` 权限，用于 `git clone` 私有仓库、`git push`、`gh pr create`
-- **OpenAI API Key**：使用 Codex 时必需
-- **Anthropic API Key**：使用 Claude Code 时必需
+- **Codex 凭据**：使用官方 CLI 登录，或通过环境变量/模型设置提供 API Key
+- **Claude Code 凭据**：使用官方 CLI 登录，或通过环境变量/模型设置提供 API Key
 
-至少配置一个 Agent API Key 才能下发任务；两个都配置则两种 Agent 都可用。
+至少为一个 Agent 完成 CLI 登录或配置 API Key 才能下发任务；需要使用自定义网关时，在 Web 控制台的对应模型项中同时填写 Base URL 和密钥。
 
 ## 部署流程
 
@@ -76,14 +76,14 @@ chmod +x docker-deploy.sh
 1. `docker load` 加载镜像
 2. 创建工作目录（`data/`、`config/`、`logs/`）
 3. 从 `.docker.env.example` 复制出 `.docker.env` 并设置 `600` 权限
-4. **提示用户编辑 `.docker.env` 填入 API Key 后再次运行脚本**
+4. **提示用户编辑 `.docker.env` 后再次运行脚本**；Agent API Key 也可在容器启动后的模型设置中填写
 
 ### 4. 配置环境变量
 
 编辑 `/tmp/cpx/.docker.env`，按需填入：
 
 ```bash
-# 至少配一个 Agent API Key
+# Agent API Key（可选，也可在模型设置中逐项填写或使用 CLI 登录）
 CODEX_API_KEY=sk-...
 ANTHROPIC_API_KEY=sk-ant-...
 
@@ -208,16 +208,16 @@ docker compose logs --tail=100  # 最近 100 行
 
 ## 排障
 
-| 现象 | 排查 |
-| --- | --- |
-| 容器启动后立即退出 | `docker compose logs` 查看错误；通常是 `.docker.env` 缺失必填字段 |
-| 健康检查不通过 | `docker inspect cpx --format='{{.State.Health.Status}}'`；容器内 `curl http://127.0.0.1:3000/api/console/settings` 测试 |
-| Agent 任务失败：`git clone` 报权限错 | 检查 `GH_TOKEN` 是否有效且有 `repo` 权限；私有仓库必须用 HTTPS + Token 或 SSH Key |
-| Agent 任务失败：`gh pr create` 报未登录 | `gh` 使用 `GH_TOKEN` 环境变量鉴权，确认 `.docker.env` 中已设置 |
-| 钉钉/飞书机器人无响应 | NAS 必须可被钉钉/飞书服务器回调到 3000 端口；内网部署需通过反向代理暴露 |
-| `codex` 或 `claude` 报 401 | 对应的 `CODEX_API_KEY` / `ANTHROPIC_API_KEY` 缺失或无效，或官方 CLI 登录已失效 |
-| Codex 页面显示未连接 | 在“模型设置”重新执行设备码登录；检查 `./data/codex` 是否可由容器 root 用户写入 |
-| `better-sqlite3` 加载失败 | 通常是架构不匹配，确认镜像架构与 NAS 架构一致（`docker inspect cpx --format='{{.Architecture}}'`） |
+| 现象                                    | 排查                                                                                                                    |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 容器启动后立即退出                      | `docker compose logs` 查看错误；通常是 `.docker.env` 缺失必填字段                                                       |
+| 健康检查不通过                          | `docker inspect cpx --format='{{.State.Health.Status}}'`；容器内 `curl http://127.0.0.1:3000/api/console/settings` 测试 |
+| Agent 任务失败：`git clone` 报权限错    | 检查 `GH_TOKEN` 是否有效且有 `repo` 权限；私有仓库必须用 HTTPS + Token 或 SSH Key                                       |
+| Agent 任务失败：`gh pr create` 报未登录 | `gh` 使用 `GH_TOKEN` 环境变量鉴权，确认 `.docker.env` 中已设置                                                          |
+| 钉钉/飞书机器人无响应                   | NAS 必须可被钉钉/飞书服务器回调到 3000 端口；内网部署需通过反向代理暴露                                                 |
+| `codex` 或 `claude` 报 401              | 检查该模型项保存的 API Key、服务环境变量、Base URL 和官方 CLI 登录状态；Claude 网关配置会使用 `ANTHROPIC_AUTH_TOKEN`    |
+| Codex 页面显示未连接                    | 在“模型设置”重新执行设备码登录；检查 `./data/codex` 是否可由容器 root 用户写入                                          |
+| `better-sqlite3` 加载失败               | 通常是架构不匹配，确认镜像架构与 NAS 架构一致（`docker inspect cpx --format='{{.Architecture}}'`）                      |
 
 ## 安全注意事项
 

@@ -296,7 +296,7 @@
                   <span class="step-index">01</span>
                   <h2>关联模型 <em id="model-config-count">0</em></h2>
                 </div>
-                <p>只维护 Agent 与模型的关联关系；从上到下依次执行。</p>
+                <p>配置 Agent、模型、Base URL 与密钥；从上到下依次执行。</p>
               </div>
 
               <form id="model-settings-form">
@@ -318,16 +318,17 @@
                 <li><strong>顺序回退</strong><span>仅在额度耗尽或鉴权失败时继续下一条。</span></li>
                 <li>
                   <strong>运行凭据</strong
-                  ><span>模型页不管理账号凭据，执行时复用环境变量、CLI 登录或已有配置。</span>
+                  ><span>每条配置可保存独立 API Key，也可复用环境变量或 CLI 登录。</span>
                 </li>
                 <li>
                   <strong>配置测试</strong><span>调用对应模型验证密钥、登录和模型名是否可用。</span>
                 </li>
               </ol>
               <div class="security-note">
-                <strong>凭据与模型分离</strong>
+                <strong>中转服务兼容</strong>
                 <p>
-                  此页面不显示或修改 API Key。测试和任务会复用服务环境变量、CLI 登录或已有配置。
+                  Codex 使用 Responses API 地址；Claude 使用 Anthropic Messages
+                  网关。已保存的密钥不会回显，但会以明文写入本地设置文件，请限制文件访问权限。
                 </p>
               </div>
             </aside>
@@ -364,15 +365,26 @@
             <span>选择关联模型</span>
             <select id="model-test-select"></select>
           </label>
+          <label class="field">
+            <span>发送内容</span>
+            <textarea
+              id="model-test-prompt"
+              rows="4"
+              maxlength="4000"
+              placeholder="例如：请用一句话介绍你自己"
+              required
+            ></textarea>
+            <small>最多 4000 字；测试环境禁止使用工具和修改文件。</small>
+          </label>
           <div class="model-test-terminal" id="model-test-terminal" aria-live="polite">
-            <p class="muted">准备测试。选择模型后点击“开始测试”。</p>
+            <p class="muted">选择模型、输入内容后点击“发送并测试”。</p>
           </div>
-          <p class="model-test-cost-note">测试会通过对应 CLI 发起一次最小真实模型调用。</p>
+          <p class="model-test-cost-note">每次测试都会通过对应 CLI 发起一次真实模型调用。</p>
         </div>
 
         <footer class="model-test-dialog-footer">
           <button class="secondary-button" id="cancel-model-test" type="button">关闭</button>
-          <button class="save-button" id="start-model-test" type="button">开始测试</button>
+          <button class="save-button" id="start-model-test" type="button">发送并测试</button>
         </footer>
       </section>
     </div>

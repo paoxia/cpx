@@ -1162,6 +1162,29 @@ select:focus-visible {
   align-content: start;
 }
 
+.model-api-key-input {
+  display: flex;
+  gap: 7px;
+}
+
+.model-api-key-input input {
+  min-width: 0;
+}
+
+.model-api-key-input button {
+  flex: 0 0 auto;
+  padding: 0 10px;
+  color: var(--danger);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 9px;
+}
+
+.model-api-key-input button:hover {
+  border-color: var(--line-strong);
+}
+
 .model-config-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(32px, auto));
@@ -1383,6 +1406,14 @@ select:focus-visible {
 
 .model-test-terminal .success {
   color: var(--success);
+}
+
+.model-test-terminal .response {
+  margin-top: 8px;
+  padding: 12px;
+  color: #f1f3f5;
+  border-left: 2px solid var(--accent);
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .model-test-terminal .error {
@@ -1856,7 +1887,8 @@ select:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .model-key-field {
+  .model-base-url-field,
+  .model-api-key-field {
     grid-column: 1 / -1;
   }
 
@@ -1975,7 +2007,8 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .model-key-field {
+  .model-base-url-field,
+  .model-api-key-field {
     grid-column: auto;
   }
 

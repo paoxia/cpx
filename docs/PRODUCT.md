@@ -40,7 +40,7 @@ cpx（Agent System）是面向开发者和小型技术团队的自托管自动�
 
 ## 当前范围
 
-当前产品包括 CLI 生命周期管理、HTTP 服务、钉钉与飞书 Webhook、GitHub 文件/PR 流程、Skill 执行、MCP 连接、权限确认、审计日志、SQLite 状态存储，以及面向本机 Codex、Claude Code 和 CodeBuddy CLI 的 Web 开发控制台。
+当前产品包括 CLI 生命周期管理、HTTP 服务、钉钉与飞书 Webhook、GitHub 文件/PR 流程、Skill 执行、MCP 连接、权限确认、审计日志、SQLite 状态存储，以及面向本机 Codex 和 Claude Code CLI 的 Web 开发控制台。
 
 远程 Agent 注册、持久化任务队列、Docker/Kubernetes 交付物以及企业身份与多租户能力不属于当前已实现范围。后续方向见 [路线图](plans/roadmap.md)。
 

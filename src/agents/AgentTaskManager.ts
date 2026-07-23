@@ -12,7 +12,7 @@ import {
   lastLine,
 } from './errorClassifier';
 
-export type CodingAgentProvider = 'codex' | 'claude' | 'codebuddy';
+export type CodingAgentProvider = 'codex' | 'claude';
 export type AgentTaskStatus =
   'queued' | 'preparing' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled';
 
@@ -20,6 +20,7 @@ export interface AgentModelConfiguration {
   id: string;
   provider: CodingAgentProvider;
   model?: string;
+  baseUrl?: string;
   apiKey?: string;
 }
 
@@ -86,7 +87,6 @@ export interface AgentTask {
 export interface AgentRuntimeSecrets {
   openaiApiKey?: string;
   anthropicApiKey?: string;
-  codebuddyApiKey?: string;
 }
 
 const MAX_LOG_ENTRIES = 800;
@@ -94,7 +94,7 @@ const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 
 /**
- * 为 Codex/Claude Code/CodeBuddy 准备隔离工作区并管理非交互任务生命周期。
+ * 为 Codex/Claude Code 准备隔离工作区并管理非交互任务生命周期。
  * 任务保存在内存中；工作区和 Git 历史保存在 workspaceRoot 下。
  */
 export class AgentTaskManager {
@@ -369,12 +369,9 @@ export class AgentTaskManager {
     const legacyApiKey = {
       codex: this.secrets.openaiApiKey,
       claude: this.secrets.anthropicApiKey,
-      codebuddy: this.secrets.codebuddyApiKey,
     }[provider];
-    if (configuredApiKey || legacyApiKey) {
-      env[adapter.apiKeyEnvVar] = configuredApiKey || legacyApiKey;
-    }
-    const args = adapter.buildArgs(configuration.model);
+    adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
+    const args = adapter.buildArgs(configuration.model, configuration.baseUrl);
     await this.runProcess(
       task,
       adapter.command,
@@ -615,7 +612,14 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
       if (apiKey && (apiKey.length > 4096 || /\s/.test(apiKey))) {
         throw new Error('API Key 格式无效');
       }
-      return { id, provider: configuration.provider, model, apiKey };
+      const baseUrl = normalizeBaseUrl(configuration.baseUrl);
+      return {
+        id,
+        provider: configuration.provider,
+        model,
+        ...(baseUrl ? { baseUrl } : {}),
+        apiKey,
+      };
     });
   }
 
@@ -629,6 +633,29 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
     provider,
     model,
   }));
+}
+
+function normalizeBaseUrl(input: string | undefined): string | undefined {
+  const value = input?.trim().replace(/\/+$/, '') || undefined;
+  if (!value) return undefined;
+  if (value.length > 2048) {
+    throw new Error('Base URL 不能超过 2048 个字符');
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('Base URL 必须是有效的 HTTP(S) 地址');
+  }
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error('Base URL 必须是无内嵌凭据和片段的 HTTP(S) 地址');
+  }
+  return value;
 }
 
 /**

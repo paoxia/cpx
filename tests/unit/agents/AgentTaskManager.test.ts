@@ -64,7 +64,7 @@ describe('AgentTaskManager', () => {
       if (command === 'gh') {
         return fakeProcess('https://github.com/acme/repo/pull/42\n');
       }
-      if (command === 'codex' || command === 'claude' || command === 'codebuddy') {
+      if (command === 'codex' || command === 'claude') {
         return fakeProcess('{"type":"result","result":"done"}\n', '', 0, holdAgent);
       }
       return fakeProcess();
@@ -164,33 +164,20 @@ describe('AgentTaskManager', () => {
         baseBranch: '../main',
       }),
     ).toThrow('基础分支名称无效');
-    expect(spawnMock).not.toHaveBeenCalled();
-  });
-
-  it('应使用 codebuddy 执行任务并注入 CODEBUDDY_API_KEY', async () => {
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
-    manager.setSecrets({ codebuddyApiKey: 'test-codebuddy-key' });
-
-    const created = manager.create({
-      provider: 'codebuddy',
-      repository: 'acme/repo',
-      prompt: '修复构建',
-    });
-
-    expect(created.status).toBe('queued');
-    await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'));
-
-    const task = manager.get(created.id)!;
-    expect(task.attempts).toHaveLength(1);
-    expect(task.attempts[0]).toMatchObject({ provider: 'codebuddy', status: 'success' });
-    expect(spawnMock).toHaveBeenCalledWith(
-      'codebuddy',
-      expect.arrayContaining(['-p', '-y', '--output-format', 'stream-json']),
-      expect.objectContaining({
-        env: expect.objectContaining({ CODEBUDDY_API_KEY: 'test-codebuddy-key' }),
+    expect(() =>
+      manager.create({
+        repository: 'acme/repo',
+        prompt: 'test',
+        configurations: [
+          {
+            id: 'unsafe-gateway',
+            provider: 'claude',
+            baseUrl: 'https://secret@example.com/v1#token',
+          },
+        ],
       }),
-    );
-    await manager.stop();
+    ).toThrow('Base URL');
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it('主 Agent rate_limit 时应切换到备选并成功', async () => {
@@ -245,8 +232,20 @@ describe('AgentTaskManager', () => {
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
       configurations: [
-        { id: 'codex-fast', provider: 'codex', model: 'gpt-fast', apiKey: 'key-fast' },
-        { id: 'codex-deep', provider: 'codex', model: 'gpt-deep', apiKey: 'key-deep' },
+        {
+          id: 'codex-fast',
+          provider: 'codex',
+          model: 'gpt-fast',
+          baseUrl: 'https://gateway.example.com/v1/',
+          apiKey: 'key-fast',
+        },
+        {
+          id: 'codex-deep',
+          provider: 'codex',
+          model: 'gpt-deep',
+          baseUrl: 'https://backup.example.com/v1',
+          apiKey: 'key-deep',
+        },
       ],
       repository: 'acme/repo',
       prompt: '修复构建',
@@ -254,8 +253,18 @@ describe('AgentTaskManager', () => {
 
     expect(JSON.stringify(created)).not.toContain('key-fast');
     expect(created.configurations).toEqual([
-      { id: 'codex-fast', provider: 'codex', model: 'gpt-fast' },
-      { id: 'codex-deep', provider: 'codex', model: 'gpt-deep' },
+      {
+        id: 'codex-fast',
+        provider: 'codex',
+        model: 'gpt-fast',
+        baseUrl: 'https://gateway.example.com/v1',
+      },
+      {
+        id: 'codex-deep',
+        provider: 'codex',
+        model: 'gpt-deep',
+        baseUrl: 'https://backup.example.com/v1',
+      },
     ]);
     await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'));
 
@@ -267,6 +276,9 @@ describe('AgentTaskManager', () => {
     const calls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
     expect(calls).toHaveLength(2);
     expect(calls[0][1]).toEqual(expect.arrayContaining(['--model', 'gpt-fast']));
+    expect(calls[0][1]).toEqual(
+      expect.arrayContaining(['--config', 'openai_base_url="https://gateway.example.com/v1"']),
+    );
     expect(calls[0][2]).toEqual(
       expect.objectContaining({ env: expect.objectContaining({ CODEX_API_KEY: 'key-fast' }) }),
     );
@@ -282,7 +294,7 @@ describe('AgentTaskManager', () => {
     spawnMock.mockImplementation((command: string, args: string[]) => {
       if (command === 'git' && args[0] === 'status') return fakeProcess(gitStatusOutput);
       if (command === 'git') return fakeProcess('');
-      if (command === 'codex' || command === 'claude' || command === 'codebuddy') {
+      if (command === 'codex' || command === 'claude') {
         return fakeProcess('', 'HTTP 429 too many requests\n', 1);
       }
       return fakeProcess();
@@ -290,18 +302,17 @@ describe('AgentTaskManager', () => {
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude', 'codebuddy'],
+      providers: ['codex', 'claude'],
       repository: 'acme/repo',
       prompt: '修复构建',
     });
 
     await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('failed'));
     const task = manager.get(created.id)!;
-    expect(task.attempts).toHaveLength(3);
+    expect(task.attempts).toHaveLength(2);
     expect(task.attempts.every((a) => a.errorKind === 'rate_limit')).toBe(true);
     expect(task.error).toContain('Codex');
     expect(task.error).toContain('Claude Code');
-    expect(task.error).toContain('CodeBuddy');
     await manager.stop();
   });
 

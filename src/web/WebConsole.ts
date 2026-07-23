@@ -22,11 +22,12 @@ interface StoredModelConfiguration {
   id: string;
   provider: CodingAgentProvider;
   model: string;
+  baseUrl?: string;
   apiKey?: string;
 }
 
 interface ConsoleSettings {
-  version: 2;
+  version: 3;
   modelConfigs: StoredModelConfiguration[];
 }
 
@@ -34,8 +35,10 @@ interface ModelConfigurationPayload {
   id?: string;
   provider?: CodingAgentProvider;
   model?: string;
+  baseUrl?: string;
   apiKey?: string;
   clearApiKey?: boolean;
+  prompt?: string;
 }
 
 interface SettingsPayload {
@@ -145,12 +148,14 @@ export class WebConsole {
 
     httpServer.register('POST', '/api/console/model-test', async (body) => {
       let configuration: StoredModelConfiguration;
+      let prompt: string | undefined;
       try {
         const payload = parseJson<ModelConfigurationPayload>(body);
         configuration = normalizeModelConfigurationPayloads(
           [payload],
           this.settings.modelConfigs,
         )[0];
+        prompt = normalizeModelTestPrompt(payload.prompt);
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
       }
@@ -161,7 +166,9 @@ export class WebConsole {
           body: await this.modelTester.test({
             provider: configuration.provider,
             model: configuration.model || undefined,
+            ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
             apiKey: configuration.apiKey,
+            ...(prompt ? { prompt } : {}),
           }),
           headers: API_HEADERS,
         };
@@ -334,7 +341,11 @@ export class WebConsole {
     try {
       const stored = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as unknown;
       if (isRecord(stored) && Array.isArray(stored.modelConfigs)) {
-        return validateStoredSettings(stored.modelConfigs);
+        const validated = validateStoredSettings(stored.modelConfigs);
+        if (stored.version !== 3 || validated.modelConfigs.length !== stored.modelConfigs.length) {
+          this.persistSettings(validated);
+        }
+        return validated;
       }
       const migrated = migrateLegacySettings(stored);
       this.persistSettings(migrated);
@@ -357,7 +368,7 @@ export class WebConsole {
       throw new Error('modelConfigs 必须是数组');
     }
     const nextSettings: ConsoleSettings = {
-      version: 2,
+      version: 3,
       modelConfigs: normalizeModelConfigurationPayloads(
         payload.modelConfigs,
         this.settings.modelConfigs,
@@ -379,28 +390,31 @@ export class WebConsole {
       id: configuration.id,
       provider: configuration.provider,
       model: configuration.model || undefined,
+      ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
       apiKey: configuration.apiKey,
     }));
   }
 
   private publicSettings(): {
-    version: 2;
+    version: 3;
     modelConfigs: Array<{
       id: string;
       provider: CodingAgentProvider;
       model: string;
+      baseUrl: string;
       hasApiKey: boolean;
       apiKeySource: 'file' | 'environment' | 'none';
     }>;
   } {
     return {
-      version: 2,
+      version: 3,
       modelConfigs: this.settings.modelConfigs.map((configuration) => {
         const hasEnvironmentApiKey = Boolean(apiKeyFromEnvironment(configuration.provider));
         return {
           id: configuration.id,
           provider: configuration.provider,
           model: configuration.model,
+          baseUrl: configuration.baseUrl ?? '',
           hasApiKey: Boolean(configuration.apiKey) || hasEnvironmentApiKey,
           apiKeySource: configuration.apiKey
             ? 'file'
@@ -430,25 +444,32 @@ function parseJson<T>(body: Buffer): T {
   }
 }
 
-const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude', 'codebuddy'];
+const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude'];
 const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 
 function createDefaultSettings(): ConsoleSettings {
   return {
-    version: 2,
+    version: 3,
     modelConfigs: [
       { id: 'default-codex', provider: 'codex', model: '' },
       { id: 'default-claude', provider: 'claude', model: 'sonnet' },
-      { id: 'default-codebuddy', provider: 'codebuddy', model: '' },
     ],
   };
 }
 
 function validateStoredSettings(modelConfigs: unknown[]): ConsoleSettings {
+  const supported = modelConfigs.filter(
+    (configuration) =>
+      isRecord(configuration) &&
+      (configuration.provider === 'codex' || configuration.provider === 'claude'),
+  );
+  if (supported.length === 0) {
+    return structuredClone(DEFAULT_SETTINGS);
+  }
   return {
-    version: 2,
+    version: 3,
     modelConfigs: normalizeModelConfigurationPayloads(
-      modelConfigs as ModelConfigurationPayload[],
+      supported as ModelConfigurationPayload[],
       [],
       true,
     ),
@@ -484,6 +505,7 @@ function normalizeModelConfigurationPayloads(
     if (model && !MODEL_PATTERN.test(model)) {
       throw new Error(`第 ${index + 1} 条模型名称包含不支持的字符`);
     }
+    const baseUrl = normalizeBaseUrl(payload.baseUrl, index);
     const submittedApiKey = payload.apiKey?.trim() || undefined;
     const existingConfiguration = existingById.get(id);
     const apiKey = payload.clearApiKey
@@ -499,6 +521,7 @@ function normalizeModelConfigurationPayloads(
       id,
       provider: payload.provider,
       model,
+      ...(baseUrl ? { baseUrl } : {}),
       ...(trustStoredApiKeys || submittedApiKey || existingById.has(id) ? { apiKey } : {}),
     };
   });
@@ -524,7 +547,6 @@ function migrateLegacySettings(stored: unknown): ConsoleSettings {
   const modelByProvider: Record<CodingAgentProvider, string> = {
     codex: typeof stored.codexModel === 'string' ? stored.codexModel : '',
     claude: typeof stored.claudeModel === 'string' ? stored.claudeModel : 'sonnet',
-    codebuddy: typeof stored.codebuddyModel === 'string' ? stored.codebuddyModel : '',
   };
   return validateStoredSettings(
     order.map((provider) => ({
@@ -537,10 +559,41 @@ function migrateLegacySettings(stored: unknown): ConsoleSettings {
 
 function apiKeyFromEnvironment(provider: CodingAgentProvider): string | undefined {
   return {
-    codex: process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY,
-    claude: process.env.ANTHROPIC_API_KEY,
-    codebuddy: process.env.CODEBUDDY_API_KEY,
+    codex: process.env.CODEX_API_KEY,
+    claude: process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY,
   }[provider];
+}
+
+function normalizeBaseUrl(value: string | undefined, index: number): string | undefined {
+  const normalized = value?.trim().replace(/\/+$/, '') || undefined;
+  if (!normalized) return undefined;
+  if (normalized.length > 2048) {
+    throw new Error(`第 ${index + 1} 条 Base URL 不能超过 2048 个字符`);
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error(`第 ${index + 1} 条 Base URL 必须是有效的 HTTP(S) 地址`);
+  }
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error(`第 ${index + 1} 条 Base URL 不能包含凭据或 URL 片段`);
+  }
+  return normalized;
+}
+
+function normalizeModelTestPrompt(value: string | undefined): string | undefined {
+  const normalized = value?.trim() || undefined;
+  if (!normalized) return undefined;
+  if (normalized.length > 4000) {
+    throw new Error('测试内容不能超过 4000 个字符');
+  }
+  return normalized;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

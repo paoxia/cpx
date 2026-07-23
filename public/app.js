@@ -50,6 +50,7 @@ const elements = {
   cancelModelTest: document.querySelector('#cancel-model-test'),
   startModelTest: document.querySelector('#start-model-test'),
   modelTestSelect: document.querySelector('#model-test-select'),
+  modelTestPrompt: document.querySelector('#model-test-prompt'),
   modelTestSummary: document.querySelector('#model-test-config-summary'),
   modelTestTerminal: document.querySelector('#model-test-terminal'),
   toast: document.querySelector('#toast'),
@@ -107,7 +108,7 @@ async function init() {
 
 async function loadSettings() {
   state.settings = await api('/api/console/settings');
-  state.modelConfigs = state.settings.modelConfigs.map((configuration) => ({ ...configuration }));
+  state.modelConfigs = editableModelConfigurations(state.settings.modelConfigs);
   renderModelConfigurations();
   renderExecutionOrderPreview();
 }
@@ -279,10 +280,26 @@ function renderModelConfigurations() {
     const configuration = state.modelConfigs.find((item) => item.id === row.dataset.configId);
     if (!configuration) return;
     row.querySelector('[data-field="provider"]').addEventListener('change', (event) => {
+      const providerChanged = configuration.provider !== event.target.value;
       configuration.provider = event.target.value;
+      if (providerChanged) {
+        configuration.baseUrl = '';
+        configuration.apiKey = '';
+        configuration.clearApiKey = configuration.apiKeySource === 'file';
+        configuration.hasApiKey = false;
+        configuration.apiKeySource = 'none';
+        renderModelConfigurations();
+      }
     });
     row.querySelector('[data-field="model"]').addEventListener('input', (event) => {
       configuration.model = event.target.value;
+    });
+    row.querySelector('[data-field="baseUrl"]').addEventListener('input', (event) => {
+      configuration.baseUrl = event.target.value;
+    });
+    row.querySelector('[data-field="apiKey"]').addEventListener('input', (event) => {
+      configuration.apiKey = event.target.value;
+      if (configuration.apiKey) configuration.clearApiKey = false;
     });
     row.querySelectorAll('[data-config-action]').forEach((button) => {
       button.addEventListener('click', () =>
@@ -296,13 +313,19 @@ function renderModelConfiguration(configuration, index) {
   const providerOptions = [
     ['codex', 'Codex'],
     ['claude', 'Claude Code'],
-    ['codebuddy', 'CodeBuddy'],
   ]
     .map(
       ([value, label]) =>
         `<option value="${value}"${configuration.provider === value ? ' selected' : ''}>${label}</option>`,
     )
     .join('');
+  const apiKeyPlaceholder =
+    configuration.apiKeySource === 'file'
+      ? '已保存，留空保持不变'
+      : configuration.apiKeySource === 'environment'
+        ? '已由环境变量提供，可填写覆盖'
+        : '填写 API Key（可选）';
+  const canClearApiKey = configuration.apiKeySource === 'file' || configuration.apiKey;
   return `
     <article class="model-config-item" data-config-id="${escapeHtml(configuration.id)}">
       <div class="model-config-rank"><strong>${index + 1}</strong><span>PRIORITY</span></div>
@@ -314,6 +337,19 @@ function renderModelConfiguration(configuration, index) {
         <label class="field model-name-field">
           <span>关联模型</span>
           <input data-field="model" type="text" value="${escapeHtml(configuration.model || '')}" placeholder="留空使用 Agent 默认模型" autocomplete="off" />
+        </label>
+        <label class="field model-base-url-field">
+          <span>Base URL</span>
+          <input data-field="baseUrl" type="url" value="${escapeHtml(configuration.baseUrl || '')}" placeholder="${configuration.provider === 'codex' ? 'https://gateway.example.com/v1' : 'https://gateway.example.com'}" autocomplete="off" />
+          <small>留空使用官方服务或 CLI 已有配置</small>
+        </label>
+        <label class="field model-api-key-field">
+          <span>API Key</span>
+          <div class="model-api-key-input">
+            <input data-field="apiKey" type="password" value="${escapeHtml(configuration.apiKey || '')}" placeholder="${escapeHtml(apiKeyPlaceholder)}" autocomplete="new-password" />
+            ${canClearApiKey ? '<button type="button" data-config-action="clear-key">清除</button>' : ''}
+          </div>
+          <small>${escapeHtml(apiKeyStatus(configuration))}</small>
         </label>
       </div>
       <div class="model-config-controls">
@@ -343,6 +379,11 @@ function handleModelConfigurationAction(action, id) {
       return;
     }
     state.modelConfigs.splice(index, 1);
+  } else if (action === 'clear-key') {
+    state.modelConfigs[index].apiKey = '';
+    state.modelConfigs[index].clearApiKey = true;
+    state.modelConfigs[index].hasApiKey = false;
+    state.modelConfigs[index].apiKeySource = 'none';
   }
   renderModelConfigurations();
 }
@@ -361,7 +402,7 @@ function openModelTestDialog() {
   renderModelTestSummary();
   resetModelTestTerminal();
   elements.modelTestDialog.hidden = false;
-  elements.modelTestSelect.focus();
+  elements.modelTestPrompt.focus();
 }
 
 function closeModelTestDialog() {
@@ -389,7 +430,7 @@ function renderModelTestSummary() {
     <div class="model-test-provider-mark">${escapeHtml(providerLabel(configuration.provider).slice(0, 1))}</div>
     <div>
       <strong>${escapeHtml(providerLabel(configuration.provider))}</strong>
-      <span>${escapeHtml(configuration.model || 'Agent 默认模型')} · 执行顺序 ${index + 1}</span>
+      <span>${escapeHtml(configuration.model || 'Agent 默认模型')} · ${escapeHtml(configuration.baseUrl || '官方端点')} · 执行顺序 ${index + 1}</span>
     </div>
     <em>已关联</em>`;
 }
@@ -397,8 +438,8 @@ function renderModelTestSummary() {
 function resetModelTestTerminal() {
   elements.modelTestTerminal.className = 'model-test-terminal';
   elements.modelTestTerminal.innerHTML =
-    '<p class="muted">准备测试。选择模型后点击“开始测试”。</p>';
-  elements.startModelTest.textContent = '开始测试';
+    '<p class="muted">选择模型、输入内容后点击“发送并测试”。</p>';
+  elements.startModelTest.textContent = '发送并测试';
 }
 
 function appendModelTestLine(message, tone = '') {
@@ -412,9 +453,16 @@ function appendModelTestLine(message, tone = '') {
 async function startSelectedModelTest() {
   const configuration = selectedModelTestConfiguration();
   if (!configuration || state.modelTestRunning) return;
+  const prompt = elements.modelTestPrompt.value.trim();
+  if (!prompt) {
+    showToast('请输入要发送给 Agent 的内容。', true);
+    elements.modelTestPrompt.focus();
+    return;
+  }
 
   state.modelTestRunning = true;
   elements.modelTestSelect.disabled = true;
+  elements.modelTestPrompt.disabled = true;
   elements.startModelTest.disabled = true;
   elements.closeModelTest.disabled = true;
   elements.cancelModelTest.disabled = true;
@@ -425,8 +473,9 @@ async function startSelectedModelTest() {
     `> ${providerLabel(configuration.provider)} / ${configuration.model || '默认模型'}`,
     'command',
   );
+  appendModelTestLine(`你：${prompt}`, 'command');
   appendModelTestLine('正在启动对应 CLI…', 'pending');
-  appendModelTestLine('正在发送最小探测请求…', 'muted');
+  appendModelTestLine('正在等待 Agent 回复…', 'muted');
 
   try {
     const result = await api('/api/console/model-test', {
@@ -435,23 +484,31 @@ async function startSelectedModelTest() {
         id: configuration.id,
         provider: configuration.provider,
         model: configuration.model,
+        baseUrl: configuration.baseUrl,
+        apiKey: configuration.apiKey || undefined,
+        clearApiKey: configuration.clearApiKey,
+        prompt,
       }),
     });
     elements.modelTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
     appendModelTestLine('', 'spacer');
     appendModelTestLine(result.message, result.success ? 'success' : 'error');
+    if (result.response) {
+      appendModelTestLine(`Agent 回复：\n${result.response}`, 'response');
+    }
     appendModelTestLine(`耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
-    elements.startModelTest.textContent = '重新测试';
+    elements.startModelTest.textContent = '再次发送';
     showToast(result.message, !result.success);
   } catch (error) {
     elements.modelTestTerminal.className = 'model-test-terminal error';
     appendModelTestLine('', 'spacer');
     appendModelTestLine(error.message, 'error');
-    elements.startModelTest.textContent = '重新测试';
+    elements.startModelTest.textContent = '再次发送';
     showToast(error.message, true);
   } finally {
     state.modelTestRunning = false;
     elements.modelTestSelect.disabled = false;
+    elements.modelTestPrompt.disabled = false;
     elements.startModelTest.disabled = false;
     elements.closeModelTest.disabled = false;
     elements.cancelModelTest.disabled = false;
@@ -467,8 +524,11 @@ function addModelConfiguration() {
     id: createClientId(),
     provider: 'codex',
     model: '',
+    baseUrl: '',
+    apiKey: '',
     hasApiKey: false,
     apiKeySource: 'none',
+    clearApiKey: false,
   });
   renderModelConfigurations();
   elements.modelConfigList.lastElementChild?.scrollIntoView({
@@ -479,20 +539,25 @@ function addModelConfiguration() {
 
 function resetModelConfigurations() {
   state.modelConfigs = [
-    { id: createClientId(), provider: 'codex', model: '', hasApiKey: false, apiKeySource: 'none' },
+    {
+      id: createClientId(),
+      provider: 'codex',
+      model: '',
+      baseUrl: '',
+      apiKey: '',
+      hasApiKey: false,
+      apiKeySource: 'none',
+      clearApiKey: false,
+    },
     {
       id: createClientId(),
       provider: 'claude',
       model: 'sonnet',
+      baseUrl: '',
+      apiKey: '',
       hasApiKey: false,
       apiKeySource: 'none',
-    },
-    {
-      id: createClientId(),
-      provider: 'codebuddy',
-      model: '',
-      hasApiKey: false,
-      apiKeySource: 'none',
+      clearApiKey: false,
     },
   ];
   renderModelConfigurations();
@@ -567,10 +632,13 @@ async function saveModelSettings(event) {
           id: configuration.id,
           provider: configuration.provider,
           model: configuration.model,
+          baseUrl: configuration.baseUrl,
+          apiKey: configuration.apiKey || undefined,
+          clearApiKey: configuration.clearApiKey,
         })),
       }),
     });
-    state.modelConfigs = state.settings.modelConfigs.map((configuration) => ({ ...configuration }));
+    state.modelConfigs = editableModelConfigurations(state.settings.modelConfigs);
     renderModelConfigurations();
     renderExecutionOrderPreview();
     showToast('模型配置和执行顺序已保存。');
@@ -716,8 +784,7 @@ function renderAttempts(attempts) {
   if (!attempts || !attempts.length) return '';
   const rows = attempts
     .map((a) => {
-      const label =
-        { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[a.provider] || a.provider;
+      const label = { codex: 'Codex', claude: 'Claude Code' }[a.provider] || a.provider;
       return `
         <div class="attempt ${a.status}">
           <strong>${escapeHtml(label)}${a.model ? ` / ${escapeHtml(a.model)}` : ''}</strong>
@@ -750,7 +817,23 @@ function formatDate(timestamp) {
 }
 
 function providerLabel(provider) {
-  return { codex: 'Codex', claude: 'Claude Code', codebuddy: 'CodeBuddy' }[provider] || provider;
+  return { codex: 'Codex', claude: 'Claude Code' }[provider] || provider;
+}
+
+function editableModelConfigurations(configurations) {
+  return configurations.map((configuration) => ({
+    ...configuration,
+    apiKey: '',
+    clearApiKey: false,
+  }));
+}
+
+function apiKeyStatus(configuration) {
+  if (configuration.apiKey) return '将使用新填写的密钥';
+  if (configuration.clearApiKey) return '保存后清除已存密钥';
+  if (configuration.apiKeySource === 'file') return '页面不回显；密钥保存在本地设置文件';
+  if (configuration.apiKeySource === 'environment') return '当前由服务环境变量提供';
+  return '未配置时将尝试使用对应 CLI 的登录状态';
 }
 
 function createClientId() {

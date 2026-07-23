@@ -7,7 +7,9 @@ import { Logger } from '../utils/Logger';
 export interface ModelTestConfiguration {
   provider: CodingAgentProvider;
   model?: string;
+  baseUrl?: string;
   apiKey?: string;
+  prompt?: string;
 }
 
 export interface ModelConfigurationTestResult {
@@ -15,6 +17,7 @@ export interface ModelConfigurationTestResult {
   provider: CodingAgentProvider;
   model?: string;
   message: string;
+  response?: string;
   durationMs: number;
 }
 
@@ -26,7 +29,10 @@ type SpawnCommand = typeof spawn;
 
 const TEST_PROMPT =
   'Reply with exactly CPX_MODEL_OK. Do not use tools, inspect files, or modify anything.';
+const CUSTOM_PROMPT_PREFIX =
+  'This is a model configuration conversation test. Do not use tools, inspect files, or modify anything. Reply directly to the user message below.';
 const MAX_OUTPUT_LENGTH = 32 * 1024;
+const MAX_RESPONSE_LENGTH = 16 * 1024;
 
 /** 通过与任务执行相同的官方 CLI、模型参数和密钥环境变量验证单条模型配置。 */
 export class ModelConfigurationTester implements ModelConfigurationTestRunner {
@@ -45,14 +51,13 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
     const startedAt = Date.now();
     const adapter = AGENT_ADAPTERS[configuration.provider];
     const env: NodeJS.ProcessEnv = { ...process.env };
-    if (configuration.apiKey) {
-      env[adapter.apiKeyEnvVar] = configuration.apiKey;
-    }
+    adapter.configureEnvironment(env, configuration.apiKey, configuration.baseUrl);
     const sensitiveValues = Array.from(
       new Set(
         [
           configuration.apiKey,
           env[adapter.apiKeyEnvVar],
+          env.ANTHROPIC_AUTH_TOKEN,
           configuration.provider === 'codex' ? env.OPENAI_API_KEY : undefined,
         ].filter((value): value is string => Boolean(value)),
       ),
@@ -63,7 +68,7 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
       let settled = false;
       let output = '';
 
-      const finish = (success: boolean, message: string): void => {
+      const finish = (success: boolean, message: string, response?: string): void => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
@@ -78,17 +83,22 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
           provider: configuration.provider,
           ...(configuration.model ? { model: configuration.model } : {}),
           message,
+          ...(response ? { response } : {}),
           durationMs,
         });
       };
 
       try {
-        child = this.spawnCommand(adapter.command, adapter.buildArgs(configuration.model), {
-          cwd: this.workingDirectory,
-          env,
-          shell: adapter.useShellOnWindows && process.platform === 'win32',
-          windowsHide: true,
-        });
+        child = this.spawnCommand(
+          adapter.command,
+          adapter.buildArgs(configuration.model, configuration.baseUrl),
+          {
+            cwd: this.workingDirectory,
+            env,
+            shell: adapter.useShellOnWindows && process.platform === 'win32',
+            windowsHide: true,
+          },
+        );
       } catch (error) {
         const durationMs = Date.now() - startedAt;
         this.logger.warn(`${adapter.displayName} 模型配置测试失败 (${durationMs}ms)`);
@@ -120,7 +130,11 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
       child.once('close', (code) => {
         if (settled) return;
         if (code === 0 && output.trim()) {
-          finish(true, `${adapter.displayName} 已成功响应，模型配置可用。`);
+          finish(
+            true,
+            `${adapter.displayName} 已成功响应，模型配置可用。`,
+            extractAgentResponse(output, sensitiveValues),
+          );
           return;
         }
         const processError = new AgentProcessError(adapter.command, code, output, output);
@@ -134,9 +148,45 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
           ),
         );
       });
-      child.stdin.end(TEST_PROMPT);
+      const prompt = configuration.prompt?.trim()
+        ? `${CUSTOM_PROMPT_PREFIX}\n\nUser message:\n${configuration.prompt.trim()}`
+        : TEST_PROMPT;
+      child.stdin.end(prompt);
     });
   }
+}
+
+function extractAgentResponse(output: string, sensitiveValues: string[]): string | undefined {
+  const candidates: string[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (typeof event.result === 'string' && event.result.trim()) {
+        candidates.push(event.result);
+      }
+      if (typeof event.text === 'string' && event.text.trim()) {
+        candidates.push(event.text);
+      }
+      const item = event.item as { text?: unknown } | undefined;
+      if (typeof item?.text === 'string' && item.text.trim()) {
+        candidates.push(item.text);
+      }
+      const message = event.message as
+        { content?: Array<{ type?: unknown; text?: unknown }> } | undefined;
+      const messageText = message?.content
+        ?.filter((content) => content.type === 'text' && typeof content.text === 'string')
+        .map((content) => content.text as string)
+        .join('\n');
+      if (messageText?.trim()) {
+        candidates.push(messageText);
+      }
+    } catch {
+      // CLI 使用 JSONL 输出；忽略无法解析的诊断行，避免把内部事件原样返回页面。
+    }
+  }
+  const response = candidates.at(-1);
+  return response ? sanitizeResponse(response, sensitiveValues) : undefined;
 }
 
 function launchErrorMessage(displayName: string, error: unknown): string {
@@ -186,4 +236,19 @@ function sanitizeDetail(value: string, sensitiveValues: string[] = []): string {
       .replace(/[\r\n\t]+/g, ' ')
       .slice(0, 300)
   );
+}
+
+function sanitizeResponse(value: string, sensitiveValues: string[]): string {
+  const withoutKeys = sensitiveValues.reduce(
+    (result, sensitiveValue) => result.split(sensitiveValue).join('[REDACTED]'),
+    value,
+  );
+  const sanitized = withoutKeys
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+    .trim();
+  if (sanitized.length <= MAX_RESPONSE_LENGTH) return sanitized;
+  return `${sanitized.slice(0, MAX_RESPONSE_LENGTH)}\n\n[回复已截断]`;
 }
