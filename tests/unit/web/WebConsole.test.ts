@@ -59,11 +59,20 @@ describe('WebConsole', () => {
     expect(html).toContain('id="github-tab"');
     expect(html).toContain('id="models-tab"');
     expect(html).toContain('关联模型');
-    expect(html).toContain('id="model-test-dialog"');
+    expect(html).not.toContain('id="model-test-dialog"');
     expect(html).toContain('id="github-create-token"');
+    expect(html).toContain('id="repository-picker"');
+    expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');
     expect(html).not.toContain('id="codex-auth-badge"');
+
+    const scriptResponse = await server.handler('GET', '/app.js')(Buffer.alloc(0), {}, {});
+    const script = (scriptResponse.body as Buffer).toString('utf8');
+    expect(script).toContain('data-config-action="test"');
+    expect(script).toContain('data-model-test-prompt');
+    expect(script).toContain('CLI 已配置模型');
+    expect(script).not.toContain('data-field="model"');
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
@@ -90,7 +99,7 @@ describe('WebConsole', () => {
       version: 3,
       modelConfigs: [
         { provider: 'codex', model: '' },
-        { provider: 'claude', model: 'sonnet' },
+        { provider: 'claude', model: '' },
       ],
     });
 
@@ -119,11 +128,11 @@ describe('WebConsole', () => {
         {
           id: 'claude-opus',
           provider: 'claude',
-          model: 'opus',
+          model: '',
           baseUrl: 'https://gateway.example.com',
           hasApiKey: true,
         },
-        { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex', hasApiKey: false },
+        { id: 'codex-main', provider: 'codex', model: '', hasApiKey: false },
       ],
     });
     expect(response.headers).toEqual({ 'Cache-Control': 'no-store' });
@@ -133,7 +142,7 @@ describe('WebConsole', () => {
     expect(existsSync(settingsPath)).toBe(true);
     const stored = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
       version: number;
-      modelConfigs: Array<{ id: string; apiKey?: string }>;
+      modelConfigs: Array<{ id: string; model: string; apiKey?: string }>;
     };
     expect(stored.version).toBe(3);
     expect(stored.modelConfigs.map((configuration) => configuration.id)).toEqual([
@@ -141,6 +150,7 @@ describe('WebConsole', () => {
       'codex-main',
     ]);
     expect(stored.modelConfigs[0].apiKey).toBe('secret-claude');
+    expect(stored.modelConfigs.every((configuration) => configuration.model === '')).toBe(true);
   });
 
   it('应使用当前模型配置测试连通性，并复用已保存但未回传的密钥', async () => {
@@ -203,7 +213,6 @@ describe('WebConsole', () => {
       body: {
         success: true,
         provider: 'claude',
-        model: 'sonnet',
         response: '你好，我是 Claude。',
         durationMs: 123,
       },
@@ -212,7 +221,6 @@ describe('WebConsole', () => {
     expect(tested).toEqual([
       {
         provider: 'claude',
-        model: 'sonnet',
         baseUrl: 'https://gateway.example.com',
         apiKey: 'secret-key',
         prompt: '请介绍一下自己',
@@ -265,7 +273,7 @@ describe('WebConsole', () => {
       {},
     );
     expect(response).toMatchObject({ status: 200, body: { success: false } });
-    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', apiKey: 'temporary-secret' }]);
+    expect(tested).toEqual([{ provider: 'codex', apiKey: 'temporary-secret' }]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
@@ -369,7 +377,7 @@ describe('WebConsole', () => {
       {},
     );
     expect(retained.body).toMatchObject({
-      modelConfigs: [{ id: 'claude', model: 'sonnet', hasApiKey: true }],
+      modelConfigs: [{ id: 'claude', model: '', hasApiKey: true }],
     });
 
     const settingsPath = join(TMP_DIR, 'console-settings.json');
@@ -420,7 +428,7 @@ describe('WebConsole', () => {
     );
   });
 
-  it('应将旧版固定模型设置迁移为有序模型配置', async () => {
+  it('应将旧版固定模型设置迁移为有序 Agent 配置且清除模型覆盖', async () => {
     await webConsole.stop();
     writeFileSync(
       join(TMP_DIR, 'console-settings.json'),
@@ -443,8 +451,8 @@ describe('WebConsole', () => {
     expect(response.body).toMatchObject({
       version: 3,
       modelConfigs: [
-        { provider: 'claude', model: 'opus' },
-        { provider: 'codex', model: 'gpt-5.1-codex' },
+        { provider: 'claude', model: '' },
+        { provider: 'codex', model: '' },
       ],
     });
     expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 3');

@@ -193,7 +193,6 @@ export class WebConsole {
           status: 200,
           body: await this.modelTester.test({
             provider: configuration.provider,
-            model: configuration.model || undefined,
             ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
             apiKey: configuration.apiKey,
             ...(prompt ? { prompt } : {}),
@@ -385,7 +384,17 @@ export class WebConsole {
       const stored = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as unknown;
       if (isRecord(stored) && Array.isArray(stored.modelConfigs)) {
         const validated = validateStoredSettings(stored.modelConfigs);
-        if (stored.version !== 3 || validated.modelConfigs.length !== stored.modelConfigs.length) {
+        const hadModelOverrides = stored.modelConfigs.some(
+          (configuration) =>
+            isRecord(configuration) &&
+            typeof configuration.model === 'string' &&
+            configuration.model.trim().length > 0,
+        );
+        if (
+          stored.version !== 3 ||
+          validated.modelConfigs.length !== stored.modelConfigs.length ||
+          hadModelOverrides
+        ) {
           this.persistSettings(validated);
         }
         return validated;
@@ -432,7 +441,6 @@ export class WebConsole {
     return configurations.map((configuration) => ({
       id: configuration.id,
       provider: configuration.provider,
-      model: configuration.model || undefined,
       ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
       apiKey: configuration.apiKey,
     }));
@@ -488,14 +496,12 @@ function parseJson<T>(body: Buffer): T {
 }
 
 const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude'];
-const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
-
 function createDefaultSettings(): ConsoleSettings {
   return {
     version: 3,
     modelConfigs: [
       { id: 'default-codex', provider: 'codex', model: '' },
-      { id: 'default-claude', provider: 'claude', model: 'sonnet' },
+      { id: 'default-claude', provider: 'claude', model: '' },
     ],
   };
 }
@@ -544,10 +550,6 @@ function normalizeModelConfigurationPayloads(
     if (!payload.provider || !VALID_PROVIDERS.includes(payload.provider)) {
       throw new Error(`第 ${index + 1} 条模型配置的 Agent 无效`);
     }
-    const model = payload.model?.trim() || '';
-    if (model && !MODEL_PATTERN.test(model)) {
-      throw new Error(`第 ${index + 1} 条模型名称包含不支持的字符`);
-    }
     const baseUrl = normalizeBaseUrl(payload.baseUrl, index);
     const submittedApiKey = payload.apiKey?.trim() || undefined;
     const existingConfiguration = existingById.get(id);
@@ -563,7 +565,7 @@ function normalizeModelConfigurationPayloads(
     return {
       id,
       provider: payload.provider,
-      model,
+      model: '',
       ...(baseUrl ? { baseUrl } : {}),
       ...(trustStoredApiKeys || submittedApiKey || existingById.has(id) ? { apiKey } : {}),
     };
@@ -587,15 +589,11 @@ function migrateLegacySettings(stored: unknown): ConsoleSettings {
     defaultProvider,
     ...fallbackOrder.filter((provider) => provider !== defaultProvider),
   ];
-  const modelByProvider: Record<CodingAgentProvider, string> = {
-    codex: typeof stored.codexModel === 'string' ? stored.codexModel : '',
-    claude: typeof stored.claudeModel === 'string' ? stored.claudeModel : 'sonnet',
-  };
   return validateStoredSettings(
     order.map((provider) => ({
       id: `migrated-${provider}`,
       provider,
-      model: modelByProvider[provider],
+      model: '',
     })),
   );
 }

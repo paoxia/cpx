@@ -20,14 +20,14 @@
 
 ## Web 开发控制台
 
-- 控制台提供管理 Agent 配置与执行顺序的独立页面。用户可逐条新增、删除和上下调整 Codex 或 Claude Code 关联项；每条可编辑 Agent、模型名、可选 Base URL 和可选 API Key，同一 Agent 可配置多次。
-- 模型配置按页面顺序写入数据库相邻的 `console-settings.json`。第一条是默认配置；启用自动切换时，仅在额度耗尽或鉴权失败后依次尝试后续配置，每次尝试必须使用该条自己的模型、Base URL 和密钥。
+- 控制台提供管理 Agent 配置与执行顺序的独立页面。用户可逐条新增、删除和上下调整 Codex 或 Claude Code 关联项；每条可编辑 Agent、可选 Base URL 和可选 API Key，同一 Agent 可配置多次。控制台不得覆盖模型名，Codex 和 Claude Code 必须直接使用对应 CLI 或环境的已有模型配置；旧设置中的模型覆盖值应在加载时清除。
+- Agent 配置按页面顺序写入数据库相邻的 `console-settings.json`。第一条是默认配置；启用自动切换时，仅在额度耗尽或鉴权失败后依次尝试后续配置，每次尝试必须使用该条自己的 Base URL 和密钥。
 - 独立 Agent API Key 以明文写入 `console-settings.json`，但设置 API 不得返回密钥原文；同一配置未提供新密钥时必须保留已存密钥，显式清除时才删除。未配置独立密钥时复用服务进程环境变量或本机 CLI 登录状态；不再支持的 provider 必须在旧配置迁移时忽略。
-- 模型测试使用独立弹窗，从当前关联项中选择模型、输入测试内容并展示终端式过程和 Agent 文本回复。调用必须使用当前页面中的 Agent、模型名、Base URL 和临时或已存凭据；测试内容最多 4000 字，回复最多 16 KiB。未提交的关联关系、测试内容和回复不得因测试而持久化；响应必须替换当前配置中可识别的 API Key，不得返回密钥原文或未经解析的 CLI 事件流。
+- 每条关联项内直接提供测试区，输入测试内容后在该项下方展示终端式过程和 Agent 文本回复，不再通过独立模型选择弹窗测试。调用必须使用当前关联项的 Agent、CLI 已有模型配置、Base URL 和临时或已存凭据；测试内容最多 4000 字，回复最多 16 KiB。未提交的关联关系、测试内容和回复不得因测试而持久化；响应必须替换当前配置中可识别的 API Key，不得返回密钥原文或未经解析的 CLI 事件流。
 - CLI 账号登录不在模型管理页展示。服务保留 Codex 官方设备码登录和 Claude Code 官方浏览器登录 API；设备码、callback 地址和账号凭据不得写入项目配置文件，服务停止时必须清理等待中的登录进程。
 - 控制台提供独立 GitHub 页签。没有 Token 时，页面必须提供预填 Contents、Pull requests、Workflows 写权限和有限有效期的 fine-grained PAT 创建入口，并说明选择仓库、生成、复制回填的步骤；cpx 不得声称能从 GitHub PAT 页面自动取得 Token。
 - 用户可直接验证 `config.yaml` 或环境变量中的 GitHub Token，也可输入新 Token；状态接口必须返回 `none`、`file` 或 `environment` 来源。新 Token 仅在验证成功后写入 `config/config.yaml`，验证失败不得修改配置，环境变量 Token 不得复制到配置文件。系统分页读取该 Token 可访问的个人、协作及组织仓库。
-- GitHub 仓库列表支持筛选，并可将仓库名称和默认分支带入新任务表单。fine-grained Token 的仓库范围以 GitHub 授权范围为准。
+- GitHub 仓库列表支持筛选，并可将仓库名称和默认分支带入新任务表单。任务表单也应直接列出当前 Token 明确授权的未归档项目，选择后自动带入默认分支，同时保留手动输入仓库地址的能力。fine-grained Token 的仓库范围以 GitHub 授权范围为准。
 - 仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 仓库地址。每个任务使用独立浅克隆和 `cpx/task-<id>` 分支。
 - 验证成功的 Token 必须立即用于 GitHub API、HTTPS clone/push 和 `gh pr create`。Token 只能通过受控子进程环境和不含密钥的凭据 helper 传递，不得出现在 Git URL、命令参数、任务对象或日志中；SSH 地址继续使用 SSH 凭据。
 - Codex 与 Claude Code 以非交互方式执行。任务可取消，状态包括排队、准备、执行、发布、完成、失败和取消。

@@ -11,11 +11,15 @@ const state = {
   githubTokenEntryOpen: false,
   modelConfigs: [],
   modelTestRunning: false,
+  modelTestConfigId: null,
+  modelTestPrompt: '',
 };
 
 const elements = {
   taskForm: document.querySelector('#task-form'),
+  repositoryPicker: document.querySelector('#repository-picker'),
   repository: document.querySelector('#repository'),
+  repositoryHint: document.querySelector('#repository-hint'),
   baseBranch: document.querySelector('#base-branch'),
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
@@ -49,15 +53,6 @@ const elements = {
   addModelConfigBottom: document.querySelector('#add-model-config-bottom'),
   resetModelConfigs: document.querySelector('#reset-model-configs'),
   executionOrderPreview: document.querySelector('#execution-order-preview'),
-  openModelTest: document.querySelector('#open-model-test'),
-  modelTestDialog: document.querySelector('#model-test-dialog'),
-  closeModelTest: document.querySelector('#close-model-test'),
-  cancelModelTest: document.querySelector('#cancel-model-test'),
-  startModelTest: document.querySelector('#start-model-test'),
-  modelTestSelect: document.querySelector('#model-test-select'),
-  modelTestPrompt: document.querySelector('#model-test-prompt'),
-  modelTestSummary: document.querySelector('#model-test-config-summary'),
-  modelTestTerminal: document.querySelector('#model-test-terminal'),
   toast: document.querySelector('#toast'),
 };
 
@@ -74,6 +69,7 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 });
 
 elements.prompt.addEventListener('input', updatePromptCount);
+elements.repositoryPicker.addEventListener('change', handleTaskRepositorySelection);
 elements.taskForm.addEventListener('submit', createTask);
 elements.modelSettingsForm.addEventListener('submit', saveModelSettings);
 elements.addModelConfig.addEventListener('click', addModelConfiguration);
@@ -84,25 +80,17 @@ elements.githubCreateToken.addEventListener('click', () => openGitHubTokenEntry(
 elements.githubExistingToken.addEventListener('click', () => openGitHubTokenEntry(false));
 elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
 elements.repositorySearch.addEventListener('input', renderRepositories);
-elements.openModelTest.addEventListener('click', openModelTestDialog);
-elements.closeModelTest.addEventListener('click', closeModelTestDialog);
-elements.cancelModelTest.addEventListener('click', closeModelTestDialog);
-elements.startModelTest.addEventListener('click', startSelectedModelTest);
-elements.modelTestSelect.addEventListener('change', () => {
-  renderModelTestSummary();
-  resetModelTestTerminal();
-});
-elements.modelTestDialog.addEventListener('click', (event) => {
-  if (event.target === elements.modelTestDialog) closeModelTestDialog();
-});
-document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !elements.modelTestDialog.hidden) closeModelTestDialog();
-});
 
 async function init() {
   try {
     await loadSettings();
     await refreshTasks();
+    try {
+      await loadGitHubStatus();
+    } catch (error) {
+      console.error(error);
+      renderTaskRepositoryPicker();
+    }
     const initialView = window.location.hash.slice(1);
     if (['github', 'models'].includes(initialView)) {
       await switchView(initialView);
@@ -124,7 +112,7 @@ async function loadGitHubStatus() {
   state.githubStatus = await api('/api/console/github');
   renderGitHubConnection();
   if (state.githubStatus.hasToken && !state.githubLoaded) {
-    await refreshGitHubRepositories();
+    await refreshGitHubRepositories(false);
   }
 }
 
@@ -150,14 +138,14 @@ async function connectGitHub(event) {
   }
 }
 
-async function refreshGitHubRepositories() {
+async function refreshGitHubRepositories(notify = true) {
   if (elements.githubRefresh.disabled) return;
   elements.githubRefresh.disabled = true;
   elements.githubRefresh.classList.add('spinning');
   try {
     const connection = await api('/api/console/github/repositories');
     applyGitHubConnection(connection);
-    showToast(`已刷新 ${state.repositories.length} 个 GitHub 仓库。`);
+    if (notify) showToast(`已刷新 ${state.repositories.length} 个 GitHub 仓库。`);
   } catch (error) {
     state.githubLoaded = false;
     showToast(error.message, true);
@@ -181,6 +169,74 @@ function applyGitHubConnection(connection) {
   };
   renderGitHubConnection();
   renderRepositories();
+  renderTaskRepositoryPicker();
+}
+
+function renderTaskRepositoryPicker() {
+  const repositories = state.repositories.filter((repository) => !repository.archived);
+  if (!state.githubLoaded || !repositories.length) {
+    elements.repositoryPicker.hidden = true;
+    elements.repositoryPicker.required = false;
+    elements.repository.hidden = false;
+    elements.repository.required = true;
+    elements.repositoryHint.textContent = state.githubLoaded
+      ? '当前 Token 没有可选项目；可手动输入 owner/repo、HTTPS 或 SSH 地址'
+      : '支持 owner/repo、HTTPS 或 SSH 地址';
+    return;
+  }
+
+  const currentValue = elements.repository.value.trim();
+  const selectedRepository = repositories.find(
+    (repository) => repository.fullName === currentValue,
+  );
+  elements.repositoryPicker.innerHTML = [
+    '<option value="">选择已有 Token 授权的项目</option>',
+    ...repositories.map(
+      (repository) =>
+        `<option value="${escapeHtml(repository.fullName)}">${escapeHtml(repository.fullName)}${repository.private ? ' · 私有' : ''}</option>`,
+    ),
+    '<option value="__manual__">手动输入仓库地址…</option>',
+  ].join('');
+  elements.repositoryPicker.hidden = false;
+  elements.repositoryPicker.required = true;
+
+  if (selectedRepository) {
+    elements.repositoryPicker.value = selectedRepository.fullName;
+    elements.repository.hidden = true;
+    elements.repository.required = false;
+  } else if (currentValue) {
+    elements.repositoryPicker.value = '__manual__';
+    elements.repository.hidden = false;
+    elements.repository.required = true;
+  } else {
+    elements.repositoryPicker.value = '';
+    elements.repository.hidden = true;
+    elements.repository.required = false;
+  }
+  elements.repositoryHint.textContent = `可选择当前 Token 授权的 ${repositories.length} 个项目，或手动输入仓库地址`;
+}
+
+function handleTaskRepositorySelection() {
+  const selectedValue = elements.repositoryPicker.value;
+  if (selectedValue === '__manual__') {
+    elements.repository.value = '';
+    elements.repository.hidden = false;
+    elements.repository.required = true;
+    elements.repository.focus();
+    return;
+  }
+
+  elements.repository.hidden = true;
+  elements.repository.required = false;
+  elements.repository.value = selectedValue;
+  const repository = state.repositories.find((item) => item.fullName === selectedValue);
+  elements.baseBranch.value = repository?.defaultBranch || '';
+}
+
+function selectTaskRepository(fullName, defaultBranch = '') {
+  elements.repository.value = fullName;
+  elements.baseBranch.value = defaultBranch;
+  renderTaskRepositoryPicker();
 }
 
 function renderGitHubConnection() {
@@ -287,8 +343,10 @@ function renderRepositories() {
 
   elements.repositoryList.querySelectorAll('[data-use-repository]').forEach((button) => {
     button.addEventListener('click', () => {
-      elements.repository.value = button.dataset.useRepository;
-      elements.baseBranch.value = button.dataset.defaultBranch || '';
+      selectTaskRepository(
+        button.dataset.useRepository,
+        button.dataset.defaultBranch || '',
+      );
       switchView('tasks');
       elements.prompt.focus();
       showToast(`已选择 ${button.dataset.useRepository}`);
@@ -322,9 +380,6 @@ function renderModelConfigurations() {
         renderModelConfigurations();
       }
     });
-    row.querySelector('[data-field="model"]').addEventListener('input', (event) => {
-      configuration.model = event.target.value;
-    });
     row.querySelector('[data-field="baseUrl"]').addEventListener('input', (event) => {
       configuration.baseUrl = event.target.value;
     });
@@ -337,6 +392,12 @@ function renderModelConfigurations() {
         handleModelConfigurationAction(button.dataset.configAction, configuration.id),
       );
     });
+    row.querySelector('[data-model-test-prompt]')?.addEventListener('input', (event) => {
+      state.modelTestPrompt = event.target.value;
+    });
+    row.querySelector('[data-model-test-submit]')?.addEventListener('click', () =>
+      startInlineModelTest(configuration.id),
+    );
   });
 }
 
@@ -365,10 +426,6 @@ function renderModelConfiguration(configuration, index) {
           <span>Agent</span>
           <select data-field="provider">${providerOptions}</select>
         </label>
-        <label class="field model-name-field">
-          <span>关联模型</span>
-          <input data-field="model" type="text" value="${escapeHtml(configuration.model || '')}" placeholder="留空使用 Agent 默认模型" autocomplete="off" />
-        </label>
         <label class="field model-base-url-field">
           <span>Base URL</span>
           <input data-field="baseUrl" type="url" value="${escapeHtml(configuration.baseUrl || '')}" placeholder="${configuration.provider === 'codex' ? 'https://gateway.example.com/v1' : 'https://gateway.example.com'}" autocomplete="off" />
@@ -384,17 +441,29 @@ function renderModelConfiguration(configuration, index) {
         </label>
       </div>
       <div class="model-config-controls">
+        <button class="test" type="button" data-config-action="test">测试</button>
         <button type="button" data-config-action="up" aria-label="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
         <button type="button" data-config-action="down" aria-label="下移" ${index === state.modelConfigs.length - 1 ? 'disabled' : ''}>↓</button>
         <button class="danger" type="button" data-config-action="delete">删除</button>
       </div>
+      ${state.modelTestConfigId === configuration.id ? renderInlineModelTest(configuration) : ''}
     </article>`;
 }
 
 function handleModelConfigurationAction(action, id) {
+  if (state.modelTestRunning) {
+    showToast('模型正在测试，请等待本次调用结束。', true);
+    return;
+  }
   const index = state.modelConfigs.findIndex((configuration) => configuration.id === id);
   if (index === -1) return;
-  if (action === 'up' && index > 0) {
+  if (action === 'test') {
+    state.modelTestConfigId = id;
+    state.modelTestPrompt = '';
+  } else if (action === 'close-test') {
+    state.modelTestConfigId = null;
+    state.modelTestPrompt = '';
+  } else if (action === 'up' && index > 0) {
     [state.modelConfigs[index - 1], state.modelConfigs[index]] = [
       state.modelConfigs[index],
       state.modelConfigs[index - 1],
@@ -419,94 +488,71 @@ function handleModelConfigurationAction(action, id) {
   renderModelConfigurations();
 }
 
-function openModelTestDialog() {
-  if (!state.modelConfigs.length) {
-    showToast('请先添加关联模型。', true);
-    return;
-  }
-  elements.modelTestSelect.innerHTML = state.modelConfigs
-    .map(
-      (configuration, index) =>
-        `<option value="${escapeHtml(configuration.id)}">${index + 1}. ${escapeHtml(providerLabel(configuration.provider))} / ${escapeHtml(configuration.model || '默认模型')}</option>`,
-    )
-    .join('');
-  renderModelTestSummary();
-  resetModelTestTerminal();
-  elements.modelTestDialog.hidden = false;
-  elements.modelTestPrompt.focus();
+function renderInlineModelTest(configuration) {
+  return `
+    <section class="model-config-test">
+      <div class="model-config-test-header">
+        <div>
+          <strong>测试当前关联项 · ${escapeHtml(providerLabel(configuration.provider))}</strong>
+          <small>直接使用 CLI/环境已配置的模型，不覆盖模型名。</small>
+        </div>
+        <button class="text-button" type="button" data-config-action="close-test">收起</button>
+      </div>
+      <div class="model-config-test-input">
+        <textarea data-model-test-prompt rows="3" maxlength="4000" placeholder="例如：请用一句话介绍你自己">${escapeHtml(state.modelTestPrompt)}</textarea>
+        <button class="save-button" type="button" data-model-test-submit>发送并测试</button>
+      </div>
+      <div class="model-test-terminal" data-model-test-terminal aria-live="polite">
+        <p class="muted">输入内容后测试这条关联配置。</p>
+      </div>
+      <p class="model-test-cost-note">最多 4000 字；每次测试都会发起一次真实模型调用，且禁止使用工具和修改文件。</p>
+    </section>`;
 }
 
-function closeModelTestDialog() {
-  if (state.modelTestRunning) {
-    showToast('模型正在测试，请等待本次调用结束。', true);
-    return;
-  }
-  elements.modelTestDialog.hidden = true;
-}
-
-function selectedModelTestConfiguration() {
-  return state.modelConfigs.find(
-    (configuration) => configuration.id === elements.modelTestSelect.value,
-  );
-}
-
-function renderModelTestSummary() {
-  const configuration = selectedModelTestConfiguration();
-  if (!configuration) {
-    elements.modelTestSummary.innerHTML = '<span>没有可测试的关联模型</span>';
-    return;
-  }
-  const index = state.modelConfigs.indexOf(configuration);
-  elements.modelTestSummary.innerHTML = `
-    <div class="model-test-provider-mark">${escapeHtml(providerLabel(configuration.provider).slice(0, 1))}</div>
-    <div>
-      <strong>${escapeHtml(providerLabel(configuration.provider))}</strong>
-      <span>${escapeHtml(configuration.model || 'Agent 默认模型')} · ${escapeHtml(configuration.baseUrl || '官方端点')} · 执行顺序 ${index + 1}</span>
-    </div>
-    <em>已关联</em>`;
-}
-
-function resetModelTestTerminal() {
-  elements.modelTestTerminal.className = 'model-test-terminal';
-  elements.modelTestTerminal.innerHTML =
-    '<p class="muted">选择模型、输入内容后点击“发送并测试”。</p>';
-  elements.startModelTest.textContent = '发送并测试';
-}
-
-function appendModelTestLine(message, tone = '') {
+function appendModelTestLine(terminal, message, tone = '') {
   const line = document.createElement('p');
   if (tone) line.className = tone;
   line.textContent = message;
-  elements.modelTestTerminal.appendChild(line);
-  elements.modelTestTerminal.scrollTop = elements.modelTestTerminal.scrollHeight;
+  terminal.appendChild(line);
+  terminal.scrollTop = terminal.scrollHeight;
 }
 
-async function startSelectedModelTest() {
-  const configuration = selectedModelTestConfiguration();
+async function startInlineModelTest(configurationId) {
+  const configuration = state.modelConfigs.find((item) => item.id === configurationId);
   if (!configuration || state.modelTestRunning) return;
-  const prompt = elements.modelTestPrompt.value.trim();
+  const row = Array.from(
+    elements.modelConfigList.querySelectorAll('[data-config-id]'),
+  ).find((item) => item.dataset.configId === configurationId);
+  const promptInput = row?.querySelector('[data-model-test-prompt]');
+  const terminal = row?.querySelector('[data-model-test-terminal]');
+  const submit = row?.querySelector('[data-model-test-submit]');
+  if (!promptInput || !terminal || !submit) return;
+  const prompt = promptInput.value.trim();
   if (!prompt) {
     showToast('请输入要发送给 Agent 的内容。', true);
-    elements.modelTestPrompt.focus();
+    promptInput.focus();
     return;
   }
 
   state.modelTestRunning = true;
-  elements.modelTestSelect.disabled = true;
-  elements.modelTestPrompt.disabled = true;
-  elements.startModelTest.disabled = true;
-  elements.closeModelTest.disabled = true;
-  elements.cancelModelTest.disabled = true;
-  elements.startModelTest.textContent = '测试中…';
-  elements.modelTestTerminal.className = 'model-test-terminal running';
-  elements.modelTestTerminal.innerHTML = '';
+  const interactive = Array.from(
+    elements.modelSettingsForm.querySelectorAll('button, input, select, textarea'),
+  );
+  const disabledStates = interactive.map((element) => element.disabled);
+  interactive.forEach((element) => {
+    element.disabled = true;
+  });
+  submit.textContent = '测试中…';
+  terminal.className = 'model-test-terminal running';
+  terminal.innerHTML = '';
   appendModelTestLine(
-    `> ${providerLabel(configuration.provider)} / ${configuration.model || '默认模型'}`,
+    terminal,
+    `> ${providerLabel(configuration.provider)} / CLI 已配置模型`,
     'command',
   );
-  appendModelTestLine(`你：${prompt}`, 'command');
-  appendModelTestLine('正在启动对应 CLI…', 'pending');
-  appendModelTestLine('正在等待 Agent 回复…', 'muted');
+  appendModelTestLine(terminal, `你：${prompt}`, 'command');
+  appendModelTestLine(terminal, '正在启动对应 CLI…', 'pending');
+  appendModelTestLine(terminal, '正在等待 Agent 回复…', 'muted');
 
   try {
     const result = await api('/api/console/model-test', {
@@ -514,35 +560,32 @@ async function startSelectedModelTest() {
       body: JSON.stringify({
         id: configuration.id,
         provider: configuration.provider,
-        model: configuration.model,
         baseUrl: configuration.baseUrl,
         apiKey: configuration.apiKey || undefined,
         clearApiKey: configuration.clearApiKey,
         prompt,
       }),
     });
-    elements.modelTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
-    appendModelTestLine('', 'spacer');
-    appendModelTestLine(result.message, result.success ? 'success' : 'error');
+    terminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
+    appendModelTestLine(terminal, '', 'spacer');
+    appendModelTestLine(terminal, result.message, result.success ? 'success' : 'error');
     if (result.response) {
-      appendModelTestLine(`Agent 回复：\n${result.response}`, 'response');
+      appendModelTestLine(terminal, `Agent 回复：\n${result.response}`, 'response');
     }
-    appendModelTestLine(`耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
-    elements.startModelTest.textContent = '再次发送';
+    appendModelTestLine(terminal, `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
+    submit.textContent = '再次发送';
     showToast(result.message, !result.success);
   } catch (error) {
-    elements.modelTestTerminal.className = 'model-test-terminal error';
-    appendModelTestLine('', 'spacer');
-    appendModelTestLine(error.message, 'error');
-    elements.startModelTest.textContent = '再次发送';
+    terminal.className = 'model-test-terminal error';
+    appendModelTestLine(terminal, '', 'spacer');
+    appendModelTestLine(terminal, error.message, 'error');
+    submit.textContent = '再次发送';
     showToast(error.message, true);
   } finally {
     state.modelTestRunning = false;
-    elements.modelTestSelect.disabled = false;
-    elements.modelTestPrompt.disabled = false;
-    elements.startModelTest.disabled = false;
-    elements.closeModelTest.disabled = false;
-    elements.cancelModelTest.disabled = false;
+    interactive.forEach((element, index) => {
+      element.disabled = disabledStates[index];
+    });
   }
 }
 
@@ -554,7 +597,6 @@ function addModelConfiguration() {
   state.modelConfigs.push({
     id: createClientId(),
     provider: 'codex',
-    model: '',
     baseUrl: '',
     apiKey: '',
     hasApiKey: false,
@@ -573,7 +615,6 @@ function resetModelConfigurations() {
     {
       id: createClientId(),
       provider: 'codex',
-      model: '',
       baseUrl: '',
       apiKey: '',
       hasApiKey: false,
@@ -583,7 +624,6 @@ function resetModelConfigurations() {
     {
       id: createClientId(),
       provider: 'claude',
-      model: 'sonnet',
       baseUrl: '',
       apiKey: '',
       hasApiKey: false,
@@ -600,7 +640,7 @@ function renderExecutionOrderPreview() {
   elements.executionOrderPreview.innerHTML = configurations
     .map(
       (configuration, index) =>
-        `<span><b>${index + 1}</b>${escapeHtml(providerLabel(configuration.provider))}${configuration.model ? ` / ${escapeHtml(configuration.model)}` : ''}</span>`,
+        `<span><b>${index + 1}</b>${escapeHtml(providerLabel(configuration.provider))}</span>`,
     )
     .join('<i>→</i>');
 }
@@ -662,7 +702,6 @@ async function saveModelSettings(event) {
         modelConfigs: state.modelConfigs.map((configuration) => ({
           id: configuration.id,
           provider: configuration.provider,
-          model: configuration.model,
           baseUrl: configuration.baseUrl,
           apiKey: configuration.apiKey || undefined,
           clearApiKey: configuration.clearApiKey,

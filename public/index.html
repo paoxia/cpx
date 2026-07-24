@@ -94,6 +94,14 @@
                 <div class="field-row">
                   <label class="field field-grow">
                     <span>GitHub 仓库</span>
+                    <select
+                      id="repository-picker"
+                      aria-describedby="repository-hint"
+                      hidden
+                    >
+                      <option value="">选择已有 Token 授权的项目</option>
+                      <option value="__manual__">手动输入仓库地址…</option>
+                    </select>
                     <input
                       id="repository"
                       type="text"
@@ -101,7 +109,7 @@
                       autocomplete="off"
                       required
                     />
-                    <small>支持 owner/repo、HTTPS 或 SSH 地址</small>
+                    <small id="repository-hint">支持 owner/repo、HTTPS 或 SSH 地址</small>
                   </label>
                   <label class="field branch-field">
                     <span>基础分支</span>
@@ -301,9 +309,6 @@
               <h1>管理关联模型，<br /><span>定义 Agent 执行顺序。</span></h1>
             </div>
             <div class="model-header-actions">
-              <button class="secondary-button model-test-launch" id="open-model-test" type="button">
-                测试模型
-              </button>
               <button
                 class="icon-button"
                 id="add-model-config"
@@ -322,7 +327,7 @@
                   <span class="step-index">01</span>
                   <h2>关联模型 <em id="model-config-count">0</em></h2>
                 </div>
-                <p>配置 Agent、模型、Base URL 与密钥；从上到下依次执行。</p>
+                <p>配置 Agent、Base URL 与密钥；从上到下依次执行，并可逐条测试。</p>
               </div>
 
               <form id="model-settings-form">
@@ -347,7 +352,8 @@
                   ><span>每条配置可保存独立 API Key，也可复用环境变量或 CLI 登录。</span>
                 </li>
                 <li>
-                  <strong>配置测试</strong><span>调用对应模型验证密钥、登录和模型名是否可用。</span>
+                  <strong>配置测试</strong
+                  ><span>在对应关联项内验证密钥、登录和 CLI 模型配置是否可用。</span>
                 </li>
               </ol>
               <div class="security-note">
@@ -366,53 +372,6 @@
           </footer>
         </div>
       </main>
-    </div>
-
-    <div class="model-test-dialog" id="model-test-dialog" hidden>
-      <section
-        class="model-test-dialog-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="model-test-title"
-      >
-        <header class="model-test-dialog-header">
-          <div>
-            <p class="eyebrow">CONNECTION TEST</p>
-            <h2 id="model-test-title">测试模型配置</h2>
-          </div>
-          <button class="icon-button" id="close-model-test" type="button" aria-label="关闭">
-            ×
-          </button>
-        </header>
-
-        <div class="model-test-dialog-body">
-          <div class="model-test-config-summary" id="model-test-config-summary"></div>
-          <label class="field">
-            <span>选择关联模型</span>
-            <select id="model-test-select"></select>
-          </label>
-          <label class="field">
-            <span>发送内容</span>
-            <textarea
-              id="model-test-prompt"
-              rows="4"
-              maxlength="4000"
-              placeholder="例如：请用一句话介绍你自己"
-              required
-            ></textarea>
-            <small>最多 4000 字；测试环境禁止使用工具和修改文件。</small>
-          </label>
-          <div class="model-test-terminal" id="model-test-terminal" aria-live="polite">
-            <p class="muted">选择模型、输入内容后点击“发送并测试”。</p>
-          </div>
-          <p class="model-test-cost-note">每次测试都会通过对应 CLI 发起一次真实模型调用。</p>
-        </div>
-
-        <footer class="model-test-dialog-footer">
-          <button class="secondary-button" id="cancel-model-test" type="button">关闭</button>
-          <button class="save-button" id="start-model-test" type="button">发送并测试</button>
-        </footer>
-      </section>
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>

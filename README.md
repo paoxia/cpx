@@ -51,9 +51,9 @@ curl -X POST http://localhost:3000/command \
 
 控制台的 GitHub 页签在没有 Token 时提供“创建 GitHub Token”入口，打开 GitHub 的 fine-grained PAT 页面并预填 90 天有效期及 Contents、Pull requests、Workflows 写权限；用户仍需在 GitHub 选择资源所有者和仓库，生成后复制回控制台验证。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。页面会区分本地文件与环境变量来源，受限 Token 只显示明确授权的仓库。
 
-验证成功的 Token 同时供 GitHub API、HTTPS `git clone/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。仓库列表中的“用于新任务”可将仓库和默认分支带入任务控制台。
+验证成功的 Token 同时供 GitHub API、HTTPS `git clone/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。任务控制台会直接列出该 Token 授权的未归档项目，选择后自动带入默认分支；也可从仓库列表点击“用于新任务”，或手动输入仓库地址。
 
-“模型设置”管理 Codex 和 Claude Code 的有序执行配置。每条配置可独立设置 Agent、模型名、可选 Base URL 和可选 API Key，并支持新增、删除及上下调整；同一 Agent 可配置多次，用于组合不同模型或网关。已保存的密钥不会回显，只展示来源和配置状态；新密钥会以明文写入本机 `console-settings.json`，应限制该文件的读取权限。点击“测试模型”可选择关联项、输入最多 4000 字的测试内容，并在终端区域查看 Agent 的实际文本回复；尚未保存的 Base URL 或密钥只用于本次测试，不会被测试接口持久化。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。
+“模型设置”管理 Codex 和 Claude Code 的有序执行配置。每条配置可独立设置 Agent、可选 Base URL 和可选 API Key，并支持新增、删除及上下调整；同一 Agent 可配置多次，用于组合不同凭据或网关。控制台不覆盖模型名，任务和测试都直接使用对应 CLI 或环境的已有模型配置。已保存的密钥不会回显，只展示来源和配置状态；新密钥会以明文写入本机 `console-settings.json`，应限制该文件的读取权限。每条关联项内可直接输入最多 4000 字的内容进行测试，并在下方终端区域查看 Agent 的实际文本回复；尚未保存的 Base URL 或密钥只用于本次测试，不会被测试接口持久化。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。
 
 ### 在远程服务器连接 Codex / Claude Code
 
@@ -248,7 +248,7 @@ Coding Agent 密钥沿用 CLI 的原生环境变量：Codex 使用 `CODEX_API_KE
 
 | 端点                                       | 说明                                           |
 | ------------------------------------------ | ---------------------------------------------- |
-| `GET/POST /api/console/settings`           | 读取或更新有序模型、Base URL 及本地持久化密钥  |
+| `GET/POST /api/console/settings`           | 读取或更新有序 Agent、Base URL 及本地持久化密钥 |
 | `POST /api/console/model-test`             | 向当前或已保存的单条配置发送内容并返回文本回复 |
 | `GET /api/console/agent-auth?provider=...` | 检查 Codex 或 Claude Code CLI 登录状态         |
 | `POST /api/console/agent-auth/login`       | 启动指定 Agent 的官方 CLI 登录                 |
