@@ -21,10 +21,17 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { SkillManager } from '../skills/SkillManager';
 import { MCPManager } from '../mcp/MCPManager';
 import { WebConsole } from '../web/WebConsole';
+import type { AgentTask } from '../agents/AgentTaskManager';
 import type { AppConfig, Command, CommandResult, CommandSource } from './types';
 import type { ParsedUserInfo } from './CommandParser';
 
 const VERSION = '1.0.0';
+
+interface MessagingTaskOrigin {
+  source: CommandSource;
+  userId: string;
+  commandId: string;
+}
 
 /**
  * AgentSystem 编排根：装配并管理所有模块的生命周期
@@ -52,6 +59,7 @@ export class AgentSystem {
   private skillManager: SkillManager;
   private mcpManager: MCPManager;
   private webConsole: WebConsole;
+  private messagingTaskOrigins = new Map<string, MessagingTaskOrigin>();
   private running = false;
   private resultPusher?: (source: CommandSource, message: unknown) => Promise<void>;
 
@@ -139,6 +147,7 @@ export class AgentSystem {
     this.registerBasicHandlers();
     this.registerConfirmationHandlers();
     this.registerGitHubHandlers();
+    this.registerCodingAgentHandlers();
     this.registerSkillHandlers();
     this.registerMcpHandlers();
     this.registerWebhookEndpoints();
@@ -168,6 +177,10 @@ export class AgentSystem {
 
   getHttpServer(): HttpServer {
     return this.httpServer;
+  }
+
+  getWebConsole(): WebConsole {
+    return this.webConsole;
   }
 
   getDatabase(): DatabaseService {
@@ -602,6 +615,255 @@ export class AgentSystem {
     });
   }
 
+  /** 注册钉钉/飞书可用的 GitHub 查询与 Coding Agent 开发命令。 */
+  private registerCodingAgentHandlers(): void {
+    this.router.register('github_overview', async (command) => {
+      try {
+        const connection = await this.webConsole.inspectGitHub();
+        const repositories = connection.repositories.slice(0, 15);
+        const lines = repositories.map((repository) => {
+          const visibility = repository.private ? '私有' : '公开';
+          return `• ${repository.fullName} [${visibility}] 默认分支: ${repository.defaultBranch}`;
+        });
+        const remaining =
+          connection.repositories.length > repositories.length
+            ? `\n其余 ${connection.repositories.length - repositories.length} 个仓库请在 Web 控制台查看。`
+            : '';
+        return {
+          commandId: command.id,
+          success: true,
+          message: [
+            `GitHub 已连接：${connection.user.login}`,
+            `可访问仓库：${connection.repositories.length} 个`,
+            '',
+            lines.join('\n') || '当前 Token 没有可访问的仓库。',
+            remaining,
+            '',
+            '查看分支：查看分支 owner/repo',
+            '发起开发：开发 owner/repo#基础分支 需求',
+          ]
+            .filter((line) => line !== '')
+            .join('\n'),
+        };
+      } catch (error) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: `GitHub 查询失败：${errorMessage(error)}`,
+        };
+      }
+    });
+
+    this.router.register('github_branches', async (command) => {
+      const repository = command.args.repository as string;
+      try {
+        const branches = await this.webConsole.getGitHubBranches(repository);
+        const visible = branches.slice(0, 40);
+        const lines = visible.map(
+          (branch) => `• ${branch.name}${branch.protected ? '（受保护）' : ''}`,
+        );
+        const remaining =
+          branches.length > visible.length
+            ? `\n其余 ${branches.length - visible.length} 个分支已省略。`
+            : '';
+        return {
+          commandId: command.id,
+          success: true,
+          message: `${repository} 的分支（${branches.length}）：\n${lines.join('\n')}${remaining}`,
+        };
+      } catch (error) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: `分支查询失败：${errorMessage(error)}`,
+        };
+      }
+    });
+
+    this.router.register('agent_develop', async (command) => {
+      const repository = command.args.repository as string;
+      const requestedBaseBranch = command.args.baseBranch as string | undefined;
+      const taskBranch = command.args.taskBranch as string | undefined;
+      const prompt = command.args.prompt as string;
+
+      try {
+        const connection = await this.webConsole.inspectGitHub();
+        const selectedRepository = connection.repositories.find(
+          (candidate) => candidate.fullName.toLowerCase() === repository.toLowerCase(),
+        );
+        if (!selectedRepository) {
+          throw new Error(`当前 GitHub Token 无权访问仓库 ${repository}`);
+        }
+        if (selectedRepository.archived) {
+          throw new Error(`仓库 ${repository} 已归档，不能创建开发任务`);
+        }
+
+        const baseBranch = requestedBaseBranch ?? selectedRepository.defaultBranch;
+        const branches = await this.webConsole.getGitHubBranches(selectedRepository.fullName);
+        if (!branches.some((branch) => branch.name === baseBranch)) {
+          throw new Error(`基础分支 ${baseBranch} 不存在`);
+        }
+        if (taskBranch && branches.some((branch) => branch.name === taskBranch)) {
+          throw new Error(`新分支 ${taskBranch} 已存在`);
+        }
+
+        const task = this.webConsole.createCodingTask({
+          repository: selectedRepository.fullName,
+          baseBranch,
+          taskBranch,
+          prompt,
+          createPullRequest: true,
+          useFallback: true,
+        });
+        this.messagingTaskOrigins.set(task.id, {
+          source: command.source,
+          userId: command.userId,
+          commandId: command.id,
+        });
+        this.auditLogger.record({
+          action: 'agent_delegate',
+          userId: command.userId,
+          source: command.source,
+          commandId: command.id,
+          operation: `develop ${selectedRepository.fullName}`,
+          result: 'success',
+          details: task.id,
+        });
+        if (command.source !== 'cli') {
+          void this.pushCodingTaskCompletion(task.id);
+        }
+
+        return {
+          commandId: command.id,
+          success: true,
+          message: [
+            `Coding Agent 任务已创建：${shortTaskId(task.id)}`,
+            `仓库：${selectedRepository.fullName}`,
+            `基础分支：${baseBranch}`,
+            `任务分支：${taskBranch ?? '自动创建'}`,
+            '任务完成后会自动推送结果和 PR 链接。',
+            `查询进度：任务 ${shortTaskId(task.id)}`,
+          ].join('\n'),
+          data: { taskId: task.id },
+        };
+      } catch (error) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: `开发任务创建失败：${errorMessage(error)}`,
+        };
+      }
+    });
+
+    this.router.register('agent_task_list', async (command) => {
+      const requestedLimit = Number(command.args.limit ?? 5);
+      const limit = Number.isFinite(requestedLimit)
+        ? Math.max(1, Math.min(10, Math.floor(requestedLimit)))
+        : 5;
+      const tasks = this.webConsole
+        .listCodingTasks()
+        .filter((task) => this.isMessagingTaskOwner(task.id, command))
+        .slice(0, limit);
+      if (tasks.length === 0) {
+        return {
+          commandId: command.id,
+          success: true,
+          message: '你还没有通过当前平台创建 Coding Agent 任务。',
+        };
+      }
+      return {
+        commandId: command.id,
+        success: true,
+        message: `最近任务：\n${tasks
+          .map(
+            (task) =>
+              `• ${shortTaskId(task.id)} [${codingTaskStatusLabel(task.status)}] ${displayRepository(task.repository)}#${task.baseBranch ?? '默认分支'}`,
+          )
+          .join('\n')}\n\n查看详情：任务 <ID>`,
+      };
+    });
+
+    this.router.register('agent_task_status', async (command) => {
+      const task = this.ownedMessagingTask(command.args.id as string, command);
+      if (!task) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: '任务不存在，或不是你在当前平台创建的任务。',
+        };
+      }
+      return {
+        commandId: command.id,
+        success: task.status !== 'failed',
+        message: formatCodingTask(task),
+        prUrl: task.pullRequestUrl,
+      };
+    });
+
+    this.router.register('agent_task_cancel', async (command) => {
+      const reference = command.args.id as string;
+      const task = this.ownedMessagingTask(reference, command);
+      if (!task) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: '任务不存在，或不是你在当前平台创建的任务。',
+        };
+      }
+      if (!this.webConsole.cancelCodingTask(task.id)) {
+        return {
+          commandId: command.id,
+          success: false,
+          message: `任务 ${shortTaskId(task.id)} 已结束，无法取消。`,
+        };
+      }
+      return {
+        commandId: command.id,
+        success: true,
+        message: `已取消 Coding Agent 任务 ${shortTaskId(task.id)}。`,
+      };
+    });
+  }
+
+  private ownedMessagingTask(reference: string, command: Command): AgentTask | undefined {
+    const task = this.webConsole.getCodingTask(reference);
+    return task && this.isMessagingTaskOwner(task.id, command) ? task : undefined;
+  }
+
+  private isMessagingTaskOwner(taskId: string, command: Command): boolean {
+    const origin = this.messagingTaskOrigins.get(taskId);
+    return Boolean(origin && origin.source === command.source && origin.userId === command.userId);
+  }
+
+  private async pushCodingTaskCompletion(taskId: string): Promise<void> {
+    const origin = this.messagingTaskOrigins.get(taskId);
+    if (!origin || origin.source === 'cli' || !this.resultPusher) {
+      return;
+    }
+    try {
+      const task = await this.webConsole.waitForCodingTask(taskId);
+      const success = task.status === 'completed';
+      const result: CommandResult = {
+        commandId: origin.commandId,
+        success,
+        message: formatCodingTask(task, true),
+        prUrl: task.pullRequestUrl,
+      };
+      await this.resultPusher(origin.source, this.formatter.format(result, origin.source));
+      this.auditLogger.record({
+        action: 'agent_delegate',
+        userId: origin.userId,
+        source: origin.source,
+        commandId: origin.commandId,
+        operation: `complete ${task.id}`,
+        result: success ? 'success' : 'failure',
+        details: task.pullRequestUrl ?? task.error ?? task.status,
+      });
+    } catch (error) {
+      this.logger.error(`Coding Agent 任务结果推送失败: ${errorMessage(error)}`);
+    }
+  }
+
   /** 注册钉钉/飞书 Webhook 端点 */
   private registerWebhookEndpoints(): void {
     // 钉钉 webhook
@@ -680,6 +942,12 @@ export class AgentSystem {
       '',
       '• version / 版本 - 查看版本',
       '• help / 帮助 - 显示此帮助',
+      '• 查看GitHub - 查看账号和可访问仓库',
+      '• 查看分支 <owner/repo> - 查看仓库分支',
+      '• 开发 <owner/repo>[#基础分支] [-> 新分支] <需求> - 交给 Coding Agent 开发并创建 PR',
+      '• 最近任务 [数量] - 查看自己从当前平台创建的任务',
+      '• 任务 <ID> - 查看 Coding Agent 任务进度',
+      '• 取消任务 <ID> - 取消运行中的任务',
       '• 修改 <file> <description> - 修改 GitHub 文件并创建 PR',
       '• 新建文件 <file> <description> - 创建 GitHub 文件',
       '• 读取文件 <file> - 读取 GitHub 文件内容',
@@ -692,4 +960,65 @@ export class AgentSystem {
       '• 列出 skill/mcp/agent - 列出资源',
     ].join('\n');
   }
+}
+
+function shortTaskId(id: string): string {
+  return id.slice(0, 8);
+}
+
+function codingTaskStatusLabel(status: AgentTask['status']): string {
+  return {
+    queued: '排队中',
+    preparing: '准备工作区',
+    running: '开发中',
+    publishing: '提交 PR',
+    completed: '已完成',
+    failed: '失败',
+    cancelled: '已取消',
+  }[status];
+}
+
+function displayRepository(repository: string): string {
+  return repository
+    .replace(/^https:\/\/github\.com\//, '')
+    .replace(/^git@github\.com:/, '')
+    .replace(/\.git$/, '');
+}
+
+function formatCodingTask(task: AgentTask, completion = false): string {
+  const heading = completion
+    ? task.status === 'completed'
+      ? 'Coding Agent 开发完成'
+      : task.status === 'cancelled'
+        ? 'Coding Agent 任务已取消'
+        : 'Coding Agent 开发失败'
+    : `Coding Agent 任务 ${shortTaskId(task.id)}`;
+  const activeAttempt = task.attempts[task.attempts.length - 1];
+  const lines = [
+    heading,
+    `任务 ID：${shortTaskId(task.id)}`,
+    `状态：${codingTaskStatusLabel(task.status)}`,
+    `仓库：${displayRepository(task.repository)}`,
+    `基础分支：${task.baseBranch ?? '默认分支'}`,
+    `任务分支：${task.agentBranch ?? task.taskBranch ?? '尚未创建'}`,
+    `Agent：${activeAttempt?.provider ?? task.provider}`,
+  ];
+  if (task.attempts.length > 1) {
+    lines.push(
+      `尝试顺序：${task.attempts
+        .map((attempt) => `${attempt.provider}(${attempt.status})`)
+        .join(' → ')}`,
+    );
+  }
+  if (task.error) {
+    lines.push(`错误：${task.error.slice(0, 800)}`);
+  }
+  if (!task.pullRequestUrl && task.status === 'completed') {
+    lines.push('Agent 未产生文件改动，因此没有创建 PR。');
+  }
+  return lines.join('\n');
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

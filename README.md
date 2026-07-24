@@ -118,13 +118,40 @@ agent-cli stop             # 提示如何停止（通过 SIGTERM）
 
 ### GitHub 操作
 
-| 命令                            | 说明                     |
-| ------------------------------- | ------------------------ |
-| `读取文件 <file>`               | 读取 GitHub 仓库文件内容 |
-| `修改 <file> <description>`     | 修改文件并创建 PR        |
-| `新建文件 <file> <description>` | 创建新文件并创建 PR      |
+| 命令                            | 说明                              |
+| ------------------------------- | --------------------------------- |
+| `查看GitHub`                    | 查看当前账号和 Token 可访问的仓库 |
+| `查看分支 <owner/repo>`         | 查看仓库现有分支                  |
+| `读取文件 <file>`               | 读取默认 GitHub 仓库文件内容      |
+| `修改 <file> <description>`     | 执行预设的简单修改并创建 PR       |
+| `新建文件 <file> <description>` | 按预设内容创建新文件并创建 PR     |
 
 示例：`@agent 修改 README.md 添加安装说明`
+
+### Coding Agent 开发
+
+| 命令                                              | 说明                                     |
+| ------------------------------------------------- | ---------------------------------------- |
+| `开发 <owner/repo>[#基础分支] [-> 新分支] <需求>` | 使用 Codex/Claude Code 开发并默认创建 PR |
+| `最近任务 [数量]`                                 | 查看当前用户从当前平台创建的最近任务     |
+| `任务 <ID>`                                       | 查看任务状态；可使用返回 ID 的前 8 位    |
+| `取消任务 <ID>`                                   | 取消尚未结束的任务                       |
+
+基础分支省略时使用仓库默认分支；新分支省略时自动生成 `cpx/task-*`。开发命令会先确认当前 GitHub Token 能访问仓库、基础分支存在且指定的新分支尚不存在，然后复用模型设置中的 Agent 顺序和对应 CLI 的已有配置。任务完成、失败或取消后，系统会通过当前来源平台配置的群机器人 Webhook 再推送一次最终状态；有 PR 时同时返回链接。
+
+钉钉示例：
+
+```text
+@机器人 开发 paoxia/cpx#dev -> feature/fix-login 修复登录页面并补充测试
+```
+
+飞书示例：
+
+```text
+/agent 开发 paoxia/cpx#dev 修复登录页面并补充测试
+```
+
+聊天任务只能由创建它的同一平台、同一用户查询或取消。任务归属、状态和日志均保存在进程内，服务重启后不会恢复。
 
 ### Skill 执行
 
@@ -248,7 +275,7 @@ Coding Agent 配置完全沿用 CLI 和服务进程环境：Codex 可使用 `COD
 
 | 端点                                       | 说明                                           |
 | ------------------------------------------ | ---------------------------------------------- |
-| `GET/POST /api/console/settings`           | 读取或更新有序 Agent 关联项                     |
+| `GET/POST /api/console/settings`           | 读取或更新有序 Agent 关联项                    |
 | `POST /api/console/model-test`             | 向当前或已保存的单条配置发送内容并返回文本回复 |
 | `GET /api/console/agent-auth?provider=...` | 检查 Codex 或 Claude Code CLI 登录状态         |
 | `POST /api/console/agent-auth/login`       | 启动指定 Agent 的官方 CLI 登录                 |
@@ -257,7 +284,7 @@ Coding Agent 配置完全沿用 CLI 和服务进程环境：Codex 可使用 `COD
 | `GET /api/console/github`                  | 读取 Token 来源、连接状态和 PAT 创建引导       |
 | `POST /api/console/github/connect`         | 验证 GitHub Token，成功后写入配置并读取仓库    |
 | `GET /api/console/github/repositories`     | 使用已配置 Token 刷新全部可访问仓库            |
-| `GET /api/console/github/branches`         | 读取指定 `owner/repo` 的全部分支                |
+| `GET /api/console/github/branches`         | 读取指定 `owner/repo` 的全部分支               |
 | `GET/POST /api/console/tasks`              | 列出任务或创建任务                             |
 | `GET /api/console/task?id=<id>`            | 读取单个任务及日志                             |
 | `POST /api/console/cancel`                 | 取消未结束任务                                 |

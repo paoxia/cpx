@@ -97,7 +97,8 @@ describe('AgentTaskManager', () => {
     });
 
     expect(created.status).toBe('queued');
-    await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('completed'));
+    const terminal = await manager.waitForTerminal(created.id);
+    expect(terminal.status).toBe('completed');
 
     const task = manager.get(created.id)!;
     expect(task.agentBranch).toMatch(/^cpx\/task-/);
@@ -110,6 +111,7 @@ describe('AgentTaskManager', () => {
         env: expect.objectContaining({ CODEX_API_KEY: 'test-openai-key' }),
       }),
     );
+    await expect(manager.waitForTerminal('missing-task')).rejects.toThrow('任务不存在');
     await manager.stop();
   });
 
@@ -159,15 +161,7 @@ describe('AgentTaskManager', () => {
     );
     expect(spawnMock).toHaveBeenCalledWith(
       'gh',
-      [
-        'pr',
-        'create',
-        '--fill',
-        '--head',
-        'feature/update-docs',
-        '--base',
-        'develop',
-      ],
+      ['pr', 'create', '--fill', '--head', 'feature/update-docs', '--base', 'develop'],
       expect.objectContaining({
         env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
       }),
@@ -187,8 +181,10 @@ describe('AgentTaskManager', () => {
     });
 
     await vi.waitFor(() => expect(manager.get(created.id)?.status).toBe('running'));
+    const terminalPromise = manager.waitForTerminal(created.id);
     expect(manager.cancel(created.id)).toBe(true);
     expect(manager.get(created.id)?.status).toBe('cancelled');
+    await expect(terminalPromise).resolves.toMatchObject({ status: 'cancelled' });
     await manager.stop();
     expect(() =>
       manager.create({ provider: 'codex', repository: 'acme/repo', prompt: '再次运行' }),

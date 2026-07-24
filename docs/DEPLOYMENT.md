@@ -158,14 +158,14 @@ Claude Code 可在同一区域启动官方浏览器登录；需要手工返回�
 3. 钉钉机器人需要能回调到 NAS 的 `/webhook/dingtalk` 端点。**NAS 必须可被钉钉服务器访问**：
    - 内网使用：通过极空间自带反向代理或 ngrok 等工具暴露到公网
    - 不支持公网回调时，仅使用 Web 控制台下任务
-4. 在群里 @机器人 发送命令，例如 `@agent version` 或 `@agent 修改 README.md 添加安装说明`
+4. 在群里 @机器人 发送命令，例如 `@agent 查看GitHub` 或 `@agent 开发 paoxia/cpx#dev 修复登录页面`
 
 ### 飞书机器人
 
 1. 在飞书开放平台创建自建应用，开启机器人能力
 2. 配置事件订阅地址为 `http://<可被飞书访问的地址>/webhook/feishu`
 3. 把 `App ID`、`App Secret`、Webhook URL 填入 `.docker.env`
-4. 在群里 @机器人 发送命令
+4. 在群里发送 `/agent 查看GitHub`，或使用 `/agent 开发 paoxia/cpx#dev 修复登录页面` 创建 Coding Agent 任务
 
 命令语法见 [README.md](../README.md)「聊天命令」小节。
 

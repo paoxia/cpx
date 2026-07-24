@@ -14,6 +14,10 @@ export interface ParsedUserInfo {
  * 支持的命令格式：
  * - @agent 修改 <file> <description>   -> github_modify
  * - @agent 新建文件 <file> <description> -> github_create
+ * - @agent 查看GitHub                  -> github_overview
+ * - @agent 查看分支 <owner/repo>       -> github_branches
+ * - @agent 开发 <repo>[#base] [-> branch] <prompt> -> agent_develop
+ * - @agent 任务 <id>                   -> agent_task_status
  * - @agent 执行 <skill> [json]          -> skill_execute
  * - @agent 确认 <id>                    -> confirm
  * - @agent 取消 <id>                    -> cancel
@@ -70,8 +74,57 @@ export class CommandParser {
       return { name: 'help', args: {} };
     }
 
+    // 查看 GitHub 账号和最近仓库
+    if (
+      /^(?:查看\s*github(?:\s*(?:情况|状态))?|github(?:\s*(?:status|情况|状态))?|仓库|列出仓库)$/i.test(
+        text,
+      )
+    ) {
+      return { name: 'github_overview', args: {} };
+    }
+
+    // 查看分支 <owner/repo>
+    let m = text.match(/^(?:查看\s*分支|分支|branches?)\s+([a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+)$/i);
+    if (m) {
+      return { name: 'github_branches', args: { repository: m[1] } };
+    }
+
+    // 开发 owner/repo[#base] [-> task-branch] <prompt>
+    m = text.match(
+      /^(?:开发|编码|coding|code)\s+([a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+)(?:#([a-zA-Z0-9._/-]+))?(?:\s+->\s+([a-zA-Z0-9._/-]+))?\s+([\s\S]+)$/i,
+    );
+    if (m) {
+      return {
+        name: 'agent_develop',
+        args: {
+          repository: m[1],
+          baseBranch: m[2],
+          taskBranch: m[3],
+          prompt: m[4].trim(),
+        },
+      };
+    }
+
+    // 取消任务 <id>
+    m = text.match(/^(?:取消任务|cancel\s+task)\s+([a-f0-9-]{6,36})$/i);
+    if (m) {
+      return { name: 'agent_task_cancel', args: { id: m[1] } };
+    }
+
+    // 最近任务 [数量]
+    m = text.match(/^(?:最近任务|任务列表|tasks?)(?:\s+(\d+))?$/i);
+    if (m) {
+      return { name: 'agent_task_list', args: { limit: m[1] ? Number(m[1]) : undefined } };
+    }
+
+    // 任务 <id>
+    m = text.match(/^(?:任务|task)\s+([a-f0-9-]{6,36})$/i);
+    if (m) {
+      return { name: 'agent_task_status', args: { id: m[1] } };
+    }
+
     // 确认 <id>
-    let m = text.match(/^(?:确认|confirm)\s+(cf_[a-f0-9]+)$/i);
+    m = text.match(/^(?:确认|confirm)\s+(cf_[a-f0-9]+)$/i);
     if (m) {
       return { name: 'confirm', args: { id: m[1] } };
     }
@@ -152,11 +205,12 @@ export class CommandParser {
     m = text.match(/^(?:列出|list|ls)\s+(skill|mcp|agent|skill|插件|mcp服务|agent)s?$/i);
     if (m) {
       const resource = m[1].toLowerCase();
-      const normalized = resource.includes('skill') || resource.includes('插件')
-        ? 'skills'
-        : resource.includes('mcp')
-          ? 'mcp'
-          : 'agents';
+      const normalized =
+        resource.includes('skill') || resource.includes('插件')
+          ? 'skills'
+          : resource.includes('mcp')
+            ? 'mcp'
+            : 'agents';
       return { name: `list_${normalized}`, args: {} };
     }
 

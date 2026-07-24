@@ -108,6 +108,7 @@ export class AgentTaskManager {
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
   private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
+  private terminalWaiters = new Map<string, Set<(task: AgentTask) => void>>();
   private gitAskPassPath?: string;
   private stopped = false;
 
@@ -167,6 +168,21 @@ export class AgentTaskManager {
     return task ? this.snapshot(task) : undefined;
   }
 
+  waitForTerminal(id: string): Promise<AgentTask> {
+    const task = this.tasks.get(id);
+    if (!task) {
+      return Promise.reject(new Error('任务不存在'));
+    }
+    if (isTerminal(task.status)) {
+      return Promise.resolve(this.snapshot(task));
+    }
+    return new Promise((resolvePromise) => {
+      const waiters = this.terminalWaiters.get(id) ?? new Set<(task: AgentTask) => void>();
+      waiters.add(resolvePromise);
+      this.terminalWaiters.set(id, waiters);
+    });
+  }
+
   cancel(id: string): boolean {
     const task = this.tasks.get(id);
     if (!task || ['completed', 'failed', 'cancelled'].includes(task.status)) {
@@ -178,6 +194,7 @@ export class AgentTaskManager {
     this.addLog(task, 'system', '用户已取消任务。');
     this.processes.get(id)?.kill();
     this.executionConfigurations.delete(id);
+    this.notifyTerminal(task);
     return true;
   }
 
@@ -188,6 +205,7 @@ export class AgentTaskManager {
         task.status = 'cancelled';
         task.completedAt = Date.now();
         this.addLog(task, 'system', '服务停止，任务已取消。');
+        this.notifyTerminal(task);
       }
     }
     for (const process of this.processes.values()) {
@@ -279,6 +297,7 @@ export class AgentTaskManager {
           ? `任务完成：${task.pullRequestUrl}`
           : '任务完成，改动保留在本地工作区。',
       );
+      this.notifyTerminal(task);
     } catch (error) {
       if (task.status === 'cancelled') {
         return;
@@ -290,6 +309,7 @@ export class AgentTaskManager {
       task.completedAt = Date.now();
       this.addLog(task, 'system', `任务失败：${message}`);
       this.logger.error(`任务 ${task.id} 失败: ${message}`);
+      this.notifyTerminal(task);
     } finally {
       this.executionConfigurations.delete(task.id);
     }
@@ -621,6 +641,18 @@ export class AgentTaskManager {
       logs: task.logs.map((entry) => ({ ...entry })),
       attempts: task.attempts.map((attempt) => ({ ...attempt })),
     };
+  }
+
+  private notifyTerminal(task: AgentTask): void {
+    const waiters = this.terminalWaiters.get(task.id);
+    if (!waiters) {
+      return;
+    }
+    const snapshot = this.snapshot(task);
+    this.terminalWaiters.delete(task.id);
+    for (const resolvePromise of waiters) {
+      resolvePromise(snapshot);
+    }
   }
 }
 

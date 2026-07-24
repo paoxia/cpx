@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import {
   AgentModelConfiguration,
+  AgentTask,
   AgentTaskManager,
   CodingAgentProvider,
 } from '../agents/AgentTaskManager';
@@ -83,6 +84,15 @@ export interface WebConsoleOptions {
   modelTester?: ModelConfigurationTestRunner;
 }
 
+export interface ConsoleCodingTaskRequest {
+  repository: string;
+  baseBranch?: string;
+  taskBranch?: string;
+  prompt: string;
+  createPullRequest?: boolean;
+  useFallback?: boolean;
+}
+
 /** 注册开发控制台页面、设置和 Agent 任务 API。 */
 export class WebConsole {
   private settings: ConsoleSettings;
@@ -125,6 +135,51 @@ export class WebConsole {
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
+  }
+
+  async inspectGitHub(): Promise<GitHubConnection> {
+    validateGitHubToken(this.githubToken);
+    const connection = await inspectGitHubAccount(this.githubClientFactory(this.githubToken!));
+    this.githubConnection = connection;
+    return connection;
+  }
+
+  async getGitHubBranches(repository: string) {
+    validateGitHubToken(this.githubToken);
+    return listGitHubBranches(this.githubClientFactory(this.githubToken!), repository);
+  }
+
+  createCodingTask(request: ConsoleCodingTaskRequest): AgentTask {
+    return this.taskManager.create({
+      configurations: this.executionConfigurations(request.useFallback !== false),
+      repository: request.repository,
+      baseBranch: request.baseBranch,
+      taskBranch: request.taskBranch,
+      prompt: request.prompt,
+      createPullRequest: request.createPullRequest,
+    });
+  }
+
+  listCodingTasks(): AgentTask[] {
+    return this.taskManager.list();
+  }
+
+  getCodingTask(reference: string): AgentTask | undefined {
+    const exact = this.taskManager.get(reference);
+    if (exact) {
+      return exact;
+    }
+    const matches = this.taskManager.list().filter((task) => task.id.startsWith(reference));
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  cancelCodingTask(reference: string): boolean {
+    const task = this.getCodingTask(reference);
+    return task ? this.taskManager.cancel(task.id) : false;
+  }
+
+  waitForCodingTask(id: string): Promise<AgentTask> {
+    return this.taskManager.waitForTerminal(id);
   }
 
   async stop(): Promise<void> {
@@ -293,9 +348,7 @@ export class WebConsole {
 
     httpServer.register('GET', '/api/console/github/repositories', async () => {
       try {
-        validateGitHubToken(this.githubToken);
-        const connection = await inspectGitHubAccount(this.githubClientFactory(this.githubToken!));
-        this.githubConnection = connection;
+        const connection = await this.inspectGitHub();
         return { status: 200, body: connection, headers: API_HEADERS };
       } catch (error) {
         return githubErrorResponse(error);
@@ -308,10 +361,7 @@ export class WebConsole {
         if (!query.repository) {
           throw new Error('repository is required');
         }
-        const branches = await listGitHubBranches(
-          this.githubClientFactory(this.githubToken!),
-          query.repository,
-        );
+        const branches = await this.getGitHubBranches(query.repository);
         return {
           status: 200,
           body: { repository: query.repository, branches },
@@ -354,22 +404,25 @@ export class WebConsole {
         const usesLegacySelection = Boolean(
           payload.provider || payload.providers || payload.model !== undefined,
         );
-        const task = this.taskManager.create({
-          ...(usesLegacySelection
-            ? {
-                provider: payload.provider,
-                providers: payload.providers,
-                model: payload.model,
-              }
-            : {
-                configurations: this.executionConfigurations(payload.useFallback !== false),
-              }),
-          repository: payload.repository ?? '',
-          baseBranch: payload.baseBranch,
-          taskBranch: payload.taskBranch,
-          prompt: payload.prompt ?? '',
-          createPullRequest: payload.createPullRequest,
-        });
+        const task = usesLegacySelection
+          ? this.taskManager.create({
+              provider: payload.provider,
+              providers: payload.providers,
+              model: payload.model,
+              repository: payload.repository ?? '',
+              baseBranch: payload.baseBranch,
+              taskBranch: payload.taskBranch,
+              prompt: payload.prompt ?? '',
+              createPullRequest: payload.createPullRequest,
+            })
+          : this.createCodingTask({
+              repository: payload.repository ?? '',
+              baseBranch: payload.baseBranch,
+              taskBranch: payload.taskBranch,
+              prompt: payload.prompt ?? '',
+              createPullRequest: payload.createPullRequest,
+              useFallback: payload.useFallback,
+            });
         return { status: 202, body: task };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) } };
@@ -508,9 +561,7 @@ function validateStoredSettings(modelConfigs: unknown[]): ConsoleSettings {
   }
   return {
     version: 4,
-    modelConfigs: normalizeModelConfigurationPayloads(
-      supported as ModelConfigurationPayload[],
-    ),
+    modelConfigs: normalizeModelConfigurationPayloads(supported as ModelConfigurationPayload[]),
   };
 }
 

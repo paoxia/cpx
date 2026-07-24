@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { AgentSystem } from '../../src/core/AgentSystem';
+import type { AgentTask } from '../../src/agents/AgentTaskManager';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-pipeline');
 const MCP_TMP_DIR = join(process.cwd(), 'tmp-test-mcp-pipeline');
@@ -34,13 +35,16 @@ describe('命令管道集成测试', () => {
     mkdirSync(TMP_DIR, { recursive: true });
     writeFileSync(
       join(TMP_DIR, 'config.yaml'),
-      'server:\n  port: 3999\nstorage:\n  path: ' + join(TMP_DIR, 'agent.db').replace(/\\/g, '/') + '\n',
+      'server:\n  port: 3999\nstorage:\n  path: ' +
+        join(TMP_DIR, 'agent.db').replace(/\\/g, '/') +
+        '\n',
     );
     system = new AgentSystem(TMP_DIR);
   });
 
   afterEach(async () => {
     await system.stop();
+    vi.restoreAllMocks();
     safeRm(TMP_DIR);
   });
 
@@ -164,6 +168,116 @@ describe('命令管道集成测试', () => {
     expect(result.message).toContain('连接mcp');
     expect(result.message).toContain('断开mcp');
   });
+
+  it('help 文本应包含 GitHub 查询与 Coding Agent 开发命令', async () => {
+    const result = await system.processCommand('help', {
+      userId: 'u1',
+      userName: 'Tester',
+      source: 'cli',
+    });
+    expect(result.message).toContain('查看GitHub');
+    expect(result.message).toContain('查看分支');
+    expect(result.message).toContain('开发 <owner/repo>');
+    expect(result.message).toContain('最近任务');
+  });
+
+  it('未配置 GitHub Token 时查询仓库应返回明确错误', async () => {
+    const result = await system.processCommand('查看GitHub', {
+      userId: 'u1',
+      userName: 'Tester',
+      source: 'cli',
+    });
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('GitHub 查询失败');
+    expect(result.message).toContain('GitHub Token');
+  });
+
+  it('飞书应能创建 Coding Agent 任务并接收完成通知', async () => {
+    const webConsole = system.getWebConsole();
+    const taskId = 'abcdef12-3456-7890-abcd-ef1234567890';
+    const queuedTask = fakeAgentTask(taskId, 'queued');
+    const completedTask = {
+      ...fakeAgentTask(taskId, 'completed'),
+      agentBranch: 'feature/fix-login',
+      pullRequestUrl: 'https://github.com/paoxia/cpx/pull/99',
+      completedAt: Date.now(),
+    };
+    vi.spyOn(webConsole, 'inspectGitHub').mockResolvedValue({
+      user: {
+        login: 'paoxia',
+        name: 'Paoxia',
+        avatarUrl: 'https://example.com/avatar.png',
+        htmlUrl: 'https://github.com/paoxia',
+      },
+      repositories: [
+        {
+          id: 1,
+          name: 'cpx',
+          fullName: 'paoxia/cpx',
+          owner: 'paoxia',
+          private: false,
+          htmlUrl: 'https://github.com/paoxia/cpx',
+          description: null,
+          fork: false,
+          archived: false,
+          language: 'TypeScript',
+          stars: 0,
+          updatedAt: new Date().toISOString(),
+          defaultBranch: 'dev',
+        },
+      ],
+    });
+    vi.spyOn(webConsole, 'getGitHubBranches').mockResolvedValue([
+      { name: 'dev', protected: false },
+    ]);
+    vi.spyOn(webConsole, 'createCodingTask').mockReturnValue(queuedTask);
+    vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(completedTask);
+    vi.spyOn(webConsole, 'getCodingTask').mockReturnValue(completedTask);
+
+    const pushed: unknown[] = [];
+    system.setResultPusher(async (_source, message) => {
+      pushed.push(message);
+    });
+
+    const result = await system.processCommand(
+      '/agent 开发 paoxia/cpx#dev -> feature/fix-login 修复登录页面',
+      {
+        userId: 'feishu-user-1',
+        userName: 'Tester',
+        source: 'feishu',
+      },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.message).toContain('Coding Agent 任务已创建：abcdef12');
+    expect(webConsole.createCodingTask).toHaveBeenCalledWith({
+      repository: 'paoxia/cpx',
+      baseBranch: 'dev',
+      taskBranch: 'feature/fix-login',
+      prompt: '修复登录页面',
+      createPullRequest: true,
+      useFallback: true,
+    });
+    await vi.waitFor(() => expect(pushed).toHaveLength(2));
+    expect(JSON.stringify(pushed)).toContain('Coding Agent 开发完成');
+    expect(JSON.stringify(pushed)).toContain('https://github.com/paoxia/cpx/pull/99');
+
+    const status = await system.processCommand('/agent 任务 abcdef12', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+    });
+    expect(status.success).toBe(true);
+    expect(status.message).toContain('已完成');
+
+    const otherUser = await system.processCommand('/agent 任务 abcdef12', {
+      userId: 'feishu-user-2',
+      userName: 'Other',
+      source: 'feishu',
+    });
+    expect(otherUser.success).toBe(false);
+    expect(otherUser.message).toContain('不是你在当前平台创建');
+  });
 });
 
 describe('MCP 命令管道集成测试', () => {
@@ -211,10 +325,7 @@ describe('MCP 命令管道集成测试', () => {
     expect(connectResult.success).toBe(true);
 
     // 调用 echo
-    const callResult = await system.processCommand(
-      '调用mcp mock echo {"message":"hi"}',
-      userInfo,
-    );
+    const callResult = await system.processCommand('调用mcp mock echo {"message":"hi"}', userInfo);
     expect(callResult.success).toBe(true);
     expect(callResult.message).toContain('echo');
 
@@ -239,3 +350,26 @@ describe('MCP 命令管道集成测试', () => {
     expect(result.message).toContain('连接不存在');
   });
 });
+
+function fakeAgentTask(id: string, status: AgentTask['status']): AgentTask {
+  const now = Date.now();
+  return {
+    id,
+    provider: 'codex',
+    providers: ['codex', 'claude'],
+    configurations: [
+      { id: 'default-codex', provider: 'codex' },
+      { id: 'default-claude', provider: 'claude' },
+    ],
+    repository: 'https://github.com/paoxia/cpx.git',
+    baseBranch: 'dev',
+    taskBranch: 'feature/fix-login',
+    prompt: '修复登录页面',
+    createPullRequest: true,
+    status,
+    createdAt: now,
+    updatedAt: now,
+    logs: [],
+    attempts: [{ provider: 'codex', startedAt: now, status: 'success' }],
+  };
+}
