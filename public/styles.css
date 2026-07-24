@@ -291,9 +291,9 @@ select:focus-visible {
 }
 
 .main-content {
-  width: min(1440px, 100%);
+  width: min(1500px, 100%);
   margin: 0 auto;
-  padding: 54px clamp(28px, 5vw, 82px) 24px;
+  padding: 46px clamp(28px, 4.5vw, 72px) 28px;
 }
 
 .app-view[hidden] {
@@ -304,7 +304,7 @@ select:focus-visible {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 42px;
+  margin-bottom: 34px;
 }
 
 .eyebrow {
@@ -317,10 +317,10 @@ select:focus-visible {
 .topbar h1 {
   max-width: 850px;
   margin: 0;
-  font-size: clamp(38px, 5.2vw, 76px);
+  font-size: clamp(40px, 4.5vw, 64px);
   font-weight: 520;
-  line-height: 0.98;
-  letter-spacing: -0.058em;
+  line-height: 1;
+  letter-spacing: -0.052em;
 }
 
 .topbar h1 span {
@@ -351,7 +351,7 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1.55fr) minmax(310px, 0.75fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 20px;
   background: var(--panel);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28);
 }
@@ -381,7 +381,7 @@ select:focus-visible {
 .context-header h2,
 .modal-heading h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 570;
   letter-spacing: -0.02em;
 }
@@ -423,7 +423,7 @@ select:focus-visible {
   gap: 6px;
   max-width: 58%;
   color: var(--muted);
-  font: 9px/1.4 var(--mono);
+  font: 10px/1.4 var(--mono);
 }
 
 .execution-order-preview span {
@@ -467,18 +467,19 @@ select:focus-visible {
 }
 
 .branch-field {
-  width: 34%;
+  width: 42%;
 }
 
 .field > span {
   color: var(--soft);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 560;
 }
 
 .field small {
-  color: #66645f;
-  font-size: 9px;
+  color: #77746e;
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .field input,
@@ -494,13 +495,15 @@ select:focus-visible {
 
 .field input,
 .field select {
-  height: 45px;
-  padding: 0 13px;
+  height: 48px;
+  padding: 0 14px;
+  font-size: 13px;
 }
 
 .field textarea {
   min-height: 175px;
-  padding: 15px;
+  padding: 16px;
+  font-size: 13px;
   line-height: 1.65;
   resize: vertical;
 }
@@ -539,12 +542,12 @@ select:focus-visible {
 }
 
 .suggestions button {
-  padding: 5px 8px;
+  padding: 6px 10px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 7px;
   background: transparent;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .suggestions button:hover {
@@ -610,13 +613,13 @@ select:focus-visible {
 }
 
 .toggle-option strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .toggle-option small {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .launch-button,
@@ -625,8 +628,9 @@ select:focus-visible {
   align-items: center;
   justify-content: center;
   gap: 20px;
-  min-width: 145px;
-  padding: 13px 16px;
+  min-width: 156px;
+  min-height: 48px;
+  padding: 13px 18px;
   color: var(--accent-ink);
   border: 0;
   border-radius: 11px;
@@ -820,7 +824,7 @@ select:focus-visible {
   gap: 20px;
   padding: 16px 4px 0;
   color: #5d5b57;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .page-footer code {
@@ -838,10 +842,10 @@ select:focus-visible {
 
 .github-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.56fr) minmax(0, 1.44fr);
+  grid-template-columns: minmax(340px, 0.68fr) minmax(0, 1.32fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 20px;
   background: var(--panel);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28);
 }
@@ -858,10 +862,10 @@ select:focus-visible {
 
 .model-management-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(270px, 0.5fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
   overflow: hidden;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 20px;
   background: var(--panel);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.28);
 }
@@ -1092,7 +1096,7 @@ select:focus-visible {
 .model-config-toolbar h2,
 .model-help-panel h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 570;
 }
 
@@ -1107,22 +1111,22 @@ select:focus-visible {
   max-width: 350px;
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.55;
   text-align: right;
 }
 
 .model-config-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .model-config-item {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr) auto;
-  gap: 14px;
+  grid-template-columns: 64px minmax(220px, 1fr) auto;
+  gap: 18px;
   align-items: center;
-  padding: 16px;
+  padding: 20px;
   border: 1px solid var(--line);
   border-radius: 15px;
   background: #101011;
@@ -1137,19 +1141,18 @@ select:focus-visible {
 
 .model-config-rank strong {
   color: var(--accent);
-  font: 20px/1 var(--mono);
+  font: 22px/1 var(--mono);
   font-weight: 500;
 }
 
 .model-config-rank span {
-  font: 7px/1 var(--mono);
+  font: 8px/1 var(--mono);
   letter-spacing: 0.08em;
 }
 
 .model-config-fields {
-  display: grid;
-  grid-template-columns: minmax(140px, 0.55fr) minmax(220px, 1.45fr);
-  gap: 10px;
+  display: block;
+  width: min(360px, 100%);
   min-width: 0;
 }
 
@@ -1157,44 +1160,23 @@ select:focus-visible {
   align-content: start;
 }
 
-.model-api-key-input {
-  display: flex;
-  gap: 7px;
-}
-
-.model-api-key-input input {
-  min-width: 0;
-}
-
-.model-api-key-input button {
-  flex: 0 0 auto;
-  padding: 0 10px;
-  color: var(--danger);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 9px;
-}
-
-.model-api-key-input button:hover {
-  border-color: var(--line-strong);
-}
-
 .model-config-controls {
   display: grid;
-  grid-template-columns: repeat(2, minmax(32px, auto));
-  gap: 6px;
+  grid-template-columns: repeat(3, minmax(38px, 1fr));
+  gap: 7px;
+  min-width: 160px;
 }
 
 .model-config-controls button,
 .secondary-button,
 .text-button {
-  padding: 7px 9px;
+  min-height: 38px;
+  padding: 8px 11px;
   color: var(--muted);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.025);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .model-config-controls button:hover:not(:disabled),
@@ -1214,6 +1196,8 @@ select:focus-visible {
 }
 
 .model-config-controls .test {
+  grid-column: 1 / -1;
+  min-width: 62px;
   color: var(--accent);
   border-color: rgba(215, 255, 95, 0.22);
 }
@@ -1221,8 +1205,8 @@ select:focus-visible {
 .model-config-test {
   display: grid;
   grid-column: 1 / -1;
-  gap: 12px;
-  padding-top: 16px;
+  gap: 14px;
+  padding-top: 18px;
   border-top: 1px solid var(--line);
 }
 
@@ -1241,12 +1225,12 @@ select:focus-visible {
 
 .model-config-test-header strong {
   margin-bottom: 5px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .model-config-test-header small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .model-config-test-input {
@@ -1255,8 +1239,8 @@ select:focus-visible {
 
 .model-config-test-input textarea {
   flex: 1;
-  min-height: 82px;
-  padding: 12px;
+  min-height: 92px;
+  padding: 14px;
   color: var(--text);
   border: 1px solid var(--line);
   border-radius: 11px;
@@ -1384,12 +1368,12 @@ select:focus-visible {
 
 .model-help-panel li strong {
   margin-bottom: 5px;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .model-help-panel li span {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.55;
 }
 
@@ -1434,7 +1418,7 @@ select:focus-visible {
   align-items: center;
   gap: 13px;
   margin: 30px 0 24px;
-  padding: 16px;
+  padding: 18px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.025);
@@ -1466,14 +1450,14 @@ select:focus-visible {
 }
 
 .github-account strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .github-account small,
 .github-account a {
   margin-top: 5px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   text-decoration: none;
 }
 
@@ -1491,13 +1475,13 @@ select:focus-visible {
 }
 
 .github-token-setup > strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .github-token-setup > p {
   margin: 7px 0 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.6;
 }
 
@@ -1513,7 +1497,7 @@ select:focus-visible {
   min-width: 170px;
   flex: 1 1 170px;
   padding: 10px 14px;
-  font-size: 9px;
+  font-size: 10px;
   text-decoration: none;
 }
 
@@ -1536,7 +1520,7 @@ select:focus-visible {
   align-items: center;
   gap: 9px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.45;
 }
 
@@ -1591,7 +1575,7 @@ select:focus-visible {
 
 .repository-toolbar h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 570;
 }
 
@@ -1608,7 +1592,7 @@ select:focus-visible {
 
 .repository-search input {
   width: 100%;
-  height: 38px;
+  height: 42px;
   padding: 0 12px;
   color: var(--text);
   border: 1px solid var(--line);
@@ -1635,7 +1619,7 @@ select:focus-visible {
   justify-content: space-between;
   gap: 20px;
   min-width: 0;
-  padding: 19px 4px;
+  padding: 21px 4px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -1653,7 +1637,7 @@ select:focus-visible {
 .repository-title a {
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 620;
   text-decoration: none;
   text-overflow: ellipsis;
@@ -1678,7 +1662,7 @@ select:focus-visible {
   margin: 8px 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1690,7 +1674,7 @@ select:focus-visible {
   flex-wrap: wrap;
   gap: 12px;
   color: #66645f;
-  font: 8px/1.4 var(--mono);
+  font: 9px/1.5 var(--mono);
 }
 
 .repository-meta span {
@@ -1708,12 +1692,13 @@ select:focus-visible {
 
 .use-repository {
   flex: 0 0 auto;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 9px 12px;
   color: var(--accent);
   border: 1px solid rgba(215, 255, 95, 0.22);
   border-radius: 8px;
   background: rgba(215, 255, 95, 0.05);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .use-repository:hover {
@@ -1905,11 +1890,6 @@ select:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .model-base-url-field,
-  .model-api-key-field {
-    grid-column: 1 / -1;
-  }
-
   .github-connect-card {
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -2023,11 +2003,6 @@ select:focus-visible {
 
   .model-config-fields {
     grid-template-columns: 1fr;
-  }
-
-  .model-base-url-field,
-  .model-api-key-field {
-    grid-column: auto;
   }
 
   .model-config-controls {

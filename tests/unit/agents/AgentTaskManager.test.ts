@@ -121,6 +121,8 @@ describe('AgentTaskManager', () => {
       provider: 'claude',
       repository: 'https://github.com/acme/repo',
       prompt: '更新说明',
+      baseBranch: 'develop',
+      taskBranch: 'feature/update-docs',
       createPullRequest: true,
     });
 
@@ -128,14 +130,22 @@ describe('AgentTaskManager', () => {
     expect(manager.get(created.id)?.pullRequestUrl).toBe('https://github.com/acme/repo/pull/42');
     expect(spawnMock).toHaveBeenCalledWith(
       'git',
-      ['clone', '--depth', '1', 'https://github.com/acme/repo.git', expect.any(String)],
+      [
+        'clone',
+        '--depth',
+        '1',
+        '--branch',
+        'develop',
+        'https://github.com/acme/repo.git',
+        expect.any(String),
+      ],
       expect.objectContaining({
         env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
       }),
     );
     expect(spawnMock).toHaveBeenCalledWith(
       'git',
-      ['push', '-u', 'origin', expect.stringMatching(/^cpx\/task-/)],
+      ['push', '-u', 'origin', 'feature/update-docs'],
       expect.objectContaining({
         env: expect.objectContaining({
           GH_TOKEN: 'github_pat_task-secret',
@@ -149,12 +159,21 @@ describe('AgentTaskManager', () => {
     );
     expect(spawnMock).toHaveBeenCalledWith(
       'gh',
-      ['pr', 'create', '--fill', '--head', expect.stringMatching(/^cpx\/task-/)],
+      [
+        'pr',
+        'create',
+        '--fill',
+        '--head',
+        'feature/update-docs',
+        '--base',
+        'develop',
+      ],
       expect.objectContaining({
         env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
       }),
     );
     expect(JSON.stringify(manager.get(created.id)?.logs)).not.toContain('github_pat_task-secret');
+    expect(manager.get(created.id)?.agentBranch).toBe('feature/update-docs');
     await manager.stop();
   });
 
@@ -189,6 +208,23 @@ describe('AgentTaskManager', () => {
         baseBranch: '../main',
       }),
     ).toThrow('基础分支名称无效');
+    expect(() =>
+      manager.create({
+        provider: 'codex',
+        repository: 'acme/repo',
+        prompt: 'test',
+        baseBranch: 'main',
+        taskBranch: 'main',
+      }),
+    ).toThrow('新分支不能与基础分支同名');
+    expect(() =>
+      manager.create({
+        provider: 'codex',
+        repository: 'acme/repo',
+        prompt: 'test',
+        taskBranch: 'feature//bad',
+      }),
+    ).toThrow('新分支名称无效');
     expect(() =>
       manager.create({
         repository: 'acme/repo',

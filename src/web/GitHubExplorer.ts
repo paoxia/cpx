@@ -21,6 +21,11 @@ interface GitHubRepositoryResponse {
   default_branch: string;
 }
 
+interface GitHubBranchResponse {
+  name: string;
+  protected: boolean;
+}
+
 export interface GitHubAccount {
   login: string;
   name: string | null;
@@ -47,6 +52,11 @@ export interface GitHubRepository {
 export interface GitHubConnection {
   user: GitHubAccount;
   repositories: GitHubRepository[];
+}
+
+export interface GitHubBranch {
+  name: string;
+  protected: boolean;
 }
 
 export interface GitHubApiClient {
@@ -97,4 +107,39 @@ export async function inspectGitHubAccount(client: GitHubApiClient): Promise<Git
       defaultBranch: repository.default_branch,
     })),
   };
+}
+
+/** 分页读取仓库分支，供任务控制台选择任务基线。 */
+export async function listGitHubBranches(
+  client: GitHubApiClient,
+  repository: string,
+): Promise<GitHubBranch[]> {
+  const normalizedRepository = repository.trim();
+  if (!/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(normalizedRepository)) {
+    throw new Error('仓库名称必须是 owner/repo');
+  }
+  const encodedRepository = normalizedRepository
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  const branches: GitHubBranchResponse[] = [];
+  const perPage = 100;
+
+  for (let page = 1; ; page += 1) {
+    const batch = await client.get<GitHubBranchResponse[]>(
+      `/repos/${encodedRepository}/branches`,
+      {
+        protected: false,
+        per_page: perPage,
+        page,
+      },
+    );
+    branches.push(...batch);
+    if (batch.length < perPage) break;
+  }
+
+  return branches.map((branch) => ({
+    name: branch.name,
+    protected: branch.protected,
+  }));
 }

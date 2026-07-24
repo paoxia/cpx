@@ -112,8 +112,24 @@
                     <small id="repository-hint">支持 owner/repo、HTTPS 或 SSH 地址</small>
                   </label>
                   <label class="field branch-field">
-                    <span>基础分支</span>
-                    <input id="base-branch" type="text" placeholder="默认分支" autocomplete="off" />
+                    <span>分支</span>
+                    <select id="branch-picker" aria-describedby="branch-hint" hidden>
+                      <option value="">先选择项目</option>
+                    </select>
+                    <input
+                      id="base-branch"
+                      type="text"
+                      placeholder="基础分支（可选）"
+                      autocomplete="off"
+                    />
+                    <input
+                      id="task-branch"
+                      type="text"
+                      placeholder="例如：feature/login"
+                      autocomplete="off"
+                      hidden
+                    />
+                    <small id="branch-hint">手动输入仓库时可指定基础分支</small>
                   </label>
                 </div>
 
@@ -327,7 +343,7 @@
                   <span class="step-index">01</span>
                   <h2>关联模型 <em id="model-config-count">0</em></h2>
                 </div>
-                <p>配置 Agent、Base URL 与密钥；从上到下依次执行，并可逐条测试。</p>
+                <p>排列 Codex 与 Claude Code；从上到下依次执行，并可逐条测试。</p>
               </div>
 
               <form id="model-settings-form">
@@ -348,19 +364,19 @@
                 <li><strong>第一条</strong><span>作为任务默认使用的模型配置。</span></li>
                 <li><strong>顺序回退</strong><span>仅在额度耗尽或鉴权失败时继续下一条。</span></li>
                 <li>
-                  <strong>运行凭据</strong
-                  ><span>每条配置可保存独立 API Key，也可复用环境变量或 CLI 登录。</span>
+                  <strong>CLI 配置</strong
+                  ><span>模型、服务地址与凭据均由本机 Codex 或 Claude Code 管理。</span>
                 </li>
                 <li>
                   <strong>配置测试</strong
-                  ><span>在对应关联项内验证密钥、登录和 CLI 模型配置是否可用。</span>
+                  ><span>在对应关联项内验证 CLI 登录和模型配置是否可用。</span>
                 </li>
               </ol>
               <div class="security-note">
-                <strong>中转服务兼容</strong>
+                <strong>配置位置</strong>
                 <p>
-                  Codex 使用 Responses API 地址；Claude 使用 Anthropic Messages
-                  网关。已保存的密钥不会回显，但会以明文写入本地设置文件，请限制文件访问权限。
+                  如需切换模型、中转服务或账号，请直接修改对应 CLI
+                  配置；控制台不会保存或覆盖这些值。
                 </p>
               </div>
             </aside>

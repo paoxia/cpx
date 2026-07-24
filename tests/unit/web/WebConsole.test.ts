@@ -62,6 +62,8 @@ describe('WebConsole', () => {
     expect(html).not.toContain('id="model-test-dialog"');
     expect(html).toContain('id="github-create-token"');
     expect(html).toContain('id="repository-picker"');
+    expect(html).toContain('id="branch-picker"');
+    expect(html).toContain('id="task-branch"');
     expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');
@@ -73,6 +75,8 @@ describe('WebConsole', () => {
     expect(script).toContain('data-model-test-prompt');
     expect(script).toContain('CLI 已配置模型');
     expect(script).not.toContain('data-field="model"');
+    expect(script).not.toContain('data-field="baseUrl"');
+    expect(script).not.toContain('data-field="apiKey"');
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
@@ -92,14 +96,14 @@ describe('WebConsole', () => {
     );
   });
 
-  it('应按顺序持久化模型配置和独立 API Key，且响应不返回密钥', async () => {
+  it('应只按顺序持久化 Agent 关联项并丢弃旧模型、地址和密钥字段', async () => {
     const getSettings = server.handler('GET', '/api/console/settings');
     const updateSettings = server.handler('POST', '/api/console/settings');
     expect((await getSettings(Buffer.alloc(0), {}, {})).body).toMatchObject({
-      version: 3,
+      version: 4,
       modelConfigs: [
-        { provider: 'codex', model: '' },
-        { provider: 'claude', model: '' },
+        { provider: 'codex' },
+        { provider: 'claude' },
       ],
     });
 
@@ -123,16 +127,13 @@ describe('WebConsole', () => {
     );
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      version: 3,
+      version: 4,
       modelConfigs: [
         {
           id: 'claude-opus',
           provider: 'claude',
-          model: '',
-          baseUrl: 'https://gateway.example.com',
-          hasApiKey: true,
         },
-        { id: 'codex-main', provider: 'codex', model: '', hasApiKey: false },
+        { id: 'codex-main', provider: 'codex' },
       ],
     });
     expect(response.headers).toEqual({ 'Cache-Control': 'no-store' });
@@ -142,18 +143,19 @@ describe('WebConsole', () => {
     expect(existsSync(settingsPath)).toBe(true);
     const stored = JSON.parse(readFileSync(settingsPath, 'utf8')) as {
       version: number;
-      modelConfigs: Array<{ id: string; model: string; apiKey?: string }>;
+      modelConfigs: Array<{ id: string; provider: string }>;
     };
-    expect(stored.version).toBe(3);
+    expect(stored.version).toBe(4);
     expect(stored.modelConfigs.map((configuration) => configuration.id)).toEqual([
       'claude-opus',
       'codex-main',
     ]);
-    expect(stored.modelConfigs[0].apiKey).toBe('secret-claude');
-    expect(stored.modelConfigs.every((configuration) => configuration.model === '')).toBe(true);
+    expect(JSON.stringify(stored)).not.toContain('secret-claude');
+    expect(JSON.stringify(stored)).not.toContain('gateway.example.com');
+    expect(JSON.stringify(stored)).not.toContain('"model"');
   });
 
-  it('应使用当前模型配置测试连通性，并复用已保存但未回传的密钥', async () => {
+  it('应使用当前 Agent 关联项测试连通性且只依赖 CLI 配置', async () => {
     await webConsole.stop();
     const tested: ModelTestConfiguration[] = [];
     const modelTester: ModelConfigurationTestRunner = {
@@ -221,15 +223,13 @@ describe('WebConsole', () => {
     expect(tested).toEqual([
       {
         provider: 'claude',
-        baseUrl: 'https://gateway.example.com',
-        apiKey: 'secret-key',
         prompt: '请介绍一下自己',
       },
     ]);
     expect(JSON.stringify(response.body)).not.toContain('secret-key');
   });
 
-  it('模型测试应校验临时配置，且不持久化页面尚未保存的密钥', async () => {
+  it('模型测试应校验临时关联项且忽略页面提交的旧密钥字段', async () => {
     await webConsole.stop();
     const tested: ModelTestConfiguration[] = [];
     server = new FakeHttpServer();
@@ -273,7 +273,7 @@ describe('WebConsole', () => {
       {},
     );
     expect(response).toMatchObject({ status: 200, body: { success: false } });
-    expect(tested).toEqual([{ provider: 'codex', apiKey: 'temporary-secret' }]);
+    expect(tested).toEqual([{ provider: 'codex' }]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
@@ -335,97 +335,42 @@ describe('WebConsole', () => {
       {},
     );
     expect(duplicate).toMatchObject({ status: 400 });
-
-    const unsafeBaseUrl = await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [
-            {
-              id: 'unsafe',
-              provider: 'claude',
-              baseUrl: 'https://user:password@gateway.example.com/v1#secret',
-            },
-          ],
-        }),
-      ),
-      {},
-      {},
-    );
-    expect(unsafeBaseUrl).toMatchObject({ status: 400 });
   });
 
-  it('更新配置留空时应保留原密钥，显式清除时应删除', async () => {
-    const updateSettings = server.handler('POST', '/api/console/settings');
-    await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [
-            { id: 'claude', provider: 'claude', model: 'opus', apiKey: 'secret-claude' },
-          ],
-        }),
-      ),
-      {},
-      {},
-    );
-    const retained = await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [{ id: 'claude', provider: 'claude', model: 'sonnet' }],
-        }),
-      ),
-      {},
-      {},
-    );
-    expect(retained.body).toMatchObject({
-      modelConfigs: [{ id: 'claude', model: '', hasApiKey: true }],
-    });
-
+  it('应将 v3 配置迁移为只含 Agent 的 v4 配置并删除旧密钥', async () => {
+    await webConsole.stop();
     const settingsPath = join(TMP_DIR, 'console-settings.json');
-    expect(readFileSync(settingsPath, 'utf8')).toContain('secret-claude');
-
-    const cleared = await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [{ id: 'claude', provider: 'claude', model: 'sonnet', clearApiKey: true }],
-        }),
-      ),
-      {},
-      {},
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        version: 3,
+        modelConfigs: [
+          {
+            id: 'association',
+            provider: 'claude',
+            model: 'sonnet',
+            baseUrl: 'https://gateway.example.com',
+            apiKey: 'claude-secret',
+          },
+        ],
+      }),
     );
-    expect(cleared.body).toMatchObject({
-      modelConfigs: [{ id: 'claude', hasApiKey: false }],
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+    );
+
+    const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
+    expect(response.body).toEqual({
+      version: 4,
+      modelConfigs: [{ id: 'association', provider: 'claude' }],
     });
-    expect(readFileSync(settingsPath, 'utf8')).not.toContain('secret-claude');
-  });
-
-  it('关联项切换 Agent 时不应沿用原 Agent 的已存密钥', async () => {
-    const updateSettings = server.handler('POST', '/api/console/settings');
-    await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [
-            { id: 'association', provider: 'claude', model: 'sonnet', apiKey: 'claude-secret' },
-          ],
-        }),
-      ),
-      {},
-      {},
-    );
-
-    const changed = await updateSettings(
-      Buffer.from(
-        JSON.stringify({
-          modelConfigs: [{ id: 'association', provider: 'codex', model: 'gpt-test' }],
-        }),
-      ),
-      {},
-      {},
-    );
-
-    expect(changed.body).toMatchObject({ modelConfigs: [{ hasApiKey: false }] });
-    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).not.toContain(
-      'claude-secret',
-    );
+    const persisted = readFileSync(settingsPath, 'utf8');
+    expect(persisted).not.toContain('claude-secret');
+    expect(persisted).not.toContain('gateway.example.com');
+    expect(persisted).not.toContain('"model"');
   });
 
   it('应将旧版固定模型设置迁移为有序 Agent 配置且清除模型覆盖', async () => {
@@ -449,18 +394,19 @@ describe('WebConsole', () => {
 
     const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
     expect(response.body).toMatchObject({
-      version: 3,
+      version: 4,
       modelConfigs: [
-        { provider: 'claude', model: '' },
-        { provider: 'codex', model: '' },
+        { provider: 'claude' },
+        { provider: 'codex' },
       ],
     });
-    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 3');
+    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 4');
   });
 
   it('应验证 GitHub Token、分页读取全部仓库并在成功后持久化', async () => {
     await webConsole.stop();
     const requestedPages: number[] = [];
+    const requestedBranchPages: number[] = [];
     const tokens: string[] = [];
     const persistedTokens: string[] = [];
     const activatedTokens: string[] = [];
@@ -488,6 +434,13 @@ describe('WebConsole', () => {
             avatar_url: 'https://avatars.githubusercontent.com/u/1',
             html_url: 'https://github.com/octocat',
           } as T;
+        }
+        if (url === '/repos/octocat/repo-1/branches') {
+          requestedBranchPages.push(Number(params?.page));
+          return [
+            { name: 'main', protected: true },
+            { name: 'develop', protected: false },
+          ] as T;
         }
         const page = Number(params?.page);
         requestedPages.push(page);
@@ -534,6 +487,23 @@ describe('WebConsole', () => {
       tokenSource: 'file',
       repositoryCount: 101,
     });
+    const branches = await server.handler('GET', '/api/console/github/branches')(
+      Buffer.alloc(0),
+      {},
+      { repository: 'octocat/repo-1' },
+    );
+    expect(branches).toMatchObject({
+      status: 200,
+      body: {
+        repository: 'octocat/repo-1',
+        branches: [
+          { name: 'main', protected: true },
+          { name: 'develop', protected: false },
+        ],
+      },
+    });
+    expect(requestedBranchPages).toEqual([1]);
+    expect(tokens).toEqual(['github_pat_runtime-only', 'github_pat_runtime-only']);
   });
 
   it('GitHub Token 无效时应返回鉴权错误且不建立连接或写入配置', async () => {

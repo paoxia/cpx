@@ -9,6 +9,9 @@ const state = {
   repositories: [],
   githubLoaded: false,
   githubTokenEntryOpen: false,
+  branchRequestId: 0,
+  branchRepository: null,
+  branchDefault: '',
   modelConfigs: [],
   modelTestRunning: false,
   modelTestConfigId: null,
@@ -20,7 +23,10 @@ const elements = {
   repositoryPicker: document.querySelector('#repository-picker'),
   repository: document.querySelector('#repository'),
   repositoryHint: document.querySelector('#repository-hint'),
+  branchPicker: document.querySelector('#branch-picker'),
   baseBranch: document.querySelector('#base-branch'),
+  taskBranch: document.querySelector('#task-branch'),
+  branchHint: document.querySelector('#branch-hint'),
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
   createPr: document.querySelector('#create-pr'),
@@ -70,6 +76,7 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 
 elements.prompt.addEventListener('input', updatePromptCount);
 elements.repositoryPicker.addEventListener('change', handleTaskRepositorySelection);
+elements.branchPicker.addEventListener('change', handleTaskBranchSelection);
 elements.taskForm.addEventListener('submit', createTask);
 elements.modelSettingsForm.addEventListener('submit', saveModelSettings);
 elements.addModelConfig.addEventListener('click', addModelConfiguration);
@@ -182,6 +189,7 @@ function renderTaskRepositoryPicker() {
     elements.repositoryHint.textContent = state.githubLoaded
       ? '当前 Token 没有可选项目；可手动输入 owner/repo、HTTPS 或 SSH 地址'
       : '支持 owner/repo、HTTPS 或 SSH 地址';
+    showManualBranchField();
     return;
   }
 
@@ -204,14 +212,19 @@ function renderTaskRepositoryPicker() {
     elements.repositoryPicker.value = selectedRepository.fullName;
     elements.repository.hidden = true;
     elements.repository.required = false;
+    if (state.branchRepository !== selectedRepository.fullName) {
+      void loadTaskBranches(selectedRepository.fullName, selectedRepository.defaultBranch);
+    }
   } else if (currentValue) {
     elements.repositoryPicker.value = '__manual__';
     elements.repository.hidden = false;
     elements.repository.required = true;
+    showManualBranchField();
   } else {
     elements.repositoryPicker.value = '';
     elements.repository.hidden = true;
     elements.repository.required = false;
+    resetTaskBranchPicker();
   }
   elements.repositoryHint.textContent = `可选择当前 Token 授权的 ${repositories.length} 个项目，或手动输入仓库地址`;
 }
@@ -222,6 +235,7 @@ function handleTaskRepositorySelection() {
     elements.repository.value = '';
     elements.repository.hidden = false;
     elements.repository.required = true;
+    showManualBranchField();
     elements.repository.focus();
     return;
   }
@@ -230,13 +244,120 @@ function handleTaskRepositorySelection() {
   elements.repository.required = false;
   elements.repository.value = selectedValue;
   const repository = state.repositories.find((item) => item.fullName === selectedValue);
-  elements.baseBranch.value = repository?.defaultBranch || '';
+  if (repository) {
+    void loadTaskBranches(repository.fullName, repository.defaultBranch);
+  } else {
+    resetTaskBranchPicker();
+  }
 }
 
 function selectTaskRepository(fullName, defaultBranch = '') {
   elements.repository.value = fullName;
-  elements.baseBranch.value = defaultBranch;
+  state.branchDefault = defaultBranch;
   renderTaskRepositoryPicker();
+}
+
+function resetTaskBranchPicker() {
+  state.branchRequestId += 1;
+  state.branchRepository = null;
+  state.branchDefault = '';
+  elements.branchPicker.hidden = false;
+  elements.branchPicker.disabled = true;
+  elements.branchPicker.required = false;
+  elements.branchPicker.innerHTML = '<option value="">先选择项目</option>';
+  elements.baseBranch.hidden = true;
+  elements.baseBranch.required = false;
+  elements.baseBranch.value = '';
+  elements.taskBranch.hidden = true;
+  elements.taskBranch.required = false;
+  elements.taskBranch.value = '';
+  elements.branchHint.textContent = '选择项目后可读取现有分支或新建任务分支';
+}
+
+function showManualBranchField() {
+  state.branchRequestId += 1;
+  state.branchRepository = null;
+  state.branchDefault = '';
+  elements.branchPicker.hidden = true;
+  elements.branchPicker.disabled = true;
+  elements.branchPicker.required = false;
+  elements.baseBranch.hidden = false;
+  elements.baseBranch.required = false;
+  elements.baseBranch.value = '';
+  elements.taskBranch.hidden = true;
+  elements.taskBranch.required = false;
+  elements.taskBranch.value = '';
+  elements.branchHint.textContent = '手动输入仓库时可指定基础分支';
+}
+
+async function loadTaskBranches(repository, defaultBranch) {
+  const requestId = ++state.branchRequestId;
+  state.branchRepository = repository;
+  state.branchDefault = defaultBranch || '';
+  elements.branchPicker.hidden = false;
+  elements.branchPicker.disabled = true;
+  elements.branchPicker.required = false;
+  elements.branchPicker.innerHTML = '<option value="">正在读取分支…</option>';
+  elements.baseBranch.hidden = true;
+  elements.baseBranch.required = false;
+  elements.baseBranch.value = defaultBranch || '';
+  elements.taskBranch.hidden = true;
+  elements.taskBranch.required = false;
+  elements.taskBranch.value = '';
+  elements.branchHint.textContent = '正在读取仓库分支…';
+
+  try {
+    const result = await api(
+      `/api/console/github/branches?repository=${encodeURIComponent(repository)}`,
+    );
+    if (requestId !== state.branchRequestId || state.branchRepository !== repository) return;
+    const branches = [...(result.branches || [])].sort((left, right) => {
+      if (left.name === defaultBranch) return -1;
+      if (right.name === defaultBranch) return 1;
+      return left.name.localeCompare(right.name);
+    });
+    elements.branchPicker.innerHTML = [
+      ...branches.map(
+        (branch) =>
+          `<option value="${escapeHtml(branch.name)}">${escapeHtml(branch.name)}${branch.protected ? ' · 受保护' : ''}</option>`,
+      ),
+      '<option value="__new__">＋ 新建任务分支…</option>',
+    ].join('');
+    elements.branchPicker.disabled = false;
+    elements.branchPicker.required = true;
+    const selectedBranch =
+      branches.find((branch) => branch.name === defaultBranch)?.name || branches[0]?.name || '__new__';
+    elements.branchPicker.value = selectedBranch;
+    elements.branchHint.textContent = branches.length
+      ? `已读取 ${branches.length} 个分支；选择现有分支作为基线，或新建任务分支`
+      : '仓库暂无可选分支，请新建任务分支';
+    handleTaskBranchSelection();
+  } catch (error) {
+    if (requestId !== state.branchRequestId) return;
+    elements.branchPicker.hidden = true;
+    elements.branchPicker.disabled = true;
+    elements.branchPicker.required = false;
+    elements.baseBranch.hidden = false;
+    elements.baseBranch.value = defaultBranch || '';
+    elements.branchHint.textContent = '分支读取失败，可手动填写基础分支';
+    showToast(error.message, true);
+  }
+}
+
+function handleTaskBranchSelection() {
+  const selectedBranch = elements.branchPicker.value;
+  if (selectedBranch === '__new__') {
+    elements.baseBranch.value = state.branchDefault;
+    elements.taskBranch.hidden = false;
+    elements.taskBranch.required = true;
+    elements.branchHint.textContent = `新分支将基于 ${state.branchDefault || '仓库默认分支'} 创建`;
+    elements.taskBranch.focus();
+    return;
+  }
+  elements.baseBranch.value = selectedBranch;
+  elements.taskBranch.hidden = true;
+  elements.taskBranch.required = false;
+  elements.taskBranch.value = '';
 }
 
 function renderGitHubConnection() {
@@ -369,23 +490,8 @@ function renderModelConfigurations() {
     const configuration = state.modelConfigs.find((item) => item.id === row.dataset.configId);
     if (!configuration) return;
     row.querySelector('[data-field="provider"]').addEventListener('change', (event) => {
-      const providerChanged = configuration.provider !== event.target.value;
       configuration.provider = event.target.value;
-      if (providerChanged) {
-        configuration.baseUrl = '';
-        configuration.apiKey = '';
-        configuration.clearApiKey = configuration.apiKeySource === 'file';
-        configuration.hasApiKey = false;
-        configuration.apiKeySource = 'none';
-        renderModelConfigurations();
-      }
-    });
-    row.querySelector('[data-field="baseUrl"]').addEventListener('input', (event) => {
-      configuration.baseUrl = event.target.value;
-    });
-    row.querySelector('[data-field="apiKey"]').addEventListener('input', (event) => {
-      configuration.apiKey = event.target.value;
-      if (configuration.apiKey) configuration.clearApiKey = false;
+      renderModelConfigurations();
     });
     row.querySelectorAll('[data-config-action]').forEach((button) => {
       button.addEventListener('click', () =>
@@ -411,13 +517,6 @@ function renderModelConfiguration(configuration, index) {
         `<option value="${value}"${configuration.provider === value ? ' selected' : ''}>${label}</option>`,
     )
     .join('');
-  const apiKeyPlaceholder =
-    configuration.apiKeySource === 'file'
-      ? '已保存，留空保持不变'
-      : configuration.apiKeySource === 'environment'
-        ? '已由环境变量提供，可填写覆盖'
-        : '填写 API Key（可选）';
-  const canClearApiKey = configuration.apiKeySource === 'file' || configuration.apiKey;
   return `
     <article class="model-config-item" data-config-id="${escapeHtml(configuration.id)}">
       <div class="model-config-rank"><strong>${index + 1}</strong><span>PRIORITY</span></div>
@@ -425,19 +524,7 @@ function renderModelConfiguration(configuration, index) {
         <label class="field">
           <span>Agent</span>
           <select data-field="provider">${providerOptions}</select>
-        </label>
-        <label class="field model-base-url-field">
-          <span>Base URL</span>
-          <input data-field="baseUrl" type="url" value="${escapeHtml(configuration.baseUrl || '')}" placeholder="${configuration.provider === 'codex' ? 'https://gateway.example.com/v1' : 'https://gateway.example.com'}" autocomplete="off" />
-          <small>留空使用官方服务或 CLI 已有配置</small>
-        </label>
-        <label class="field model-api-key-field">
-          <span>API Key</span>
-          <div class="model-api-key-input">
-            <input data-field="apiKey" type="password" value="${escapeHtml(configuration.apiKey || '')}" placeholder="${escapeHtml(apiKeyPlaceholder)}" autocomplete="new-password" />
-            ${canClearApiKey ? '<button type="button" data-config-action="clear-key">清除</button>' : ''}
-          </div>
-          <small>${escapeHtml(apiKeyStatus(configuration))}</small>
+          <small>模型、地址和凭据均使用本机 CLI 配置</small>
         </label>
       </div>
       <div class="model-config-controls">
@@ -479,11 +566,6 @@ function handleModelConfigurationAction(action, id) {
       return;
     }
     state.modelConfigs.splice(index, 1);
-  } else if (action === 'clear-key') {
-    state.modelConfigs[index].apiKey = '';
-    state.modelConfigs[index].clearApiKey = true;
-    state.modelConfigs[index].hasApiKey = false;
-    state.modelConfigs[index].apiKeySource = 'none';
   }
   renderModelConfigurations();
 }
@@ -560,9 +642,6 @@ async function startInlineModelTest(configurationId) {
       body: JSON.stringify({
         id: configuration.id,
         provider: configuration.provider,
-        baseUrl: configuration.baseUrl,
-        apiKey: configuration.apiKey || undefined,
-        clearApiKey: configuration.clearApiKey,
         prompt,
       }),
     });
@@ -597,11 +676,6 @@ function addModelConfiguration() {
   state.modelConfigs.push({
     id: createClientId(),
     provider: 'codex',
-    baseUrl: '',
-    apiKey: '',
-    hasApiKey: false,
-    apiKeySource: 'none',
-    clearApiKey: false,
   });
   renderModelConfigurations();
   elements.modelConfigList.lastElementChild?.scrollIntoView({
@@ -615,20 +689,10 @@ function resetModelConfigurations() {
     {
       id: createClientId(),
       provider: 'codex',
-      baseUrl: '',
-      apiKey: '',
-      hasApiKey: false,
-      apiKeySource: 'none',
-      clearApiKey: false,
     },
     {
       id: createClientId(),
       provider: 'claude',
-      baseUrl: '',
-      apiKey: '',
-      hasApiKey: false,
-      apiKeySource: 'none',
-      clearApiKey: false,
     },
   ];
   renderModelConfigurations();
@@ -674,6 +738,7 @@ async function createTask(event) {
         useFallback: elements.autoFallback.checked,
         repository: elements.repository.value,
         baseBranch: elements.baseBranch.value || undefined,
+        taskBranch: elements.taskBranch.value || undefined,
         prompt: elements.prompt.value,
         createPullRequest: elements.createPr.checked,
       }),
@@ -702,9 +767,6 @@ async function saveModelSettings(event) {
         modelConfigs: state.modelConfigs.map((configuration) => ({
           id: configuration.id,
           provider: configuration.provider,
-          baseUrl: configuration.baseUrl,
-          apiKey: configuration.apiKey || undefined,
-          clearApiKey: configuration.clearApiKey,
         })),
       }),
     });
@@ -891,19 +953,7 @@ function providerLabel(provider) {
 }
 
 function editableModelConfigurations(configurations) {
-  return configurations.map((configuration) => ({
-    ...configuration,
-    apiKey: '',
-    clearApiKey: false,
-  }));
-}
-
-function apiKeyStatus(configuration) {
-  if (configuration.apiKey) return '将使用新填写的密钥';
-  if (configuration.clearApiKey) return '保存后清除已存密钥';
-  if (configuration.apiKeySource === 'file') return '页面不回显；密钥保存在本地设置文件';
-  if (configuration.apiKeySource === 'environment') return '当前由服务环境变量提供';
-  return '未配置时将尝试使用对应 CLI 的登录状态';
+  return configurations.map((configuration) => ({ ...configuration }));
 }
 
 function createClientId() {

@@ -15,29 +15,27 @@ import {
   AgentAuthService,
   isAgentAuthProvider,
 } from './AgentAuthManager';
-import { GitHubClientFactory, GitHubConnection, inspectGitHubAccount } from './GitHubExplorer';
+import {
+  GitHubClientFactory,
+  GitHubConnection,
+  inspectGitHubAccount,
+  listGitHubBranches,
+} from './GitHubExplorer';
 import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
 
 interface StoredModelConfiguration {
   id: string;
   provider: CodingAgentProvider;
-  model: string;
-  baseUrl?: string;
-  apiKey?: string;
 }
 
 interface ConsoleSettings {
-  version: 3;
+  version: 4;
   modelConfigs: StoredModelConfiguration[];
 }
 
 interface ModelConfigurationPayload {
   id?: string;
   provider?: CodingAgentProvider;
-  model?: string;
-  baseUrl?: string;
-  apiKey?: string;
-  clearApiKey?: boolean;
   prompt?: string;
 }
 
@@ -179,10 +177,7 @@ export class WebConsole {
       let prompt: string | undefined;
       try {
         const payload = parseJson<ModelConfigurationPayload>(body);
-        configuration = normalizeModelConfigurationPayloads(
-          [payload],
-          this.settings.modelConfigs,
-        )[0];
+        configuration = normalizeModelConfigurationPayloads([payload])[0];
         prompt = normalizeModelTestPrompt(payload.prompt);
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
@@ -193,8 +188,6 @@ export class WebConsole {
           status: 200,
           body: await this.modelTester.test({
             provider: configuration.provider,
-            ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
-            apiKey: configuration.apiKey,
             ...(prompt ? { prompt } : {}),
           }),
           headers: API_HEADERS,
@@ -309,6 +302,26 @@ export class WebConsole {
       }
     });
 
+    httpServer.register('GET', '/api/console/github/branches', async (_body, _headers, query) => {
+      try {
+        validateGitHubToken(this.githubToken);
+        if (!query.repository) {
+          throw new Error('repository is required');
+        }
+        const branches = await listGitHubBranches(
+          this.githubClientFactory(this.githubToken!),
+          query.repository,
+        );
+        return {
+          status: 200,
+          body: { repository: query.repository, branches },
+          headers: API_HEADERS,
+        };
+      } catch (error) {
+        return githubErrorResponse(error);
+      }
+    });
+
     httpServer.register('GET', '/api/console/tasks', async () => ({
       status: 200,
       body: { tasks: this.taskManager.list() },
@@ -333,6 +346,7 @@ export class WebConsole {
           model?: string;
           repository?: string;
           baseBranch?: string;
+          taskBranch?: string;
           prompt?: string;
           createPullRequest?: boolean;
           useFallback?: boolean;
@@ -352,6 +366,7 @@ export class WebConsole {
               }),
           repository: payload.repository ?? '',
           baseBranch: payload.baseBranch,
+          taskBranch: payload.taskBranch,
           prompt: payload.prompt ?? '',
           createPullRequest: payload.createPullRequest,
         });
@@ -384,16 +399,15 @@ export class WebConsole {
       const stored = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as unknown;
       if (isRecord(stored) && Array.isArray(stored.modelConfigs)) {
         const validated = validateStoredSettings(stored.modelConfigs);
-        const hadModelOverrides = stored.modelConfigs.some(
+        const hadLegacyOverrides = stored.modelConfigs.some(
           (configuration) =>
             isRecord(configuration) &&
-            typeof configuration.model === 'string' &&
-            configuration.model.trim().length > 0,
+            ['model', 'baseUrl', 'apiKey'].some((field) => field in configuration),
         );
         if (
-          stored.version !== 3 ||
+          stored.version !== 4 ||
           validated.modelConfigs.length !== stored.modelConfigs.length ||
-          hadModelOverrides
+          hadLegacyOverrides
         ) {
           this.persistSettings(validated);
         }
@@ -420,11 +434,8 @@ export class WebConsole {
       throw new Error('modelConfigs 必须是数组');
     }
     const nextSettings: ConsoleSettings = {
-      version: 3,
-      modelConfigs: normalizeModelConfigurationPayloads(
-        payload.modelConfigs,
-        this.settings.modelConfigs,
-      ),
+      version: 4,
+      modelConfigs: normalizeModelConfigurationPayloads(payload.modelConfigs),
     };
     this.persistSettings(nextSettings);
     this.settings = nextSettings;
@@ -441,39 +452,19 @@ export class WebConsole {
     return configurations.map((configuration) => ({
       id: configuration.id,
       provider: configuration.provider,
-      ...(configuration.baseUrl ? { baseUrl: configuration.baseUrl } : {}),
-      apiKey: configuration.apiKey,
     }));
   }
 
   private publicSettings(): {
-    version: 3;
+    version: 4;
     modelConfigs: Array<{
       id: string;
       provider: CodingAgentProvider;
-      model: string;
-      baseUrl: string;
-      hasApiKey: boolean;
-      apiKeySource: 'file' | 'environment' | 'none';
     }>;
   } {
     return {
-      version: 3,
-      modelConfigs: this.settings.modelConfigs.map((configuration) => {
-        const hasEnvironmentApiKey = Boolean(apiKeyFromEnvironment(configuration.provider));
-        return {
-          id: configuration.id,
-          provider: configuration.provider,
-          model: configuration.model,
-          baseUrl: configuration.baseUrl ?? '',
-          hasApiKey: Boolean(configuration.apiKey) || hasEnvironmentApiKey,
-          apiKeySource: configuration.apiKey
-            ? 'file'
-            : hasEnvironmentApiKey
-              ? 'environment'
-              : 'none',
-        };
-      }),
+      version: 4,
+      modelConfigs: this.settings.modelConfigs.map((configuration) => ({ ...configuration })),
     };
   }
 }
@@ -498,10 +489,10 @@ function parseJson<T>(body: Buffer): T {
 const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude'];
 function createDefaultSettings(): ConsoleSettings {
   return {
-    version: 3,
+    version: 4,
     modelConfigs: [
-      { id: 'default-codex', provider: 'codex', model: '' },
-      { id: 'default-claude', provider: 'claude', model: '' },
+      { id: 'default-codex', provider: 'codex' },
+      { id: 'default-claude', provider: 'claude' },
     ],
   };
 }
@@ -516,19 +507,15 @@ function validateStoredSettings(modelConfigs: unknown[]): ConsoleSettings {
     return structuredClone(DEFAULT_SETTINGS);
   }
   return {
-    version: 3,
+    version: 4,
     modelConfigs: normalizeModelConfigurationPayloads(
       supported as ModelConfigurationPayload[],
-      [],
-      true,
     ),
   };
 }
 
 function normalizeModelConfigurationPayloads(
   payloads: ModelConfigurationPayload[],
-  existing: StoredModelConfiguration[],
-  trustStoredApiKeys = false,
 ): StoredModelConfiguration[] {
   if (payloads.length === 0) {
     throw new Error('至少需要一条模型配置');
@@ -536,7 +523,6 @@ function normalizeModelConfigurationPayloads(
   if (payloads.length > 20) {
     throw new Error('模型配置不能超过 20 条');
   }
-  const existingById = new Map(existing.map((configuration) => [configuration.id, configuration]));
   const ids = new Set<string>();
   return payloads.map((payload, index) => {
     const id = payload.id?.trim() || randomUUID();
@@ -550,24 +536,9 @@ function normalizeModelConfigurationPayloads(
     if (!payload.provider || !VALID_PROVIDERS.includes(payload.provider)) {
       throw new Error(`第 ${index + 1} 条模型配置的 Agent 无效`);
     }
-    const baseUrl = normalizeBaseUrl(payload.baseUrl, index);
-    const submittedApiKey = payload.apiKey?.trim() || undefined;
-    const existingConfiguration = existingById.get(id);
-    const apiKey = payload.clearApiKey
-      ? undefined
-      : submittedApiKey ||
-        (existingConfiguration?.provider === payload.provider
-          ? existingConfiguration.apiKey
-          : undefined);
-    if (apiKey && (apiKey.length > 4096 || /\s/.test(apiKey))) {
-      throw new Error(`第 ${index + 1} 条 API Key 格式无效`);
-    }
     return {
       id,
       provider: payload.provider,
-      model: '',
-      ...(baseUrl ? { baseUrl } : {}),
-      ...(trustStoredApiKeys || submittedApiKey || existingById.has(id) ? { apiKey } : {}),
     };
   });
 }
@@ -593,39 +564,8 @@ function migrateLegacySettings(stored: unknown): ConsoleSettings {
     order.map((provider) => ({
       id: `migrated-${provider}`,
       provider,
-      model: '',
     })),
   );
-}
-
-function apiKeyFromEnvironment(provider: CodingAgentProvider): string | undefined {
-  return {
-    codex: process.env.CODEX_API_KEY,
-    claude: process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY,
-  }[provider];
-}
-
-function normalizeBaseUrl(value: string | undefined, index: number): string | undefined {
-  const normalized = value?.trim().replace(/\/+$/, '') || undefined;
-  if (!normalized) return undefined;
-  if (normalized.length > 2048) {
-    throw new Error(`第 ${index + 1} 条 Base URL 不能超过 2048 个字符`);
-  }
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
-    throw new Error(`第 ${index + 1} 条 Base URL 必须是有效的 HTTP(S) 地址`);
-  }
-  if (
-    !['http:', 'https:'].includes(parsed.protocol) ||
-    parsed.username ||
-    parsed.password ||
-    parsed.hash
-  ) {
-    throw new Error(`第 ${index + 1} 条 Base URL 不能包含凭据或 URL 片段`);
-  }
-  return normalized;
 }
 
 function normalizeModelTestPrompt(value: string | undefined): string | undefined {

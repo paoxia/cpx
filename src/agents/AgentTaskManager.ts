@@ -36,6 +36,8 @@ export interface AgentTaskRequest {
   configurations?: AgentModelConfiguration[];
   repository: string;
   baseBranch?: string;
+  /** 用户指定的新任务分支；未提供时自动生成 cpx/task-*。 */
+  taskBranch?: string;
   prompt: string;
   createPullRequest?: boolean;
 }
@@ -69,6 +71,7 @@ export interface AgentTask {
   configurations: PublicAgentModelConfiguration[];
   repository: string;
   baseBranch?: string;
+  taskBranch?: string;
   prompt: string;
   createPullRequest: boolean;
   status: AgentTaskStatus;
@@ -133,6 +136,7 @@ export class AgentTaskManager {
       configurations: configurations.map(({ apiKey: _apiKey, ...configuration }) => configuration),
       repository: normalized.repository,
       baseBranch: normalized.baseBranch,
+      taskBranch: normalized.taskBranch,
       prompt: normalized.prompt,
       createPullRequest: normalized.createPullRequest,
       status: 'queued',
@@ -197,6 +201,7 @@ export class AgentTaskManager {
     configurations: AgentModelConfiguration[];
     repository: string;
     baseBranch?: string;
+    taskBranch?: string;
     prompt: string;
     createPullRequest: boolean;
   } {
@@ -209,17 +214,16 @@ export class AgentTaskManager {
     if (prompt.length > 20_000) {
       throw new Error('任务指令不能超过 20000 个字符');
     }
-    const baseBranch = request.baseBranch?.trim() || undefined;
-    if (
-      baseBranch &&
-      (!BRANCH_PATTERN.test(baseBranch) || baseBranch.includes('..') || baseBranch.startsWith('/'))
-    ) {
-      throw new Error('基础分支名称无效');
+    const baseBranch = normalizeBranchName(request.baseBranch, '基础分支');
+    const taskBranch = normalizeBranchName(request.taskBranch, '新分支');
+    if (taskBranch && taskBranch === baseBranch) {
+      throw new Error('新分支不能与基础分支同名');
     }
     return {
       configurations,
       repository,
       baseBranch,
+      taskBranch,
       prompt,
       createPullRequest: Boolean(request.createPullRequest),
     };
@@ -249,7 +253,7 @@ export class AgentTaskManager {
       );
       this.assertNotCancelled(task);
 
-      const branch = `cpx/task-${task.id.slice(0, 8)}`;
+      const branch = task.taskBranch || `cpx/task-${task.id.slice(0, 8)}`;
       task.agentBranch = branch;
       await this.runProcess(task, 'git', ['checkout', '-b', branch], workspace);
       this.assertNotCancelled(task);
@@ -435,10 +439,14 @@ export class AgentTaskManager {
       false,
       githubEnvironment,
     );
+    const prArgs = ['pr', 'create', '--fill', '--head', task.agentBranch!];
+    if (task.baseBranch) {
+      prArgs.push('--base', task.baseBranch);
+    }
     const pr = await this.runProcess(
       task,
       'gh',
-      ['pr', 'create', '--fill', '--head', task.agentBranch!],
+      prArgs,
       workspace,
       undefined,
       false,
@@ -635,6 +643,28 @@ export function normalizeRepository(input: string): string {
     return value.endsWith('.git') ? value : `${value}.git`;
   }
   throw new Error('仅支持 owner/repo、GitHub HTTPS 或 GitHub SSH 仓库地址');
+}
+
+function normalizeBranchName(input: string | undefined, label: string): string | undefined {
+  const value = input?.trim() || undefined;
+  if (!value) return undefined;
+  const components = value.split('/');
+  const invalid =
+    value.length > 255 ||
+    !BRANCH_PATTERN.test(value) ||
+    value.startsWith('-') ||
+    value.startsWith('/') ||
+    value.endsWith('/') ||
+    value.endsWith('.') ||
+    value.endsWith('.lock') ||
+    value.includes('..') ||
+    value.includes('//') ||
+    value.includes('@{') ||
+    components.some((component) => component.startsWith('.'));
+  if (invalid) {
+    throw new Error(`${label}名称无效`);
+  }
+  return value;
 }
 
 function buildCommitTitle(prompt: string): string {
