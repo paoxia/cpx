@@ -89,8 +89,9 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 1. 开发机执行 `scripts/docker-build.sh` 生成 `cpx-latest.tar.gz`
 2. 把 `cpx-latest.tar.gz`、`docker-compose.yml`、`.docker.env.example`、`scripts/docker-deploy.sh` 传到极空间
-3. NAS 上执行 `./docker-deploy.sh`，按提示编辑 `.docker.env` 并配置 Agent 登录或环境变量
-4. 手机浏览器访问 `http://<NAS-IP>:3000`
+3. NAS 上执行 `./docker-deploy.sh`，按提示编辑 `.docker.env`；不用的密钥保持为空
+4. 再次运行脚本启动服务，在控制台连接 GitHub，并完成 Codex 或 Claude Code 官方 CLI 登录
+5. 手机浏览器访问 `http://<NAS-IP>:3000`
 
 ## CLI 命令
 

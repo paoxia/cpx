@@ -6,12 +6,26 @@
 #   3. 把本脚本也拷到同目录，或直接在 NAS 上执行
 # 用法： ./docker-deploy.sh [tar文件] [工作目录]
 #   tar 文件默认 cpx-latest.tar.gz
-#   工作目录默认 /tmp/cpx
+#   工作目录默认脚本所在目录；请把脚本放在 NAS 的持久化目录中执行
 set -euo pipefail
 
 TAR="${1:-cpx-latest.tar.gz}"
-WORKDIR="${2:-/tmp/cpx}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WORKDIR="${2:-${SCRIPT_DIR}}"
+
+case "${WORKDIR}" in
+  /*) ;;
+  *) WORKDIR="$(pwd)/${WORKDIR}" ;;
+esac
+
+copy_if_needed() {
+  local source="$1"
+  local destination="$2"
+  if [ "$(cd "$(dirname "${source}")" && pwd)/$(basename "${source}")" != \
+       "$(cd "$(dirname "${destination}")" && pwd)/$(basename "${destination}")" ]; then
+    cp "${source}" "${destination}"
+  fi
+}
 
 if [ ! -f "${TAR}" ]; then
   echo "Error: 找不到 ${TAR}"
@@ -23,21 +37,29 @@ echo "==> Loading image from ${TAR}"
 docker load < "${TAR}"
 
 echo "==> Preparing working dir ${WORKDIR}"
-mkdir -p "${WORKDIR}/data" "${WORKDIR}/config" "${WORKDIR}/logs"
+mkdir -p \
+  "${WORKDIR}/data/codex" \
+  "${WORKDIR}/data/claude" \
+  "${WORKDIR}/config" \
+  "${WORKDIR}/logs"
+chmod 700 "${WORKDIR}/data/codex" "${WORKDIR}/data/claude"
 
 # 复制 compose 文件（首次部署或更新）
 if [ -f "${SCRIPT_DIR}/docker-compose.yml" ]; then
-  cp "${SCRIPT_DIR}/docker-compose.yml" "${WORKDIR}/docker-compose.yml"
+  copy_if_needed "${SCRIPT_DIR}/docker-compose.yml" "${WORKDIR}/docker-compose.yml"
 elif [ -f ./docker-compose.yml ]; then
-  cp ./docker-compose.yml "${WORKDIR}/docker-compose.yml"
+  copy_if_needed ./docker-compose.yml "${WORKDIR}/docker-compose.yml"
+else
+  echo "Error: 找不到 docker-compose.yml"
+  exit 1
 fi
 
 # 首次部署：生成 .docker.env 并提示用户编辑
 if [ ! -f "${WORKDIR}/.docker.env" ]; then
   if [ -f "${SCRIPT_DIR}/.docker.env.example" ]; then
-    cp "${SCRIPT_DIR}/.docker.env.example" "${WORKDIR}/.docker.env"
+    copy_if_needed "${SCRIPT_DIR}/.docker.env.example" "${WORKDIR}/.docker.env"
   elif [ -f ./.docker.env.example ]; then
-    cp ./.docker.env.example "${WORKDIR}/.docker.env"
+    copy_if_needed ./.docker.env.example "${WORKDIR}/.docker.env"
   else
     echo "Error: 找不到 .docker.env.example 模板"
     exit 1
@@ -45,7 +67,7 @@ if [ ! -f "${WORKDIR}/.docker.env" ]; then
   chmod 600 "${WORKDIR}/.docker.env"
   echo ""
   echo "==> 已生成 ${WORKDIR}/.docker.env"
-  echo "    请编辑此文件，填入 CODEX_API_KEY / ANTHROPIC_API_KEY / GH_TOKEN 等（Agent 也可稍后在模型设置中登录）"
+  echo "    请编辑此文件；不用的密钥保持为空，也可启动后在控制台完成 GitHub 和 Agent 登录"
   echo "    然后重新运行本脚本： ${0} ${TAR} ${WORKDIR}"
   exit 0
 fi
