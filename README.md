@@ -95,6 +95,8 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 更新时在电脑取得新源码，通过文件管理器覆盖代码文件但保留 NAS 上的 `data`、`config` 和 `logs`，然后在 Compose 项目详情中选择重新构建。NAS 无法稳定访问软件源或资源有限时，可改用部署文档中的离线镜像方案。
 
+Codex CLI 不需要在 NAS 上单独安装。Compose 构建镜像时，`Dockerfile` 会自动安装 `@openai/codex@latest`；离线镜像包中也已经包含 Codex。容器启动后进入 cpx 的“模型设置”，在 Codex 项点击连接并完成设备码登录，再执行页面内测试。登录资料通过 `./data/codex:/root/.codex` 持久化，重新构建容器不会主动删除。
+
 ## CLI 命令
 
 ```bash

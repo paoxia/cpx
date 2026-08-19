@@ -78,7 +78,19 @@ git archive --format=zip --output=cpx-source.zip dev
 
 创建过程中打开项目构建日志，确认没有下载超时或编译错误。构建成功后，项目中应出现一个名为 `cpx` 的容器。
 
-### 4. 环境变量
+### 4. Codex 自动安装
+
+不需要在极空间或容器内手工安装 Codex。镜像构建时，项目 `Dockerfile` 会执行：
+
+```dockerfile
+RUN npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest
+```
+
+因此源码 Compose 构建成功后，`codex` 命令已经包含在容器镜像中；开发机生成的离线镜像包也包含同一套 CLI。可以在极空间构建日志中找到这一步，确认 npm 安装完成。如果这一步失败，通常是 NAS 无法访问 npm 或相关下载源，应先检查构建日志和 NAS 出站网络，或者改用开发机构建的离线镜像。
+
+容器启动后，在 cpx Web 控制台进入“模型设置”，在 Codex 项点击连接或登录，按页面展示的验证地址和设备码完成授权，然后执行该项内的测试。无需打开 NAS 终端。登录资料保存在 `<CPX_DIR>/data/codex`，对应容器内 `/root/.codex`；只要不删除这个目录，重新创建或重新构建容器后仍可继续使用。
+
+### 5. 环境变量
 
 默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、Claude Code、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
 
@@ -100,7 +112,7 @@ AGENT_LOGGING_LEVEL=info
 
 空值应保持为空，不要填写 `sk-...`、`ghp_xxx` 等示例占位符。环境变量来源的 GitHub Token 不能在 cpx 页面中替换；更新时需要在 Compose 项目中修改变量并重新创建容器。
 
-### 5. 端口调整
+### 6. 端口调整
 
 默认端口映射为：
 
