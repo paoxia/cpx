@@ -3,6 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        ALL_PROXY: ${ALL_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
     container_name: cpx
     restart: unless-stopped
     ports:
@@ -12,6 +17,10 @@ services:
       AGENT_SERVER_HOST: 0.0.0.0
       AGENT_SERVER_PORT: 3000
       AGENT_LOGGING_LEVEL: ${AGENT_LOGGING_LEVEL:-info}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      ALL_PROXY: ${ALL_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
       CODEX_API_KEY: ${CODEX_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GH_TOKEN: ${GH_TOKEN:-}

@@ -97,6 +97,8 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 Codex CLI 不需要在 NAS 上单独安装。Compose 构建镜像时，`Dockerfile` 会自动安装 `@openai/codex@latest`；离线镜像包中也已经包含 Codex。容器启动后进入 cpx 的“模型设置”，在 Codex 项点击连接并完成设备码登录，再执行页面内测试。登录资料通过 `./data/codex:/root/.codex` 持久化，重新构建容器不会主动删除。
 
+NAS 网络不能直接连接 Codex 或构建软件源时，在极空间 Compose 环境变量界面配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`。代理地址必须使用容器可访问的局域网 IP，不能使用 `127.0.0.1`；基础镜像无法拉取时改用开发机构建、极空间图形界面导入镜像的方案。具体填写方式和构建/运行阶段的区别见 [部署文档的“出站代理”章节](docs/DEPLOYMENT.md#出站代理)。
+
 ## CLI 命令
 
 ```bash
