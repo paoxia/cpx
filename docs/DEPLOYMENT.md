@@ -1,398 +1,220 @@
-# 极空间 NAS Docker 部署指南
+# 极空间 NAS Docker Compose 部署指南
 
-本文档给出从源代码或离线镜像启动容器，到连接 GitHub 和 Codex / Claude Code、验证任务、更新与备份的完整流程。推荐在 NAS 能稳定访问 GitHub 和软件源时直接从源代码构建；网络或硬件条件不适合现场构建时，使用“开发机离线构建镜像，极空间 NAS 加载镜像”的备用方式。两种方式都使用 Docker Compose，并共享相同的持久化目录结构。
+本文档只使用极空间文件管理器和 Docker 图形界面完成 NAS 侧操作，不要求开启远程终端服务，也不要求在 NAS 上执行命令。
+
+推荐把完整源代码上传到 NAS 后，由极空间 Compose 直接构建。NAS 网络或性能不适合现场构建时，可在开发机生成镜像包，再通过极空间 Docker 的镜像导入功能部署。
 
 部署完成后：
 
 - cpx 运行在极空间的 Docker 容器中；
 - 手机或电脑通过 `http://<NAS-IP>:3000` 打开 Web 控制台；
-- SQLite 数据、Agent 工作区、GitHub 配置和 CLI 登录信息保存在 NAS 持久化目录中；
-- 容器重建或 NAS 重启后，服务会自动启动并继续使用持久化数据。
+- SQLite 数据、任务工作区、GitHub 配置和 Agent 登录资料保存在 NAS 持久化目录中；
+- 容器重建或 NAS 重启后继续使用已有数据。
 
 整体架构见 [ARCHITECTURE.md](../ARCHITECTURE.md)，安全边界见 [SECURITY.md](SECURITY.md)。
 
-## 一、部署前必须知道的安全边界
+## 一、安全边界
 
 > cpx 的 Web 控制台、`/command` 和 `/api/console/*` 当前没有通用身份认证，却可以启动 Agent、修改仓库并推送分支。不要把 3000 端口直接映射到公网，也不要在路由器上为它配置端口转发。
 
-建议先仅在家庭或办公内网使用。确需远程管理时，应在可信反向代理之后增加 TLS、登录认证和访问限制。钉钉或飞书只需公网回调时，应只代理相应的 webhook 路径，不要同时暴露控制台和 `/api/console/*`。
+建议只在家庭或办公内网访问。确需远程管理时，应在可信反向代理后增加 TLS、登录认证和访问限制。钉钉或飞书只需要公网回调时，仅代理对应 webhook 路径，不要同时公开控制台和 `/api/console/*`。
 
-## 二、准备清单
+## 二、准备工作
 
-### 1. 极空间 NAS
+### 极空间 NAS
 
 - 已安装并启动 Docker 应用；
-- 已在系统设置中开启 SSH；
+- 已启用 Docker Compose 图形化项目功能；
 - 有一个不会在重启后清空的持久化目录；
-- NAS 可以访问 GitHub，以及所用 Agent 的登录和模型服务；
-- 准备一个未占用的 TCP 端口，默认使用 `3000`。
+- NAS 可以访问 GitHub、Debian 软件源、npm 以及所用 Agent 的登录和模型服务；
+- 3000 端口未被其他容器占用，或者准备改用其他宿主机端口。
 
-不要把正式部署目录放在 `/tmp`。本文用 `<CPX_DIR>` 表示持久化目录，例如你在极空间文件管理器中为 Docker 应用创建的 `cpx` 文件夹。不同型号和系统版本的宿主机绝对路径可能不同，应以文件管理器显示或复制出的真实路径为准。
+本文用 `<CPX_DIR>` 表示项目存储目录。可以在极空间文件管理器中创建 `Docker/cpx` 文件夹，并在创建 Compose 项目时把它选为项目存储位置。不同系统版本的菜单名称可能略有变化。
 
-### 2. 源码部署额外要求
+### 开发机
 
-- NAS 已安装 Git，并能访问代码仓库；
-- 私有仓库已为 NAS 配置只读 SSH Key 或 HTTPS Token；
-- NAS 构建时能够访问 Debian、Node.js、GitHub CLI、npm、OpenAI 和 Anthropic 的软件源；
-- NAS 有足够的可用内存和磁盘空间完成 Docker 镜像构建。
+- 能获取本仓库目标分支的完整源码；
+- 使用离线镜像方案时，已安装 Docker Desktop 或 Docker Engine；
+- 私有仓库的下载凭据只保留在开发机，不上传到 NAS 项目目录。
 
-### 3. 离线镜像部署所需开发机
+## 三、推荐方式：上传源码并由 Compose 构建
 
-- 已安装 Docker Desktop 或 Docker Engine；
-- 已克隆本仓库；
-- 使用 Windows 时，运行仓库脚本还需要 Git Bash 或 WSL。也可以使用本文提供的 PowerShell 命令；
-- 构建时能够访问 Debian、Node.js、GitHub CLI、npm、OpenAI 和 Anthropic 的软件源。
+### 1. 在开发机准备源码
 
-### 3. 凭据
+在开发机取得要部署的分支。当前尚未合并到主分支的部署改动可以从 `dev` 分支获取；正式发布后应优先使用经过确认的主分支或版本标签。
 
-首次启动不要求把真实密钥写进 `.docker.env`。可以启动后通过控制台完成连接。
-
-- GitHub：公开仓库只读任务可以暂不配置；访问私有仓库、推送分支或创建 Pull Request 时需要 Token；
-- Codex：可使用控制台发起官方设备码登录，或提供 `CODEX_API_KEY`；
-- Claude Code：可使用控制台发起官方浏览器登录，或提供 `ANTHROPIC_API_KEY`；
-- 钉钉和飞书：仅在需要群机器人时配置。
-
-至少连接一个可用的 Coding Agent 才能运行任务。
-
-## 三、确认 NAS 架构和端口
-
-SSH 登录极空间后执行：
+可以直接使用 GitHub 网页的“Download ZIP”，也可以在开发机仓库中生成不包含本地密钥和运行数据的源码包：
 
 ```bash
-uname -m
-docker info --format '{{.Architecture}}'
-docker compose version
+git archive --format=zip --output=cpx-source.zip dev
 ```
 
-常见结果：
+这条命令只在开发机执行。不要把开发机上的 `.env`、`.docker.env`、`config/config.yaml`、`data` 或任何 Token 一起打包。
 
-| 输出 | 构建平台 |
-|---|---|
-| `x86_64` 或 `amd64` | `linux/amd64` |
-| `aarch64` 或 `arm64` | `linux/arm64` |
+### 2. 通过极空间文件管理器上传
 
-源码部署会按 NAS 本机架构构建。离线镜像方案默认并优先验证 `linux/amd64`；ARM NAS 需要按 `linux/arm64` 构建，并在首次部署后重点检查 `better-sqlite3` 能否加载。
+在极空间文件管理器中：
 
-检查 3000 端口是否已被其他容器占用：
+1. 创建持久化目录 `<CPX_DIR>`；
+2. 上传源码 ZIP 并解压到该目录；
+3. 确认 `Dockerfile`、`docker-compose.yml`、`package.json`、`src/` 和 `public/` 位于同一层；
+4. 创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs` 子目录；
+5. 将该目录访问权限限制为管理员或可信用户。
 
-```bash
-docker ps --format 'table {{.Names}}\t{{.Ports}}'
+源码包本身已经包含 `config/config.example.yaml` 和 `config/permissions.example.yaml`。不要删除整个 `config` 目录。
+
+### 3. 在极空间创建 Compose 项目
+
+打开极空间管理界面：
+
+1. 进入“Docker → Compose”；
+2. 选择“新建项目”；
+3. 项目名称填写 `cpx`；
+4. 项目存储位置选择刚才上传源码的 `<CPX_DIR>`；
+5. 导入该目录中的 `docker-compose.yml`，或者把文件内容粘贴到 Compose 编辑框；
+6. 确认构建上下文为当前目录 `.`，然后创建项目。
+
+根目录 [docker-compose.yml](../docker-compose.yml) 会调用同目录的 `Dockerfile`，在 NAS 本机架构上构建本地镜像并启动 `cpx`。首次构建需要下载基础镜像、系统包和 npm 包，耗时取决于 NAS 性能和网络状况。
+
+创建过程中打开项目构建日志，确认没有下载超时或编译错误。构建成功后，项目中应出现一个名为 `cpx` 的容器。
+
+### 4. 环境变量
+
+默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、Claude Code、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
+
+推荐启动后通过 cpx Web 控制台连接 GitHub，并完成 Codex 或 Claude Code 登录。如果确实要通过环境变量提供密钥，可在极空间 Compose 项目的环境变量界面填写对应变量，再保存并重新创建容器：
+
+```dotenv
+CODEX_API_KEY=
+ANTHROPIC_API_KEY=
+GH_TOKEN=
+AGENT_GITHUB_TOKEN=
+AGENT_GITHUB_DEFAULT_REPO=
+AGENT_DINGTALK_WEBHOOK_URL=
+AGENT_DINGTALK_SECRET=
+AGENT_FEISHU_WEBHOOK_URL=
+AGENT_FEISHU_APP_ID=
+AGENT_FEISHU_APP_SECRET=
+AGENT_LOGGING_LEVEL=info
 ```
 
-如果已有服务使用 `0.0.0.0:3000`，源码部署编辑 `docker-compose.source.yml`，离线镜像部署编辑 `docker-compose.yml`。只修改端口映射左侧，例如改为：
+空值应保持为空，不要填写 `sk-...`、`ghp_xxx` 等示例占位符。环境变量来源的 GitHub Token 不能在 cpx 页面中替换；更新时需要在 Compose 项目中修改变量并重新创建容器。
+
+### 5. 端口调整
+
+默认端口映射为：
+
+```yaml
+ports:
+  - "3000:3000"
+```
+
+如果 3000 已被占用，在 Compose 编辑器中只修改左侧，例如：
 
 ```yaml
 ports:
   - "13000:3000"
 ```
 
-此时外部访问地址变为 `http://<NAS-IP>:13000`；容器内部端口和 `.docker.env` 中的 `AGENT_SERVER_PORT=3000` 不要改。
+此时访问地址变为 `http://<NAS-IP>:13000`，容器内部端口仍保持 3000。
 
-## 四、在 NAS 直接从源代码构建
+## 四、备用方式：开发机构建并在 NAS 导入镜像
 
-在 NAS 的持久化目录中克隆仓库。以下以 SSH 地址为例；私有仓库需要提前为 NAS 配置有权读取该仓库的 SSH Key：
+当 NAS 无法稳定访问构建所需的软件源，或者不希望占用 NAS 资源时，在开发机构建与 NAS 架构一致的镜像。
 
-```bash
-cd "<CPX_PARENT_DIR>"
-git clone git@github.com:paoxia/cpx.git
-cd cpx
-```
+先在极空间系统信息或设备规格页面确认处理器架构：
 
-如果已经通过极空间文件管理器上传完整源代码，直接进入包含 `Dockerfile` 和 `docker-compose.source.yml` 的仓库根目录即可。不要把源码和运行数据放在 `/tmp`。
+| NAS 架构 | Docker 构建平台 |
+|---|---|
+| x86_64 / amd64 | `linux/amd64` |
+| aarch64 / arm64 | `linux/arm64` |
 
-生成容器环境变量文件并准备持久化目录：
-
-```bash
-cp .docker.env.example .docker.env
-mkdir -p data/codex data/claude data/workspaces config logs
-chmod 600 .docker.env
-chmod 700 data/codex data/claude
-```
-
-`.docker.env` 中不用的密钥保持为空。首次启动后也可以通过 Web 控制台连接 GitHub，并完成 Codex 或 Claude Code 官方 CLI 登录。
-
-构建并启动：
-
-```bash
-docker compose -f docker-compose.source.yml up -d --build
-```
-
-`docker-compose.source.yml` 会调用仓库根目录的 `Dockerfile`，在 NAS 本机架构上构建 `cpx:source`，并挂载与离线部署相同的 `data`、`config` 和 `logs` 目录。首次构建需要下载系统包和 npm 包，耗时取决于 NAS 性能和网络状况。
-
-验证服务：
-
-```bash
-docker compose -f docker-compose.source.yml ps
-docker inspect cpx --format '{{.State.Status}} / {{.State.Health.Status}}'
-curl http://127.0.0.1:3000/health
-```
-
-更新源码部署：
-
-```bash
-cd "<CPX_PARENT_DIR>/cpx"
-git pull --ff-only
-docker compose -f docker-compose.source.yml up -d --build
-```
-
-更新前应先备份 `.docker.env`、`config` 和 `data`。不要在运行目录中强制重置 Git；如果 `git pull --ff-only` 提示存在本地修改，应先检查并处理这些修改。
-
-后续连接和验证步骤从“配置 `.docker.env`”一节继续。以下章节是网络或硬件条件不适合在 NAS 构建时使用的离线镜像方案。
-
-## 五、备用方式：在开发机构建离线镜像
-
-### 方式 A：macOS、Linux、Git Bash 或 WSL
-
-在仓库根目录执行。x86_64 NAS：
+在开发机仓库根目录执行：
 
 ```bash
 scripts/docker-build.sh latest linux/amd64
 ```
 
-ARM64 NAS：
+ARM64 NAS 将平台改为：
 
 ```bash
 scripts/docker-build.sh latest linux/arm64
 ```
 
-脚本会：
+这些命令只在开发机执行，并生成 `cpx-latest.tar`。
 
-1. 构建 `cpx:latest`；
-2. 安装生产依赖、Git、SSH 客户端、GitHub CLI、Codex CLI 和 Claude Code CLI；
-3. 导出 `cpx-latest.tar.gz`。
+然后在极空间界面完成：
 
-### 方式 B：Windows PowerShell
+1. 通过文件管理器把 `cpx-latest.tar` 和 `docker-compose.image.yml` 上传到持久化目录；
+2. 打开“Docker → 镜像”，选择本地镜像导入，导入 `cpx-latest.tar`；
+3. 确认镜像列表中出现 `cpx:latest`；
+4. 在文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs`；
+5. 打开“Docker → Compose → 新建项目”；
+6. 项目存储位置选择该持久化目录；
+7. 导入或粘贴 `docker-compose.image.yml` 的内容并创建项目。
 
-Windows 不依赖 `gzip` 时，可以导出未压缩的 tar 文件。x86_64 NAS：
+离线镜像 Compose 使用与源码方案相同的端口、环境变量和数据目录。
 
-```powershell
-docker build --platform linux/amd64 -t cpx:latest .
-docker save -o cpx-latest.tar cpx:latest
-```
+## 五、启动验证
 
-ARM64 NAS 将平台改为 `linux/arm64`。未压缩的 `.tar` 较大，但部署脚本同样支持。
+在极空间 Docker 界面检查：
 
-### 构建后检查
+1. Compose 项目状态为运行中；
+2. `cpx` 容器状态为运行中；
+3. 等待健康状态变为 `healthy`；
+4. 在容器日志中确认服务监听 `0.0.0.0:3000`，且没有持续重启或数据库错误。
 
-```bash
-docker image inspect cpx:latest --format '{{.Os}}/{{.Architecture}}'
-```
-
-结果必须与 NAS 架构一致，例如 `linux/amd64`。不要直接使用为开发机本机架构构建、但与 NAS 架构不同的镜像。
-
-## 六、把离线部署文件上传到极空间
-
-在极空间文件管理器中创建持久化目录 `<CPX_DIR>`，把以下文件放在同一目录：
+浏览器打开：
 
 ```text
-<CPX_DIR>/
-├── cpx-latest.tar.gz       # PowerShell 构建时为 cpx-latest.tar
-├── docker-compose.yml
-├── .docker.env.example
-└── docker-deploy.sh        # 仓库中的 scripts/docker-deploy.sh
+http://<NAS-IP>:3000/health
 ```
 
-可使用极空间文件管理器上传，也可从开发机使用 `scp`。下面只是格式示例，用户名、IP 和目标路径应替换为实际值：
-
-```bash
-scp cpx-latest.tar.gz docker-compose.yml .docker.env.example \
-  scripts/docker-deploy.sh <NAS_USER>@<NAS_IP>:<CPX_DIR>/
-```
-
-注意：
-
-- `.docker.env.example` 是以点开头的隐藏文件，上传后需确认它确实存在；
-- 不要上传开发机上的 `.docker.env`；它可能包含真实密钥；
-- 不建议把仓库中已有的历史镜像包当作最新构建，部署前应从当前代码重新构建。
-
-## 七、首次安装离线镜像
-
-SSH 登录 NAS，进入部署目录。路径含空格时需要加引号：
-
-```bash
-cd "<CPX_DIR>"
-chmod +x docker-deploy.sh
-ls -la
-```
-
-如果上传的是压缩包，执行：
-
-```bash
-./docker-deploy.sh cpx-latest.tar.gz "$(pwd)"
-```
-
-如果上传的是 PowerShell 导出的 tar，执行：
-
-```bash
-./docker-deploy.sh cpx-latest.tar "$(pwd)"
-```
-
-第一次运行会加载镜像，创建持久化目录，并从模板生成 `.docker.env`，然后主动退出，让你先检查配置。此时目录应类似：
-
-```text
-<CPX_DIR>/
-├── .docker.env
-├── .docker.env.example
-├── docker-compose.yml
-├── docker-deploy.sh
-├── config/
-├── data/
-│   ├── claude/
-│   └── codex/
-└── logs/
-```
-
-## 八、配置 `.docker.env`
-
-使用 NAS 上可用的编辑器打开 `<CPX_DIR>/.docker.env`：
-
-```bash
-vi .docker.env
-```
-
-### 推荐的首次启动配置
-
-如果准备在 Web 控制台完成 GitHub 和 Agent 登录，只保留服务配置即可，其他值保持为空：
-
-```dotenv
-AGENT_SERVER_PORT=3000
-AGENT_SERVER_HOST=0.0.0.0
-
-CODEX_API_KEY=
-ANTHROPIC_API_KEY=
-
-GH_TOKEN=
-AGENT_GITHUB_TOKEN=
-AGENT_GITHUB_DEFAULT_REPO=
-
-AGENT_DINGTALK_WEBHOOK_URL=
-AGENT_DINGTALK_SECRET=
-
-AGENT_FEISHU_WEBHOOK_URL=
-AGENT_FEISHU_APP_ID=
-AGENT_FEISHU_APP_SECRET=
-
-AGENT_LOGGING_LEVEL=info
-```
-
-不要保留 `sk-...`、`ghp_xxx` 之类的示例占位值。它们不是有效密钥，还可能让 CLI 误判鉴权方式。
-
-### 可选：直接通过环境变量提供凭据
-
-如果不使用 Web 登录，可填写：
-
-```dotenv
-CODEX_API_KEY=<真实 Codex API Key>
-ANTHROPIC_API_KEY=<真实 Anthropic API Key>
-
-AGENT_GITHUB_TOKEN=<真实 GitHub Token>
-GH_TOKEN=<与上面相同的 GitHub Token>
-```
-
-cpx 读取 `AGENT_GITHUB_TOKEN`。任务执行时会把已连接的 GitHub Token 安全传给 Git 和 `gh`；保留相同的 `GH_TOKEN` 也便于在容器内手工使用 GitHub CLI。
-
-如果配置了 `AGENT_GITHUB_TOKEN`，控制台会把它标记为“环境变量来源”，不能在页面中替换；更新 Token 需要修改 `.docker.env` 并重建容器。
-
-模型名、Base URL 和 Agent 的其他高级设置由各自官方 CLI 管理。控制台只保存 Codex / Claude Code 的关联和执行顺序，不保存或覆盖模型名、服务地址和 API Key。
-
-最后限制文件权限：
-
-```bash
-chmod 600 .docker.env
-chmod 700 data/codex data/claude
-```
-
-## 九、启动并验证容器
-
-源码部署执行：
-
-```bash
-docker compose -f docker-compose.source.yml up -d --build
-```
-
-离线镜像部署重新运行部署脚本：
-
-```bash
-./docker-deploy.sh cpx-latest.tar.gz "$(pwd)"
-```
-
-使用 `.tar` 时相应替换文件名。启动后执行；源码部署需要在 `docker compose` 后增加 `-f docker-compose.source.yml`：
-
-```bash
-docker compose ps
-docker inspect cpx --format '{{.State.Status}} / {{.State.Health.Status}}'
-curl http://127.0.0.1:3000/health
-```
-
-预期结果：
-
-- Compose 中 `cpx` 为 `Up`；
-- 健康状态在启动后变为 `healthy`；
-- `/health` 返回包含 `"status":"ok"` 的 JSON。
-
-健康检查有最长约几十秒的启动窗口。尚未变为 `healthy` 时先查看日志：
-
-```bash
-docker compose logs --tail=200 cpx
-```
-
-如果修改过宿主机端口映射，NAS 本机的检查地址也应使用修改后的宿主机端口。
-
-## 十、从手机或电脑打开控制台
-
-先在极空间网络设置或路由器管理页确认 NAS 的内网 IP，例如 `192.168.1.20`。同一内网的浏览器打开：
+预期返回包含 `"status":"ok"` 的 JSON。随后打开：
 
 ```text
 http://<NAS-IP>:3000
 ```
 
-若页面打不开，依次检查：
+如果修改过宿主机端口，使用修改后的端口。
 
-1. `docker compose ps` 中端口是否为 `0.0.0.0:3000->3000/tcp`；
-2. 手机是否与 NAS 在同一局域网，访客 Wi-Fi 是否隔离内网设备；
-3. 极空间防火墙是否允许该端口；
-4. 路由器 AP 隔离或 VLAN 规则是否阻止访问；
-5. 是否修改过 Compose 的宿主机端口。
+页面打不开时依次检查：
 
-极空间 Docker 页面也可以用于查看 `cpx` 容器状态、日志和重启容器。菜单名称会随系统版本变化；源码部署的实际运行参数以 `docker-compose.source.yml` 为准，离线镜像部署以 `docker-compose.yml` 为准。
+1. Compose 项目是否创建成功；
+2. 容器是否处于运行和健康状态；
+3. 端口映射是否显示为 `3000:3000` 或自定义端口；
+4. 手机是否与 NAS 在同一局域网；
+5. 访客 Wi-Fi、AP 隔离、VLAN 或极空间防火墙是否阻止访问。
 
-## 十一、连接 GitHub
+## 六、连接 GitHub
 
-推荐在 Web 控制台的“GitHub”页面配置，而不是把 Token 发给其他人代填：
+推荐在 Web 控制台的“GitHub”页面配置：
 
 1. 点击“创建 GitHub Token”；
 2. 在 GitHub 页面选择资源所有者；
 3. 只选择 cpx 需要操作的仓库；
-4. 确认仓库权限至少包括：
-   - Contents：Read and write；
-   - Pull requests：Read and write；
-   - Workflows：仅当任务需要修改 `.github/workflows/*` 时设为 Read and write；
-5. 生成 Token，复制回控制台并验证；
-6. 确认控制台能显示 GitHub 用户和已授权仓库。
+4. 确认 Contents 和 Pull requests 为 Read and write；
+5. 仅在任务需要修改 `.github/workflows/*` 时授予 Workflows 写权限；
+6. 生成 Token，复制回控制台并验证；
+7. 确认控制台能显示 GitHub 用户和已授权仓库。
 
-GitHub 对 fine-grained PAT 的权限说明见 [GitHub 官方文档](https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens)。组织仓库可能要求管理员批准 Token；这种情况下应等待组织批准后再验证。
+通过控制台验证的 Token 会写入挂载目录中的 `config/config.yaml`。该文件包含密钥，不能公开分享或备份到不可信位置。
 
-通过控制台验证的 Token 会写入挂载目录中的 `config/config.yaml`。该文件包含密钥，不能提交到 Git、公开分享或备份到不可信位置。
+NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，不需要为 NAS 宿主机配置额外的仓库凭据。
 
-## 十二、连接 Codex 或 Claude Code
+## 七、连接 Codex 或 Claude Code
 
-进入控制台“模型设置”。这里的每一项只代表一个 Agent 及其执行顺序，实际账号、模型和网关设置来自容器内对应的官方 CLI。
+进入控制台“模型设置”。每一项代表一个 Agent 及其执行顺序，账号、模型和网关设置来自容器内对应的官方 CLI。
 
 ### Codex
 
 1. 在 Codex 项点击连接或登录；
 2. 等待页面显示验证地址和一次性设备码；
-3. 在可信浏览器打开验证地址，用有权使用 Codex 的账号登录并输入设备码；
+3. 在可信浏览器打开验证地址并完成设备码登录；
 4. 返回控制台，等待状态显示“已连接”；
-5. 在该关联项中输入一条简短内容并执行测试。
+5. 输入一条简短内容并执行测试。
 
-命令行复核：
-
-```bash
-docker compose exec cpx codex login status
-```
-
-登录资料保存在 `<CPX_DIR>/data/codex`，容器重建后仍会保留。
+登录资料保存在 `<CPX_DIR>/data/codex`，容器重建后继续保留。
 
 ### Claude Code
 
@@ -400,112 +222,69 @@ docker compose exec cpx codex login status
 2. 在可信浏览器打开页面显示的官方授权地址；
 3. 如果页面要求回填授权码或完整 callback 地址，将它粘贴回控制台；
 4. 等待状态显示“已连接”；
-5. 在该关联项中执行一次简短测试。
+5. 执行一次简短测试。
 
-命令行复核：
+登录资料保存在 `<CPX_DIR>/data/claude`。授权码和 callback 地址都属于敏感信息，不要放入日志或截图。
 
-```bash
-docker compose exec cpx claude auth status --json
-```
+## 八、运行第一条验证任务
 
-登录资料保存在 `<CPX_DIR>/data/claude`。`data/codex` 和 `data/claude` 都应按密钥目录保护。
-
-## 十三、运行第一条验证任务
-
-不要把首次验证直接指向重要仓库。建议准备一个测试仓库，按以下顺序验证：
+不要把首次验证直接指向重要仓库。建议准备一个测试仓库：
 
 1. 在“GitHub”页确认测试仓库可见；
 2. 在“模型设置”中确认至少一个 Agent 测试成功；
-3. 创建任务，选择测试仓库和明确的基础分支；
+3. 创建任务并选择明确的基础分支；
 4. 首次不要勾选“创建 Pull Request”；
-5. 输入无破坏性的任务，例如“读取 README，并总结项目启动方式，不修改文件”；
+5. 输入“读取 README 并总结启动方式，不修改文件”等无破坏性任务；
 6. 观察任务日志直到成功；
-7. 再创建一个会修改测试文件的任务，并勾选“创建 Pull Request”；
-8. 到 GitHub 核对新分支、提交内容和 PR 目标分支。
+7. 再测试修改文件和创建 Pull Request。
 
-任务状态和实时日志保存在进程内存中，重启容器后不会恢复；每个任务的 Git 工作区仍会保留在 `<CPX_DIR>/data/workspaces/<task-id>`。
+任务状态和实时日志保存在进程内存中，重启容器后不会恢复。任务 Git 工作区保存在 `<CPX_DIR>/data/workspaces/<task-id>`。
 
-## 十四、日常管理命令
+## 九、日常管理
 
-以下命令均在 `<CPX_DIR>` 中执行。源码部署用户每次新开 SSH 会话后先设置 Compose 文件；离线镜像部署不要设置：
+所有操作都在极空间 Docker 图形界面完成：
 
-```bash
-export COMPOSE_FILE=docker-compose.source.yml
-```
+- 查看状态：打开 Compose 项目详情；
+- 查看日志：打开 `cpx` 容器的日志页；
+- 重启：在容器或项目菜单中选择重启；
+- 停止：在 Compose 项目菜单中选择停止；
+- 修改配置：编辑 Compose 内容或环境变量后重新创建容器；
+- 重新构建：源码更新后在 Compose 项目中选择重新构建。
 
-然后两种部署方式都可以使用相同的管理命令：
+停止或删除容器不会删除相对目录中的持久化数据，但不要在文件管理器中删除 `<CPX_DIR>/data` 和 `<CPX_DIR>/config`。执行带“删除数据卷”含义的操作前必须确认目标；本项目主要使用目录挂载，不应把删除项目数据作为普通更新步骤。
 
-```bash
-# 查看状态
-docker compose ps
-
-# 查看最近 200 行日志
-docker compose logs --tail=200 cpx
-
-# 持续跟踪日志，按 Ctrl+C 退出
-docker compose logs -f cpx
-
-# 重启
-docker compose restart cpx
-
-# 停止并删除容器；不会删除 bind mount 中的持久化目录
-docker compose down
-
-# 重新启动
-docker compose up -d
-
-# 修改 .docker.env 后强制重建容器，使环境变量生效
-docker compose up -d --force-recreate
-```
-
-不要随意执行 `docker compose down -v`，也不要删除 `<CPX_DIR>/data` 和 `<CPX_DIR>/config`。
-
-## 十五、更新版本
+## 十、更新
 
 ### 源码部署
 
-先备份 NAS 上的 `data`、`config` 和 `.docker.env`，然后拉取经过审查的代码并重新构建：
+1. 在开发机取得并审查新版本源码；
+2. 备份 NAS 上的 `data`、`config`、`logs` 和 Compose 配置；
+3. 在极空间界面停止 `cpx` Compose 项目；
+4. 通过文件管理器覆盖源码文件，但保留 NAS 上的 `data`、`config` 和 `logs`；
+5. 如果新版 `docker-compose.yml` 有变化，在项目编辑器中同步更新；
+6. 在 Compose 项目中选择重新构建并启动；
+7. 检查健康状态和日志，再运行一条测试任务。
 
-```bash
-cd "<CPX_DIR>"
-git pull --ff-only
-docker compose -f docker-compose.source.yml up -d --build
-docker compose -f docker-compose.source.yml ps
-docker compose -f docker-compose.source.yml logs --tail=100 cpx
-```
+不要先删除整个 `<CPX_DIR>` 再上传，这会一起删除数据库、任务工作区和登录资料。
 
 ### 离线镜像部署
 
-1. 在开发机拉取并审查最新代码；
-2. 重新构建 `cpx:latest` 和镜像包；
-3. 先备份 NAS 上的 `data`、`config` 和 `.docker.env`；
-4. 把新镜像包、`docker-compose.yml`、`.docker.env.example` 和 `docker-deploy.sh` 上传到 `<CPX_DIR>`；
-5. 在 NAS 重新执行部署脚本；
-6. 检查健康状态和日志；
-7. 运行一条测试任务。
+1. 在开发机重新生成 `cpx-latest.tar`；
+2. 备份 NAS 上的持久化目录；
+3. 通过文件管理器上传新镜像包；
+4. 在极空间 Docker 镜像页面重新导入 `cpx:latest`；
+5. 在 Compose 项目详情中重新创建 `cpx` 容器；
+6. 检查容器实际使用的新镜像、健康状态和日志。
 
-```bash
-cd "<CPX_DIR>"
-./docker-deploy.sh cpx-latest.tar.gz "$(pwd)"
-docker compose ps
-docker compose logs --tail=100 cpx
-```
-
-部署脚本不会覆盖已有 `.docker.env`，也不会删除 `data`、`config` 和 `logs`。镜像使用固定标签 `cpx:latest`，加载新镜像后 Compose 会根据新镜像重建容器；若没有重建，可执行：
-
-```bash
-docker compose up -d --force-recreate
-```
-
-## 十六、备份与恢复
+## 十一、备份与恢复
 
 至少备份：
 
 ```text
-<CPX_DIR>/.docker.env
 <CPX_DIR>/config/
 <CPX_DIR>/data/
-<CPX_DIR>/docker-compose.yml 或 docker-compose.source.yml
+<CPX_DIR>/docker-compose.yml
+<CPX_DIR>/logs/                 # 可选，便于排障
 ```
 
 其中：
@@ -516,84 +295,43 @@ docker compose up -d --force-recreate
 - `data/codex/`、`data/claude/` 保存 CLI 登录资料；
 - `config/config.yaml` 可能保存通过 Web 控制台验证的 GitHub Token。
 
-为获得一致备份，建议先停止容器，再使用极空间的备份工具复制整个目录。源码部署用户先执行 `export COMPOSE_FILE=docker-compose.source.yml`：
+一致备份流程：
 
-```bash
-cd "<CPX_DIR>"
-docker compose down
-# 在极空间中完成目录备份
-docker compose up -d
-```
+1. 在极空间 Compose 页面停止项目；
+2. 使用极空间备份工具或文件管理器复制上述目录；
+3. 备份完成后重新启动项目。
 
-恢复时，把上述目录放回相同的 Compose 项目目录。源码部署重新取得相同或兼容版本源码并执行 `docker compose -f docker-compose.source.yml up -d --build`；离线部署加载相同或兼容版本镜像，再执行 `docker compose up -d`。恢复后的 Token 和 CLI 登录信息仍属于敏感凭据。
+恢复时把目录放回 Compose 项目的存储位置。源码部署同时恢复兼容版本源码并重新构建；离线部署先导入兼容镜像，再重新创建项目。恢复后的 Token 和 Agent 登录资料仍属于敏感凭据。
 
-## 十七、可选：SSH 仓库地址
+## 十二、钉钉和飞书机器人
 
-推荐优先使用 HTTPS 仓库地址和 GitHub Token。若必须使用 `git@github.com:owner/repo.git`：
-
-1. 在 NAS 的受保护目录准备专用 SSH 私钥，并把公钥添加到 GitHub；
-2. 在当前使用的 `docker-compose.source.yml` 或 `docker-compose.yml` 的 `volumes` 中增加只读挂载：
-
-   ```yaml
-   - /真实/ssh/目录:/root/.ssh:ro
-   ```
-
-3. 在 `.docker.env` 增加：
-
-   ```dotenv
-   GIT_SSH_COMMAND=ssh -i /root/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new
-   ```
-
-4. 重建容器并测试连接：
-
-   ```bash
-   docker compose up -d --force-recreate
-   docker compose exec cpx ssh -T git@github.com
-   ```
-
-不要挂载个人日常使用的整个 SSH 目录；优先使用只授权目标仓库的部署密钥。
-
-## 十八、钉钉和飞书机器人
-
-Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或飞书事件回调则由平台服务器发起，NAS 必须有一个平台可以访问的 HTTPS 地址。
+Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或飞书事件回调由平台服务器发起，NAS 需要平台可访问的 HTTPS 地址。
 
 - 钉钉回调路径：`/webhook/dingtalk`；
 - 飞书回调路径：`/webhook/feishu`；
-- 应配置钉钉加签 Secret 或飞书 App Secret，并保持签名校验开启；
+- 配置钉钉加签 Secret 或飞书 App Secret，并保持签名校验开启；
 - 反向代理只开放需要的 webhook 路径；
 - 不要通过同一个公开入口暴露 `/`、`/command` 或 `/api/console/*`。
 
-环境变量字段见 [.docker.env.example](../.docker.env.example)，命令语法见 [README.md](../README.md) 的“聊天命令”小节。
+命令语法见 [README.md](../README.md) 的“聊天命令”小节。
 
-## 十九、常见故障
+## 十三、常见故障
 
-| 现象 | 检查与处理 |
+| 现象 | 图形界面检查与处理 |
 |---|---|
-| `docker compose` 不存在 | 更新极空间 Docker 应用或确认 Compose 插件已安装；本项目脚本使用 Compose V2 的 `docker compose` 命令 |
-| 源码构建无法下载依赖 | 检查 NAS 的 DNS、默认网关以及 Debian、npm、GitHub 和 Agent CLI 软件源连通性；网络受限时改用离线镜像部署 |
-| `exec format error` | 镜像架构与 NAS 不一致；重新按 `linux/amd64` 或 `linux/arm64` 构建 |
-| `better-sqlite3` 加载失败 | 通常是原生模块架构不匹配；确认镜像平台，并重新构建，不要跨架构复用 `node_modules` |
-| 容器不断重启 | 执行 `docker compose logs --tail=200 cpx`；检查配置格式、目录权限和镜像架构 |
-| 健康状态为 `unhealthy` | 执行 `docker compose exec cpx curl -v http://127.0.0.1:3000/health`，再检查启动日志 |
-| NAS 本机可访问，手机打不开 | 检查宿主机端口、防火墙、访客 Wi-Fi、AP 隔离、VLAN 和实际 NAS IP |
-| 端口已被占用 | 修改 Compose 中映射左侧端口，例如 `13000:3000`，然后重建容器 |
-| GitHub 页面验证失败 | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限；环境变量来源的 Token 需修改 `.docker.env` 后重建 |
-| 私有仓库 clone 返回 403 | 确认仓库已授权给 Token，HTTPS 地址使用已连接 Token；SSH 地址需另配私钥 |
-| `gh pr create` 未登录或无权限 | 确认 GitHub 已在控制台验证，Token 有 Contents 与 Pull requests 写权限，目标分支策略允许创建 PR |
-| Agent 显示未连接 | 在模型设置中重新登录；命令行运行 `codex login status` 或 `claude auth status --json`；检查持久化目录权限 |
-| Agent 返回 401 | 删除 `.docker.env` 中无效占位值，检查 API Key、官方 CLI 登录和 CLI 自身的网关配置 |
-| Agent 无法访问模型或 GitHub | 检查 NAS DNS、默认网关、代理和出站网络；容器内可用 `curl` 做连通性检查 |
-| 更新后仍运行旧版本 | 确认新包已 `docker load`，再执行 `docker compose up -d --force-recreate` 并查看容器镜像 ID |
-| 重建后登录丢失 | 检查 `./data/codex:/root/.codex` 和 `./data/claude:/root/.claude` 挂载是否仍存在，以及是否在同一 Compose 目录启动 |
+| 找不到 Compose 功能 | 更新极空间 Docker 应用和系统版本，确认当前机型支持 Compose 项目 |
+| 源码构建无法下载依赖 | 查看项目构建日志，检查 NAS DNS、默认网关以及 Docker Hub、Debian、npm 和 GitHub 连通性；网络受限时改用离线镜像 |
+| `exec format error` | 离线镜像架构与 NAS 不一致；在开发机按正确平台重新构建并导入 |
+| `better-sqlite3` 加载失败 | 检查镜像架构；源码方案应在 NAS 本机重新构建，离线方案应重新生成对应架构镜像 |
+| 容器不断重启 | 打开 `cpx` 容器日志，检查配置、目录挂载、目录权限和数据库错误 |
+| 健康状态为 `unhealthy` | 查看容器日志，并在浏览器访问 `http://<NAS-IP>:<端口>/health` |
+| NAS 页面可见但手机打不开 | 检查端口映射、防火墙、访客 Wi-Fi、AP 隔离、VLAN 和实际 NAS IP |
+| 端口已被占用 | 在 Compose 编辑器中修改映射左侧，例如 `13000:3000`，再重新创建项目 |
+| GitHub 页面验证失败 | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限 |
+| 私有仓库返回 403 | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址 |
+| Agent 显示未连接 | 在模型设置中重新登录并测试，检查 `data/codex` 或 `data/claude` 挂载是否存在 |
+| Agent 返回 401 | 检查 Compose 环境变量中是否存在无效占位值，并重新完成官方登录 |
+| 更新后仍运行旧版本 | 在 Compose 项目详情确认执行了重新构建或重新创建，并检查当前容器镜像标识 |
+| 重建后登录丢失 | 检查 `data/codex` 和 `data/claude` 是否仍挂载到原来的项目存储目录 |
 
-需要收集诊断信息时，可执行：
-
-```bash
-cd "<CPX_DIR>"
-docker compose ps
-docker inspect cpx --format 'image={{.Image}} status={{.State.Status}} health={{.State.Health.Status}}'
-docker image inspect cpx:latest --format 'platform={{.Os}}/{{.Architecture}} id={{.Id}}' # 源码部署将镜像名改为 cpx:source
-docker compose logs --tail=200 cpx
-```
-
-分享日志前应检查并删除 Token、Webhook 地址、授权 callback、仓库敏感内容和其他凭据。
+需要反馈问题时，从极空间界面导出或复制 Compose 项目状态、容器健康状态和最近日志。分享前删除 Token、Webhook 地址、授权 callback、仓库敏感内容和其他凭据。

@@ -83,18 +83,17 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 
 ## 极空间 Docker 部署
 
-可在极空间 NAS 上直接从源代码构建并用 Docker Compose 启动，也可在开发机离线构建镜像后上传。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+极空间 NAS 不需要开启 SSH。部署、更新和查看日志都通过极空间文件管理器与 Docker Compose 图形界面完成。可直接上传源代码构建，也可在开发机离线构建镜像后导入。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 源码部署快速步骤：
 
-1. 在 NAS 的持久化目录克隆仓库并进入仓库根目录
-2. 执行 `cp .docker.env.example .docker.env`，不用的密钥保持为空
-3. 执行 `mkdir -p data/codex data/claude data/workspaces logs`
-4. 执行 `docker compose -f docker-compose.source.yml up -d --build`
-5. 在控制台连接 GitHub，完成 Codex 或 Claude Code 官方 CLI 登录
-6. 手机浏览器访问 `http://<NAS-IP>:3000`
+1. 在电脑获取仓库源码，把完整 `cpx` 文件夹上传到 NAS 持久化目录
+2. 在极空间文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces` 和 `logs` 子目录
+3. 打开“Docker → Compose → 新建项目”，项目存储位置选择上传后的 `cpx` 目录
+4. 导入或粘贴根目录 `docker-compose.yml`，确认后由极空间自动构建并启动
+5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub 和至少一个 Coding Agent
 
-源码更新后执行 `git pull --ff-only`，再运行同一条 Compose 命令重新构建。NAS 无法稳定访问软件源或资源有限时，可改用部署文档中的离线镜像方案。
+更新时在电脑取得新源码，通过文件管理器覆盖代码文件但保留 NAS 上的 `data`、`config` 和 `logs`，然后在 Compose 项目详情中选择重新构建。NAS 无法稳定访问软件源或资源有限时，可改用部署文档中的离线镜像方案。
 
 ## CLI 命令
 

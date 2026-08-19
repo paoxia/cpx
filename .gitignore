@@ -79,6 +79,7 @@ credentials.json
 .docker.env.*
 
 # Docker image artifacts
+*.tar
 *.tar.gz
 cpx-*.tar.gz
 

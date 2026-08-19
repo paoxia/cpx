@@ -1,8 +1,6 @@
 services:
   cpx:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: cpx:latest
     container_name: cpx
     restart: unless-stopped
     ports:
