@@ -22,16 +22,15 @@ export const ServerConfigSchema = z.object({
 });
 
 export const DingTalkConfigSchema = z.object({
-  webhookUrl: z.string().url().optional().or(z.literal('')),
-  secret: z.string().optional(),
-  enableVerify: z.boolean().default(true),
+  enabled: z.boolean().default(false),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
 });
 
 export const FeishuConfigSchema = z.object({
-  webhookUrl: z.string().url().optional().or(z.literal('')),
+  enabled: z.boolean().default(false),
   appId: z.string().optional(),
   appSecret: z.string().optional(),
-  enableVerify: z.boolean().default(true),
 });
 
 export const GitHubConfigSchema = z.object({

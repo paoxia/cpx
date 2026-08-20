@@ -59,6 +59,26 @@ describe('ConfigManager', () => {
     expect(cfg.github.token).toBe('ghp_secret');
   });
 
+  it('应从环境变量加载消息平台长连接凭据和开关', () => {
+    process.env.AGENT_DINGTALK_ENABLED = 'true';
+    process.env.AGENT_DINGTALK_CLIENT_ID = 'ding-id';
+    process.env.AGENT_DINGTALK_CLIENT_SECRET = 'ding-secret';
+    process.env.AGENT_FEISHU_ENABLED = '1';
+    process.env.AGENT_FEISHU_APP_ID = 'cli_test';
+    process.env.AGENT_FEISHU_APP_SECRET = 'feishu-secret';
+    const cfg = new ConfigManager(TMP_DIR).load();
+    expect(cfg.dingtalk).toEqual({
+      enabled: true,
+      clientId: 'ding-id',
+      clientSecret: 'ding-secret',
+    });
+    expect(cfg.feishu).toEqual({
+      enabled: true,
+      appId: 'cli_test',
+      appSecret: 'feishu-secret',
+    });
+  });
+
   it('应在配置校验失败时抛出 ConfigError', () => {
     writeFileSync(join(TMP_DIR, 'config.yaml'), 'server:\n  port: "not-a-number"\n');
     const cm = new ConfigManager(TMP_DIR);
@@ -89,6 +109,26 @@ describe('ConfigManager', () => {
       defaultBranch: 'develop',
     });
     expect(cm.getConfig().github.token).toBe('github_pat_persisted');
+  });
+
+  it('应持久化页面提交的长连接配置并保留其他配置', () => {
+    writeFileSync(join(TMP_DIR, 'config.yaml'), 'server:\n  port: 8080\n');
+    const cm = new ConfigManager(TMP_DIR);
+    cm.load();
+
+    cm.saveMessagingConfig('feishu', {
+      enabled: true,
+      appId: 'cli_saved',
+      appSecret: 'saved-secret',
+    });
+
+    const reloaded = new ConfigManager(TMP_DIR).load();
+    expect(reloaded.server.port).toBe(8080);
+    expect(reloaded.feishu).toEqual({
+      enabled: true,
+      appId: 'cli_saved',
+      appSecret: 'saved-secret',
+    });
   });
 });
 

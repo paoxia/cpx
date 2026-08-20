@@ -9,15 +9,14 @@ export const DEFAULT_CONFIG: AppConfig = {
     host: '0.0.0.0',
   },
   dingtalk: {
-    webhookUrl: undefined,
-    secret: undefined,
-    enableVerify: true,
+    enabled: false,
+    clientId: undefined,
+    clientSecret: undefined,
   },
   feishu: {
-    webhookUrl: undefined,
+    enabled: false,
     appId: undefined,
     appSecret: undefined,
-    enableVerify: true,
   },
   github: {
     token: undefined,

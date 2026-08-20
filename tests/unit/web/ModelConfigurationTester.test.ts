@@ -59,13 +59,13 @@ describe('ModelConfigurationTester', () => {
     expect(child.stdin.read()?.toString()).toContain('请回复：测试成功');
   });
 
-  it('应从 Claude JSONL 结果中提取回复并限制密钥泄露', async () => {
+  it('应从 Codex JSONL 结果中提取回复并限制密钥泄露', async () => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
     const tester = new ModelConfigurationTester(process.cwd(), new Logger('error'), spawnMock);
 
     const resultPromise = tester.test({
-      provider: 'claude',
+      provider: 'codex',
       apiKey: 'secret-value',
       prompt: '你好',
     });
@@ -81,7 +81,7 @@ describe('ModelConfigurationTester', () => {
     const result = await resultPromise;
     expect(result).toMatchObject({
       success: true,
-      provider: 'claude',
+      provider: 'codex',
       response: '最终回复 [REDACTED]',
     });
   });
@@ -92,7 +92,7 @@ describe('ModelConfigurationTester', () => {
     const tester = new ModelConfigurationTester(process.cwd(), new Logger('error'), spawnMock);
 
     const resultPromise = tester.test({
-      provider: 'claude',
+      provider: 'codex',
       baseUrl: 'https://gateway.example.com',
       apiKey: 'secret-value',
     });
@@ -100,18 +100,18 @@ describe('ModelConfigurationTester', () => {
     child.emit('close', 1);
 
     const result = await resultPromise;
-    expect(result).toMatchObject({ success: false, provider: 'claude' });
+    expect(result).toMatchObject({ success: false, provider: 'codex' });
     expect(result.message).toContain('鉴权失败');
     expect(result.message).not.toContain('secret-value');
     expect(spawnMock).toHaveBeenCalledWith(
-      'claude',
+      'codex',
       expect.any(Array),
       expect.objectContaining({
         env: expect.objectContaining({
-          ANTHROPIC_BASE_URL: 'https://gateway.example.com',
-          ANTHROPIC_AUTH_TOKEN: 'secret-value',
+          CODEX_API_KEY: 'secret-value',
         }),
       }),
     );
   });
+
 });

@@ -60,7 +60,7 @@ cpx-dev.tar
 
 该命令只能在开发机执行。生成的 tar 是本地构建产物，不应提交到 Git。
 
-脚本会把开发机已经设置的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`、`APT_MIRROR` 和 `NPM_REGISTRY` 作为 Docker build args 传给构建步骤，但不会打印代理值。`APT_MIRROR` 影响 Debian 系统包，`NPM_REGISTRY` 同时影响项目依赖、Codex CLI 和 Claude Code CLI 的 npm 包下载。基础镜像拉取发生在构建步骤之前，仍由 Docker daemon 的网络和镜像加速配置负责。
+脚本会把开发机已经设置的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY`、`APT_MIRROR` 和 `NPM_REGISTRY` 作为 Docker build args 传给构建步骤，但不会打印代理值。`APT_MIRROR` 影响 Debian 系统包，`NPM_REGISTRY` 同时影响项目依赖和 Codex CLI 的 npm 包下载。基础镜像拉取发生在构建步骤之前，仍由 Docker daemon 的网络和镜像加速配置负责。
 
 ### 3. 在开发机准备 Mihomo 镜像
 
@@ -95,7 +95,6 @@ docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
 │   ├── mihomo/
 │   │   └── config.yaml
 │   ├── codex/
-│   ├── claude/
 │   └── workspaces/
 ├── config/
 └── logs/
@@ -185,7 +184,7 @@ NPM_REGISTRY=https://registry.npmmirror.com \
 5. 在容器详情中确认 cpx 使用的镜像标识已经变化；
 6. 检查 `/health`、页面功能和本轮改动对应的行为。
 
-重新创建容器或项目不会删除目录挂载中的 `data/mihomo`、`data/codex`、`data/claude`、`data/workspaces`、`config` 和数据库。不要在调试更新时删除这些目录，也不要选择带“删除数据卷”含义的操作。
+重新创建容器或项目不会删除目录挂载中的 `data/mihomo`、`data/codex`、`data/workspaces`、`config` 和数据库。不要在调试更新时删除这些目录，也不要选择带“删除数据卷”含义的操作。
 
 ## 五、同名镜像未更新时
 
@@ -218,4 +217,4 @@ CPX_IMAGE=cpx:dev-20260820-1
 | 构建长时间停在 `apt-get` | 终止当前构建，设置 `APT_MIRROR=http://mirrors.aliyun.com` 后重新执行构建脚本 |
 | 构建长时间停在 `npm install` | 终止当前构建，设置 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新执行构建脚本；确认两个 CLI 包在该镜像中存在 |
 
-需要反馈问题时，从极空间界面复制 Compose 状态、两个容器的镜像标识、健康状态和最近日志。分享前删除订阅地址、节点凭据、Token、设备码、callback 地址和仓库敏感内容。
+需要反馈问题时，从极空间界面复制 Compose 状态、两个容器的镜像标识、健康状态和最近日志。分享前删除订阅地址、节点凭据、Token、设备码和仓库敏感内容。

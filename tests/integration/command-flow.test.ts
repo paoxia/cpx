@@ -234,9 +234,9 @@ describe('命令管道集成测试', () => {
     vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(completedTask);
     vi.spyOn(webConsole, 'getCodingTask').mockReturnValue(completedTask);
 
-    const pushed: unknown[] = [];
-    system.setResultPusher(async (_source, message) => {
-      pushed.push(message);
+    const pushed: Array<{ message: unknown; replyRouteId?: string }> = [];
+    system.setResultPusher(async (_source, _userId, message, replyRouteId) => {
+      pushed.push({ message, replyRouteId });
     });
 
     const result = await system.processCommand(
@@ -245,6 +245,7 @@ describe('命令管道集成测试', () => {
         userId: 'feishu-user-1',
         userName: 'Tester',
         source: 'feishu',
+        replyRouteId: 'chat-123:feishu-user-1',
       },
     );
 
@@ -261,6 +262,7 @@ describe('命令管道集成测试', () => {
     await vi.waitFor(() => expect(pushed).toHaveLength(2));
     expect(JSON.stringify(pushed)).toContain('Coding Agent 开发完成');
     expect(JSON.stringify(pushed)).toContain('https://github.com/paoxia/cpx/pull/99');
+    expect(pushed.every((item) => item.replyRouteId === 'chat-123:feishu-user-1')).toBe(true);
 
     const status = await system.processCommand('/agent 任务 abcdef12', {
       userId: 'feishu-user-1',
@@ -356,11 +358,8 @@ function fakeAgentTask(id: string, status: AgentTask['status']): AgentTask {
   return {
     id,
     provider: 'codex',
-    providers: ['codex', 'claude'],
-    configurations: [
-      { id: 'default-codex', provider: 'codex' },
-      { id: 'default-claude', provider: 'claude' },
-    ],
+    providers: ['codex'],
+    configurations: [{ id: 'default-codex', provider: 'codex' }],
     repository: 'https://github.com/paoxia/cpx.git',
     baseBranch: 'dev',
     taskBranch: 'feature/fix-login',

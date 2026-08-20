@@ -12,10 +12,11 @@ const state = {
   branchRequestId: 0,
   branchRepository: null,
   branchDefault: '',
-  modelConfigs: [],
-  modelTestRunning: false,
-  modelTestConfigId: null,
-  modelTestPrompt: '',
+  integrations: null,
+  codexConfig: null,
+  codexAuth: null,
+  codexModels: [],
+  codexTestRunning: false,
 };
 
 const elements = {
@@ -30,14 +31,14 @@ const elements = {
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
   createPr: document.querySelector('#create-pr'),
-  autoFallback: document.querySelector('#auto-fallback'),
   launchButton: document.querySelector('#launch-button'),
   taskList: document.querySelector('#task-list'),
   taskCount: document.querySelector('#task-count'),
   taskDetail: document.querySelector('#task-detail'),
   tasksView: document.querySelector('#tasks-view'),
   githubView: document.querySelector('#github-view'),
-  modelsView: document.querySelector('#models-view'),
+  integrationsView: document.querySelector('#integrations-view'),
+  codexView: document.querySelector('#codex-view'),
   githubForm: document.querySelector('#github-form'),
   githubTokenSetup: document.querySelector('#github-token-setup'),
   githubCreateToken: document.querySelector('#github-create-token'),
@@ -52,13 +53,50 @@ const elements = {
   repositoryCount: document.querySelector('#repository-count'),
   repositorySearch: document.querySelector('#repository-search'),
   repositoryList: document.querySelector('#repository-list'),
-  modelSettingsForm: document.querySelector('#model-settings-form'),
-  modelConfigList: document.querySelector('#model-config-list'),
-  modelConfigCount: document.querySelector('#model-config-count'),
-  addModelConfig: document.querySelector('#add-model-config'),
-  addModelConfigBottom: document.querySelector('#add-model-config-bottom'),
-  resetModelConfigs: document.querySelector('#reset-model-configs'),
   executionOrderPreview: document.querySelector('#execution-order-preview'),
+  feishuForm: document.querySelector('#feishu-form'),
+  feishuEnabled: document.querySelector('#feishu-enabled'),
+  feishuAppId: document.querySelector('#feishu-app-id'),
+  feishuAppSecret: document.querySelector('#feishu-app-secret'),
+  feishuStatus: document.querySelector('#feishu-status'),
+  feishuStatusMessage: document.querySelector('#feishu-status-message'),
+  dingtalkForm: document.querySelector('#dingtalk-form'),
+  dingtalkEnabled: document.querySelector('#dingtalk-enabled'),
+  dingtalkClientId: document.querySelector('#dingtalk-client-id'),
+  dingtalkClientSecret: document.querySelector('#dingtalk-client-secret'),
+  dingtalkStatus: document.querySelector('#dingtalk-status'),
+  dingtalkStatusMessage: document.querySelector('#dingtalk-status-message'),
+  codexAuthStatus: document.querySelector('#codex-auth-status'),
+  codexCliStatus: document.querySelector('#codex-cli-status'),
+  codexAuthMessage: document.querySelector('#codex-auth-message'),
+  codexAuthMethod: document.querySelector('#codex-auth-method'),
+  codexDeviceLogin: document.querySelector('#codex-device-login'),
+  codexCancelLogin: document.querySelector('#codex-cancel-login'),
+  codexDeviceDetails: document.querySelector('#codex-device-details'),
+  codexVerificationUrl: document.querySelector('#codex-verification-url'),
+  codexUserCode: document.querySelector('#codex-user-code'),
+  codexCopyCode: document.querySelector('#codex-copy-code'),
+  codexAuthOutput: document.querySelector('#codex-auth-output'),
+  codexApiKeyForm: document.querySelector('#codex-api-key-form'),
+  codexApiKey: document.querySelector('#codex-api-key'),
+  profileList: document.querySelector('#profile-list'),
+  profileForm: document.querySelector('#profile-form'),
+  profileId: document.querySelector('#profile-id'),
+  profileName: document.querySelector('#profile-name'),
+  profileModel: document.querySelector('#profile-model'),
+  profileReasoning: document.querySelector('#profile-reasoning'),
+  profileNew: document.querySelector('#profile-new'),
+  profileDelete: document.querySelector('#profile-delete'),
+  modelsRefresh: document.querySelector('#models-refresh'),
+  modelCatalogMessage: document.querySelector('#model-catalog-message'),
+  codexConfigForm: document.querySelector('#codex-config-form'),
+  codexApproval: document.querySelector('#codex-approval'),
+  codexSandbox: document.querySelector('#codex-sandbox'),
+  codexWebSearch: document.querySelector('#codex-web-search'),
+  codexTestPrompt: document.querySelector('#codex-test-prompt'),
+  codexTestSubmit: document.querySelector('#codex-test-submit'),
+  codexTestTerminal: document.querySelector('#codex-test-terminal'),
+  activeProfileLabel: document.querySelector('#active-profile-label'),
   toast: document.querySelector('#toast'),
 };
 
@@ -78,10 +116,19 @@ elements.prompt.addEventListener('input', updatePromptCount);
 elements.repositoryPicker.addEventListener('change', handleTaskRepositorySelection);
 elements.branchPicker.addEventListener('change', handleTaskBranchSelection);
 elements.taskForm.addEventListener('submit', createTask);
-elements.modelSettingsForm.addEventListener('submit', saveModelSettings);
-elements.addModelConfig.addEventListener('click', addModelConfiguration);
-elements.addModelConfigBottom.addEventListener('click', addModelConfiguration);
-elements.resetModelConfigs.addEventListener('click', resetModelConfigurations);
+elements.feishuForm.addEventListener('submit', (event) => saveIntegration(event, 'feishu'));
+elements.dingtalkForm.addEventListener('submit', (event) => saveIntegration(event, 'dingtalk'));
+elements.codexDeviceLogin.addEventListener('click', startCodexDeviceLogin);
+elements.codexCancelLogin.addEventListener('click', cancelCodexLogin);
+elements.codexCopyCode.addEventListener('click', copyCodexDeviceCode);
+elements.codexApiKeyForm.addEventListener('submit', loginCodexWithApiKey);
+elements.profileForm.addEventListener('submit', saveAgentProfile);
+elements.profileNew.addEventListener('click', () => editAgentProfile());
+elements.profileDelete.addEventListener('click', deleteAgentProfile);
+elements.modelsRefresh.addEventListener('click', () => loadCodexModels(true));
+elements.profileModel.addEventListener('change', updateProfileEffortOptions);
+elements.codexConfigForm.addEventListener('submit', saveCodexConfig);
+elements.codexTestSubmit.addEventListener('click', testCodex);
 elements.githubForm.addEventListener('submit', connectGitHub);
 elements.githubCreateToken.addEventListener('click', () => openGitHubTokenEntry(true));
 elements.githubExistingToken.addEventListener('click', () => openGitHubTokenEntry(false));
@@ -99,10 +146,15 @@ async function init() {
       renderTaskRepositoryPicker();
     }
     const initialView = window.location.hash.slice(1);
-    if (['github', 'models'].includes(initialView)) {
+    if (['github', 'integrations', 'codex'].includes(initialView)) {
       await switchView(initialView);
     }
     window.setInterval(refreshTasks, 1200);
+    window.setInterval(() => {
+      if (state.activeView === 'codex' && state.codexAuth?.state === 'waiting') {
+        void refreshCodexAuth();
+      }
+    }, 1500);
   } catch (error) {
     showToast(error.message, true);
   }
@@ -110,9 +162,8 @@ async function init() {
 
 async function loadSettings() {
   state.settings = await api('/api/console/settings');
-  state.modelConfigs = editableModelConfigurations(state.settings.modelConfigs);
-  renderModelConfigurations();
   renderExecutionOrderPreview();
+  renderAgentProfiles();
 }
 
 async function loadGitHubStatus() {
@@ -480,117 +531,6 @@ function setGitHubBusy(busy, label) {
   elements.githubConnectButton.textContent = label;
 }
 
-function renderModelConfigurations() {
-  elements.modelConfigCount.textContent = String(state.modelConfigs.length);
-  elements.modelConfigList.innerHTML = state.modelConfigs
-    .map((configuration, index) => renderModelConfiguration(configuration, index))
-    .join('');
-
-  elements.modelConfigList.querySelectorAll('[data-config-id]').forEach((row) => {
-    const configuration = state.modelConfigs.find((item) => item.id === row.dataset.configId);
-    if (!configuration) return;
-    row.querySelector('[data-field="provider"]').addEventListener('change', (event) => {
-      configuration.provider = event.target.value;
-      renderModelConfigurations();
-    });
-    row.querySelectorAll('[data-config-action]').forEach((button) => {
-      button.addEventListener('click', () =>
-        handleModelConfigurationAction(button.dataset.configAction, configuration.id),
-      );
-    });
-    row.querySelector('[data-model-test-prompt]')?.addEventListener('input', (event) => {
-      state.modelTestPrompt = event.target.value;
-    });
-    row.querySelector('[data-model-test-submit]')?.addEventListener('click', () =>
-      startInlineModelTest(configuration.id),
-    );
-  });
-}
-
-function renderModelConfiguration(configuration, index) {
-  const providerOptions = [
-    ['codex', 'Codex'],
-    ['claude', 'Claude Code'],
-  ]
-    .map(
-      ([value, label]) =>
-        `<option value="${value}"${configuration.provider === value ? ' selected' : ''}>${label}</option>`,
-    )
-    .join('');
-  return `
-    <article class="model-config-item" data-config-id="${escapeHtml(configuration.id)}">
-      <div class="model-config-rank"><strong>${index + 1}</strong><span>PRIORITY</span></div>
-      <div class="model-config-fields">
-        <label class="field">
-          <span>Agent</span>
-          <select data-field="provider">${providerOptions}</select>
-          <small>模型、地址和凭据均使用本机 CLI 配置</small>
-        </label>
-      </div>
-      <div class="model-config-controls">
-        <button class="test" type="button" data-config-action="test">测试</button>
-        <button type="button" data-config-action="up" aria-label="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
-        <button type="button" data-config-action="down" aria-label="下移" ${index === state.modelConfigs.length - 1 ? 'disabled' : ''}>↓</button>
-        <button class="danger" type="button" data-config-action="delete">删除</button>
-      </div>
-      ${state.modelTestConfigId === configuration.id ? renderInlineModelTest(configuration) : ''}
-    </article>`;
-}
-
-function handleModelConfigurationAction(action, id) {
-  if (state.modelTestRunning) {
-    showToast('模型正在测试，请等待本次调用结束。', true);
-    return;
-  }
-  const index = state.modelConfigs.findIndex((configuration) => configuration.id === id);
-  if (index === -1) return;
-  if (action === 'test') {
-    state.modelTestConfigId = id;
-    state.modelTestPrompt = '';
-  } else if (action === 'close-test') {
-    state.modelTestConfigId = null;
-    state.modelTestPrompt = '';
-  } else if (action === 'up' && index > 0) {
-    [state.modelConfigs[index - 1], state.modelConfigs[index]] = [
-      state.modelConfigs[index],
-      state.modelConfigs[index - 1],
-    ];
-  } else if (action === 'down' && index < state.modelConfigs.length - 1) {
-    [state.modelConfigs[index + 1], state.modelConfigs[index]] = [
-      state.modelConfigs[index],
-      state.modelConfigs[index + 1],
-    ];
-  } else if (action === 'delete') {
-    if (state.modelConfigs.length === 1) {
-      showToast('至少需要保留一条模型配置。', true);
-      return;
-    }
-    state.modelConfigs.splice(index, 1);
-  }
-  renderModelConfigurations();
-}
-
-function renderInlineModelTest(configuration) {
-  return `
-    <section class="model-config-test">
-      <div class="model-config-test-header">
-        <div>
-          <strong>测试当前关联项 · ${escapeHtml(providerLabel(configuration.provider))}</strong>
-          <small>直接使用 CLI/环境已配置的模型，不覆盖模型名。</small>
-        </div>
-        <button class="text-button" type="button" data-config-action="close-test">收起</button>
-      </div>
-      <div class="model-config-test-input">
-        <textarea data-model-test-prompt rows="3" maxlength="4000" placeholder="例如：请用一句话介绍你自己">${escapeHtml(state.modelTestPrompt)}</textarea>
-        <button class="save-button" type="button" data-model-test-submit>发送并测试</button>
-      </div>
-      <div class="model-test-terminal" data-model-test-terminal aria-live="polite">
-        <p class="muted">输入内容后测试这条关联配置。</p>
-      </div>
-      <p class="model-test-cost-note">最多 4000 字；每次测试都会发起一次真实模型调用，且禁止使用工具和修改文件。</p>
-    </section>`;
-}
-
 function appendModelTestLine(terminal, message, tone = '') {
   const line = document.createElement('p');
   if (tone) line.className = tone;
@@ -599,114 +539,383 @@ function appendModelTestLine(terminal, message, tone = '') {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
-async function startInlineModelTest(configurationId) {
-  const configuration = state.modelConfigs.find((item) => item.id === configurationId);
-  if (!configuration || state.modelTestRunning) return;
-  const row = Array.from(
-    elements.modelConfigList.querySelectorAll('[data-config-id]'),
-  ).find((item) => item.dataset.configId === configurationId);
-  const promptInput = row?.querySelector('[data-model-test-prompt]');
-  const terminal = row?.querySelector('[data-model-test-terminal]');
-  const submit = row?.querySelector('[data-model-test-submit]');
-  if (!promptInput || !terminal || !submit) return;
-  const prompt = promptInput.value.trim();
+async function testCodex() {
+  if (state.codexTestRunning) return;
+  const prompt = elements.codexTestPrompt.value.trim();
   if (!prompt) {
     showToast('请输入要发送给 Agent 的内容。', true);
-    promptInput.focus();
+    elements.codexTestPrompt.focus();
     return;
   }
-
-  state.modelTestRunning = true;
-  const interactive = Array.from(
-    elements.modelSettingsForm.querySelectorAll('button, input, select, textarea'),
-  );
-  const disabledStates = interactive.map((element) => element.disabled);
-  interactive.forEach((element) => {
-    element.disabled = true;
-  });
-  submit.textContent = '测试中…';
-  terminal.className = 'model-test-terminal running';
-  terminal.innerHTML = '';
-  appendModelTestLine(
-    terminal,
-    `> ${providerLabel(configuration.provider)} / CLI 已配置模型`,
-    'command',
-  );
-  appendModelTestLine(terminal, `你：${prompt}`, 'command');
-  appendModelTestLine(terminal, '正在启动对应 CLI…', 'pending');
-  appendModelTestLine(terminal, '正在等待 Agent 回复…', 'muted');
-
+  state.codexTestRunning = true;
+  elements.codexTestSubmit.disabled = true;
+  elements.codexTestSubmit.textContent = '测试中…';
+  elements.codexTestTerminal.className = 'model-test-terminal running';
+  elements.codexTestTerminal.innerHTML = '';
+  const profile = activeAgentProfile();
+  if (!profile) return;
+  appendModelTestLine(elements.codexTestTerminal, `> ${profile.name} / ${providerLabel(profile.provider)}`, 'command');
+  appendModelTestLine(elements.codexTestTerminal, `你：${prompt}`, 'command');
+  appendModelTestLine(elements.codexTestTerminal, '正在等待 Codex 回复…', 'muted');
   try {
     const result = await api('/api/console/model-test', {
       method: 'POST',
-      body: JSON.stringify({
-        id: configuration.id,
-        provider: configuration.provider,
-        prompt,
-      }),
+      body: JSON.stringify({ ...profile, prompt }),
     });
-    terminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
-    appendModelTestLine(terminal, '', 'spacer');
-    appendModelTestLine(terminal, result.message, result.success ? 'success' : 'error');
+    elements.codexTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
+    appendModelTestLine(elements.codexTestTerminal, result.message, result.success ? 'success' : 'error');
     if (result.response) {
-      appendModelTestLine(terminal, `Agent 回复：\n${result.response}`, 'response');
+      appendModelTestLine(elements.codexTestTerminal, `${providerLabel(profile.provider)} 回复：\n${result.response}`, 'response');
     }
-    appendModelTestLine(terminal, `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
-    submit.textContent = '再次发送';
+    appendModelTestLine(elements.codexTestTerminal, `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
     showToast(result.message, !result.success);
   } catch (error) {
-    terminal.className = 'model-test-terminal error';
-    appendModelTestLine(terminal, '', 'spacer');
-    appendModelTestLine(terminal, error.message, 'error');
-    submit.textContent = '再次发送';
+    elements.codexTestTerminal.className = 'model-test-terminal error';
+    appendModelTestLine(elements.codexTestTerminal, error.message, 'error');
     showToast(error.message, true);
   } finally {
-    state.modelTestRunning = false;
-    interactive.forEach((element, index) => {
-      element.disabled = disabledStates[index];
+    state.codexTestRunning = false;
+    elements.codexTestSubmit.disabled = false;
+    elements.codexTestSubmit.textContent = '再次发送';
+  }
+}
+
+async function loadIntegrations() {
+  state.integrations = await api('/api/console/integrations');
+  renderIntegrations();
+}
+
+function renderIntegrations() {
+  for (const platform of ['feishu', 'dingtalk']) {
+    const status = state.integrations?.[platform];
+    if (!status) continue;
+    elements[`${platform}Enabled`].checked = status.enabled;
+    const idInput = elements[platform === 'feishu' ? 'feishuAppId' : 'dingtalkClientId'];
+    idInput.placeholder = status[platform === 'feishu' ? 'hasAppId' : 'hasClientId']
+      ? '已配置；留空可保留'
+      : platform === 'feishu'
+        ? 'cli_…'
+        : 'ding…';
+    const badge = elements[`${platform}Status`];
+    badge.textContent = connectionStateLabel(status.state);
+    badge.className = `connection-badge ${status.state === 'connected' ? 'connected' : status.state === 'connecting' ? 'pending' : status.state === 'error' ? 'error' : ''}`;
+    elements[`${platform}StatusMessage`].textContent = status.message;
+  }
+}
+
+async function saveIntegration(event, platform) {
+  event.preventDefault();
+  const form = platform === 'feishu' ? elements.feishuForm : elements.dingtalkForm;
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = '正在验证并连接…';
+  try {
+    const body =
+      platform === 'feishu'
+        ? {
+            platform,
+            enabled: elements.feishuEnabled.checked,
+            appId: elements.feishuAppId.value || undefined,
+            appSecret: elements.feishuAppSecret.value || undefined,
+          }
+        : {
+            platform,
+            enabled: elements.dingtalkEnabled.checked,
+            clientId: elements.dingtalkClientId.value || undefined,
+            clientSecret: elements.dingtalkClientSecret.value || undefined,
+          };
+    state.integrations = await api('/api/console/integrations', {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
+    elements.feishuAppId.value = '';
+    elements.feishuAppSecret.value = '';
+    elements.dingtalkClientId.value = '';
+    elements.dingtalkClientSecret.value = '';
+    renderIntegrations();
+    const status = state.integrations[platform];
+    showToast(status.state === 'connected' || status.state === 'disabled' ? status.message : `配置已保存：${status.message}`, status.state === 'error');
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = '保存并连接';
   }
 }
 
-function addModelConfiguration() {
-  if (state.modelConfigs.length >= 20) {
-    showToast('模型配置不能超过 20 条。', true);
-    return;
+async function loadCodexPage() {
+  const [config, auth] = await Promise.all([loadCodexConfig(), refreshCodexAuth()]);
+  if (auth.authenticated) await loadCodexModels(false);
+  else renderModelCatalog();
+  renderAgentProfiles();
+  return config;
+}
+
+async function loadCodexModels(notify = false) {
+  elements.modelsRefresh.disabled = true;
+  elements.modelsRefresh.textContent = '正在刷新…';
+  try {
+    const catalog = await api('/api/console/codex-models');
+    state.codexModels = catalog.models || [];
+    renderModelCatalog();
+    if (notify) showToast(`已读取 ${state.codexModels.length} 个 Codex 模型。`);
+    return catalog;
+  } catch (error) {
+    state.codexModels = [];
+    renderModelCatalog(error.message);
+    if (notify) showToast(error.message, true);
+    return null;
+  } finally {
+    elements.modelsRefresh.disabled = false;
+    elements.modelsRefresh.textContent = '刷新模型列表';
   }
-  state.modelConfigs.push({
-    id: createClientId(),
+}
+
+function renderModelCatalog(errorMessage) {
+  const savedModel = elements.profileModel.value || activeAgentProfile()?.model || '';
+  const options = state.codexModels.map(
+    (model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.displayName)} · ${escapeHtml(model.id)}</option>`,
+  );
+  if (savedModel && !state.codexModels.some((model) => model.id === savedModel)) {
+    options.unshift(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel)}（已保存，当前目录不可用）</option>`);
+  }
+  if (!options.length) {
+    options.push(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel || '登录 Codex 后刷新模型列表')}</option>`);
+  }
+  elements.profileModel.innerHTML = options.join('');
+  elements.profileModel.value = savedModel || state.codexModels[0]?.id || '';
+  elements.profileModel.disabled = state.codexModels.length === 0;
+  elements.modelCatalogMessage.textContent = errorMessage
+    ? errorMessage
+    : state.codexModels.length
+      ? `模型目录来自当前登录的 Codex 账号，共 ${state.codexModels.length} 个可选模型。聊天任务失败时会按配置列表顺序回退。`
+      : '请先登录 Codex，再刷新模型列表。';
+  updateProfileEffortOptions();
+}
+
+async function loadCodexConfig() {
+  state.codexConfig = await api('/api/console/codex-config');
+  elements.codexApproval.value = state.codexConfig.approvalPolicy;
+  elements.codexSandbox.value = state.codexConfig.sandboxMode;
+  elements.codexWebSearch.value = state.codexConfig.webSearch;
+  return state.codexConfig;
+}
+
+async function saveCodexConfig(event) {
+  event.preventDefault();
+  const button = elements.codexConfigForm.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    state.codexConfig = await api('/api/console/codex-config', {
+      method: 'POST',
+      body: JSON.stringify({
+        model: state.codexConfig?.model,
+        modelReasoningEffort: state.codexConfig?.modelReasoningEffort || 'high',
+        approvalPolicy: elements.codexApproval.value,
+        sandboxMode: elements.codexSandbox.value,
+        webSearch: elements.codexWebSearch.value,
+      }),
+    });
+    showToast('Codex 配置已保存，下一次任务开始时生效。');
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function refreshCodexAuth() {
+  const wasAuthenticated = state.codexAuth?.authenticated;
+  state.codexAuth = await api('/api/console/agent-auth?provider=codex');
+  renderCodexAuth();
+  if (!wasAuthenticated && state.codexAuth.authenticated && state.activeView === 'codex') {
+    void loadCodexModels(false);
+  }
+  return state.codexAuth;
+}
+
+function renderCodexAuth() {
+  const auth = state.codexAuth;
+  if (!auth) return;
+  const tone = auth.authenticated ? 'connected' : auth.state === 'waiting' ? 'pending' : auth.state === 'failed' ? 'error' : '';
+  elements.codexAuthStatus.textContent = auth.authenticated ? '已登录' : auth.state === 'waiting' ? '等待授权' : '未登录';
+  elements.codexAuthStatus.className = `connection-badge ${tone}`;
+  elements.codexCliStatus.textContent = auth.cliAvailable ? 'CLI 可用' : 'CLI 缺失';
+  elements.codexCliStatus.className = `connection-badge ${auth.cliAvailable ? 'connected' : 'error'}`;
+  elements.codexAuthMessage.textContent = auth.message || '尚未登录。';
+  elements.codexAuthMethod.textContent = `认证方式：${auth.authMethod || '未登录'}`;
+  elements.codexCancelLogin.hidden = auth.state !== 'waiting';
+  elements.codexDeviceLogin.disabled = auth.state === 'waiting';
+  elements.codexDeviceDetails.hidden = auth.state !== 'waiting';
+  if (auth.verificationUrl) {
+    elements.codexVerificationUrl.href = auth.verificationUrl;
+    elements.codexVerificationUrl.textContent = auth.verificationUrl;
+  }
+  elements.codexUserCode.textContent = auth.userCode || '等待设备码…';
+  elements.codexAuthOutput.textContent = auth.output || '';
+}
+
+async function startCodexDeviceLogin() {
+  try {
+    state.codexAuth = await api('/api/console/agent-auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'codex' }),
+    });
+    renderCodexAuth();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function loginCodexWithApiKey(event) {
+  event.preventDefault();
+  const apiKey = elements.codexApiKey.value.trim();
+  if (!apiKey) return showToast('请输入 OpenAI API Key。', true);
+  const button = elements.codexApiKeyForm.querySelector('button[type="submit"]');
+  button.disabled = true;
+  button.textContent = '正在验证…';
+  try {
+    state.codexAuth = await api('/api/console/agent-auth/api-key', {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'codex', apiKey }),
+    });
+    elements.codexApiKey.value = '';
+    renderCodexAuth();
+    if (state.codexAuth.authenticated) await loadCodexModels(false);
+    showToast(state.codexAuth.message, !state.codexAuth.authenticated);
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = '验证并登录';
+  }
+}
+
+async function cancelCodexLogin() {
+  try {
+    await api('/api/console/agent-auth/cancel', {
+      method: 'POST',
+      body: JSON.stringify({ provider: 'codex' }),
+    });
+    await refreshCodexAuth();
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function copyCodexDeviceCode() {
+  const code = state.codexAuth?.userCode;
+  if (!code) return;
+  await navigator.clipboard.writeText(code);
+  showToast('设备码已复制。');
+}
+
+function activeAgentProfile() {
+  return state.settings?.modelConfigs?.find(
+    (profile) => profile.id === state.settings.activeConfigurationId,
+  );
+}
+
+function renderAgentProfiles() {
+  if (!elements.profileList || !state.settings) return;
+  elements.profileList.innerHTML = state.settings.modelConfigs
+    .map((profile) => {
+      const active = profile.id === state.settings.activeConfigurationId;
+      return `<button class="agent-profile-item ${active ? 'active' : ''}" data-profile-id="${escapeHtml(profile.id)}" type="button"><span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(providerLabel(profile.provider))} · ${escapeHtml(profile.model || 'CLI 默认模型')} · ${escapeHtml(profile.reasoningEffort)}</small></span><em>${active ? '当前' : '切换'}</em></button>`;
+    })
+    .join('');
+  elements.profileList.querySelectorAll('[data-profile-id]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const id = button.dataset.profileId;
+      if (id === state.settings.activeConfigurationId) {
+        editAgentProfile(id);
+        return;
+      }
+      await persistAgentProfiles(id);
+      editAgentProfile(id);
+      showToast('当前 Agent 配置已切换。');
+    });
+  });
+  const active = activeAgentProfile();
+  elements.activeProfileLabel.textContent = active
+    ? `${active.name} · ${providerLabel(active.provider)} · ${active.model || 'CLI 默认模型'} · ${active.reasoningEffort}`
+    : '请选择配置';
+  renderExecutionOrderPreview();
+  if (!elements.profileId.value && active) editAgentProfile(active.id);
+}
+
+function editAgentProfile(id) {
+  const profile = state.settings?.modelConfigs?.find((item) => item.id === id);
+  elements.profileId.value = profile?.id || '';
+  elements.profileName.value = profile?.name || '';
+  const modelId = profile?.model || state.codexModels[0]?.id || '';
+  if (modelId && !Array.from(elements.profileModel.options).some((option) => option.value === modelId)) {
+    elements.profileModel.add(new Option(`${modelId}（已保存，当前目录不可用）`, modelId, true, true), 0);
+  }
+  elements.profileModel.value = modelId;
+  elements.profileReasoning.dataset.savedValue = profile?.reasoningEffort || '';
+  elements.profileDelete.disabled = !profile || state.settings.modelConfigs.length === 1;
+  updateProfileEffortOptions();
+}
+
+function updateProfileEffortOptions() {
+  const model = state.codexModels.find((item) => item.id === elements.profileModel.value);
+  const saved = elements.profileReasoning.dataset.savedValue || elements.profileReasoning.value;
+  const efforts = model?.supportedReasoningEfforts || (saved ? [saved] : ['high']);
+  elements.profileReasoning.innerHTML = efforts
+    .map((effort) => `<option value="${escapeHtml(effort)}">${escapeHtml(effort)}</option>`)
+    .join('');
+  elements.profileReasoning.value = efforts.includes(saved)
+    ? saved
+    : model?.defaultReasoningEffort || efforts[0];
+  elements.profileReasoning.dataset.savedValue = '';
+}
+
+async function saveAgentProfile(event) {
+  event.preventDefault();
+  const id = elements.profileId.value || `profile-${Date.now()}`;
+  const next = {
+    id,
+    name: elements.profileName.value.trim(),
     provider: 'codex',
-  });
-  renderModelConfigurations();
-  elements.modelConfigList.lastElementChild?.scrollIntoView({
-    behavior: 'smooth',
-    block: 'center',
-  });
+    model: elements.profileModel.value || undefined,
+    reasoningEffort: elements.profileReasoning.value,
+  };
+  const profiles = state.settings.modelConfigs.some((item) => item.id === id)
+    ? state.settings.modelConfigs.map((item) => (item.id === id ? next : item))
+    : [...state.settings.modelConfigs, next];
+  await persistAgentProfiles(state.settings.activeConfigurationId, profiles);
+  editAgentProfile(id);
+  showToast('Codex 配置已保存。');
 }
 
-function resetModelConfigurations() {
-  state.modelConfigs = [
-    {
-      id: createClientId(),
-      provider: 'codex',
-    },
-    {
-      id: createClientId(),
-      provider: 'claude',
-    },
-  ];
-  renderModelConfigurations();
-  showToast('已恢复默认顺序，点击“保存全部配置”后生效。');
+async function deleteAgentProfile() {
+  const id = elements.profileId.value;
+  if (!id || state.settings.modelConfigs.length <= 1) return;
+  const profiles = state.settings.modelConfigs.filter((item) => item.id !== id);
+  const activeId = state.settings.activeConfigurationId === id ? profiles[0].id : state.settings.activeConfigurationId;
+  await persistAgentProfiles(activeId, profiles);
+  editAgentProfile(activeId);
+  showToast('Agent 配置已删除。');
+}
+
+async function persistAgentProfiles(activeConfigurationId, modelConfigs = state.settings.modelConfigs) {
+  state.settings = await api('/api/console/settings', {
+    method: 'POST',
+    body: JSON.stringify({ activeConfigurationId, modelConfigs }),
+  });
+  renderAgentProfiles();
 }
 
 function renderExecutionOrderPreview() {
-  const configurations = state.settings?.modelConfigs || [];
-  elements.executionOrderPreview.innerHTML = configurations
-    .map(
-      (configuration, index) =>
-        `<span><b>${index + 1}</b>${escapeHtml(providerLabel(configuration.provider))}</span>`,
-    )
-    .join('<i>→</i>');
+  const profile = activeAgentProfile();
+  elements.executionOrderPreview.innerHTML = profile
+    ? `<span><b>1</b>${escapeHtml(providerLabel(profile.provider))} · ${escapeHtml(profile.name)}</span>`
+    : '<span><b>1</b>未选择 Codex 配置</span>';
+}
+
+function connectionStateLabel(stateValue) {
+  return { disabled: '未启用', connecting: '连接中', connected: '已连接', error: '连接失败' }[stateValue] || stateValue;
 }
 
 async function refreshTasks() {
@@ -735,7 +944,7 @@ async function createTask(event) {
     const task = await api('/api/console/tasks', {
       method: 'POST',
       body: JSON.stringify({
-        useFallback: elements.autoFallback.checked,
+        useFallback: false,
         repository: elements.repository.value,
         baseBranch: elements.baseBranch.value || undefined,
         taskBranch: elements.taskBranch.value || undefined,
@@ -753,31 +962,6 @@ async function createTask(event) {
   } finally {
     elements.launchButton.disabled = false;
     elements.launchButton.querySelector('span').textContent = '启动任务';
-  }
-}
-
-async function saveModelSettings(event) {
-  event.preventDefault();
-  const submit = elements.modelSettingsForm.querySelector('button[type="submit"]');
-  submit.disabled = true;
-  try {
-    state.settings = await api('/api/console/settings', {
-      method: 'POST',
-      body: JSON.stringify({
-        modelConfigs: state.modelConfigs.map((configuration) => ({
-          id: configuration.id,
-          provider: configuration.provider,
-        })),
-      }),
-    });
-    state.modelConfigs = editableModelConfigurations(state.settings.modelConfigs);
-    renderModelConfigurations();
-    renderExecutionOrderPreview();
-    showToast('模型配置和执行顺序已保存。');
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    submit.disabled = false;
   }
 }
 
@@ -856,18 +1040,33 @@ function renderTaskDetail() {
 }
 
 async function switchView(view) {
-  const normalized = ['tasks', 'github', 'models'].includes(view) ? view : 'tasks';
+  const normalized = ['tasks', 'github', 'integrations', 'codex'].includes(view) ? view : 'tasks';
   state.activeView = normalized;
   window.history.replaceState(null, '', normalized === 'tasks' ? '#' : `#${normalized}`);
   elements.tasksView.hidden = normalized !== 'tasks';
   elements.githubView.hidden = normalized !== 'github';
-  elements.modelsView.hidden = normalized !== 'models';
+  elements.integrationsView.hidden = normalized !== 'integrations';
+  elements.codexView.hidden = normalized !== 'codex';
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.classList.toggle('active', button.dataset.view === normalized);
   });
   if (normalized === 'github' && !state.githubStatus) {
     try {
       await loadGitHubStatus();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+  if (normalized === 'integrations') {
+    try {
+      await loadIntegrations();
+    } catch (error) {
+      showToast(error.message, true);
+    }
+  }
+  if (normalized === 'codex') {
+    try {
+      await loadCodexPage();
     } catch (error) {
       showToast(error.message, true);
     }
@@ -916,7 +1115,7 @@ function renderAttempts(attempts) {
   if (!attempts || !attempts.length) return '';
   const rows = attempts
     .map((a) => {
-      const label = { codex: 'Codex', claude: 'Claude Code' }[a.provider] || a.provider;
+      const label = a.provider === 'codex' ? 'Codex' : a.provider;
       return `
         <div class="attempt ${a.status}">
           <strong>${escapeHtml(label)}${a.model ? ` / ${escapeHtml(a.model)}` : ''}</strong>
@@ -949,16 +1148,7 @@ function formatDate(timestamp) {
 }
 
 function providerLabel(provider) {
-  return { codex: 'Codex', claude: 'Claude Code' }[provider] || provider;
-}
-
-function editableModelConfigurations(configurations) {
-  return configurations.map((configuration) => ({ ...configuration }));
-}
-
-function createClientId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
-  return `model-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return provider === 'codex' ? 'Codex' : provider;
 }
 
 function escapeHtml(value) {

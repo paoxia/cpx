@@ -1,14 +1,45 @@
-# Agent System（cpx）
+# cpx
 
-智能代理系统：通过钉钉/飞书远程控制、Skill 插件扩展、MCP 连接、GitHub 远程操作。
+<p align="center">
+  <strong>把 NAS 变成一个可从浏览器、飞书和钉钉随时调用的 AI 开发工作站。</strong><br />
+  <em>Turn your NAS into an AI development workstation controlled from the web, Feishu, or DingTalk.</em>
+</p>
+
+## 中文介绍
+
+cpx 是一个面向个人开发者和小团队的自托管 AI 开发控制台。它把 Codex、GitHub、飞书与钉钉连接在同一个工作流中：你可以在浏览器或手机聊天里提交开发需求，cpx 会创建隔离的 Git 工作区，调用 Codex 完成修改，并按需推送分支、创建 Pull Request。
+
+飞书和钉钉使用官方 WebSocket/Stream 长连接，NAS 只需能够出站访问网络，不需要公网 IP、HTTP 回调或固定群机器人 Webhook。Codex 可直接在页面登录；页面读取登录账号在 Codex `/model` 中看到的同一模型目录，并可把模型与其支持的推理强度保存为多套配置。项目专门提供不依赖 SSH 的极空间 Docker 部署与更新流程。
+
+## English introduction
+
+cpx is a self-hosted AI development console for individual developers and small teams. It brings Codex, GitHub, Feishu, and DingTalk into one workflow: submit a coding request from the browser or your phone, let cpx create an isolated Git workspace and run Codex, then optionally push a branch and open a Pull Request.
+
+Feishu and DingTalk use their official WebSocket/Stream connections, so your NAS only needs outbound network access—no public IP, inbound HTTP callback, or fixed group webhook. Codex can be authenticated from the web console. The model selector uses the same account-specific catalog shown by Codex `/model`, and each profile only offers reasoning levels supported by its model. A no-SSH Docker workflow is included for ZSpace (极空间) NAS deployment and upgrades.
+
+## 页面预览 / Screenshots
+
+### 任务控制台 / Task workspace
+
+![cpx task workspace](docs/images/console-task.png)
+
+### 飞书与钉钉长连接 / Feishu and DingTalk connections
+
+![cpx messaging integrations](docs/images/console-integrations.png)
+
+### Codex 登录与多套模型配置 / Codex authentication and profiles
+
+![cpx Codex profiles](docs/images/console-codex.png)
 
 ## 功能特性
 
-- **钉钉/飞书远程控制** - 通过群机器人发送命令，随时随地执行任务
+- **钉钉/飞书远程控制** - 使用官方 WebSocket/Stream 长连接收发机器人消息，无需公网回调
 - **Skill 插件系统** - 从 npm/local/git 安装插件，动态加载执行
 - **MCP 连接器** - 支持 stdio/websocket/http 三种传输协议连接外部 MCP 服务
 - **GitHub 远程操作** - 读取、修改、创建文件并自动创建 PR
-- **AI 开发控制台** - 在隔离工作区委托 Codex 或 Claude Code 完成开发任务，可选创建 PR
+- **Codex 开发控制台** - 在隔离工作区委托 Codex 完成开发任务，可选创建 PR
+- **账号模型目录** - 登录后读取与 Codex `/model` 相同的模型列表，并按模型联动推理强度
+- **多套模型配置** - 保存配置名称、模型与推理强度，一键切换当前方案
 - **权限控制** - 主分支保护、危险操作二次确认、操作审计日志
 - **命令中英双语** - 支持中文和英文命令（如 `修改` / `modify`）
 
@@ -27,7 +58,7 @@ npm install
 npm run dev init
 # 或: npx tsx src/cli.ts init
 
-# 编辑配置，填写钉钉/飞书 Webhook、GitHub Token 等
+# 编辑配置，填写钉钉/飞书应用凭据、GitHub Token 等；也可启动后在页面填写
 # 编辑 config/config.yaml 和 config/permissions.yaml
 
 # 启动系统
@@ -45,7 +76,7 @@ curl -X POST http://localhost:3000/command \
 
 浏览器访问 `http://localhost:3000/` 可打开 AI 开发控制台。运行控制台任务还需要：
 
-- 本机已安装 `codex` 和/或 `claude` CLI，并已通过 CLI 登录或环境变量完成模型、服务地址和凭据配置。
+- 本机已安装 `codex` CLI；可在页面使用 ChatGPT 设备码或 OpenAI API Key 登录。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
 - 若勾选“创建 Pull Request”，还需安装 GitHub CLI（`gh`）；控制台验证的 Token 必须具备推送分支和创建 PR 的权限。
 
@@ -53,27 +84,25 @@ curl -X POST http://localhost:3000/command \
 
 验证成功的 Token 同时供 GitHub API、HTTPS `git clone/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。任务控制台会直接列出该 Token 授权的未归档项目；选定项目后可读取并选择现有分支作为任务基线，也可输入名称新建任务分支。还可从仓库列表点击“用于新任务”，或手动输入仓库地址和基础分支。
 
-“模型设置”只管理 Codex 和 Claude Code 的执行顺序，支持新增、删除、上下调整和逐条测试；同一 Agent 可关联多次。控制台不保存或覆盖模型名、Base URL 和 API Key，任务与测试直接使用对应 CLI 或环境的已有配置。旧版 `console-settings.json` 中这些覆盖字段会在加载时删除。每条关联项内可输入最多 4000 字的内容测试，并在下方终端区域查看 Agent 的实际文本回复。任务默认使用第一条配置；启用自动切换时，额度耗尽或鉴权失败会按页面顺序继续尝试。
+“Agent 设置”页管理 Codex 登录并保存多套执行方案。每套方案包含名称、模型和推理强度；模型来自当前登录账号在 Codex `/model` 中使用的同一目录，推理强度只显示该模型支持的值。设为“当前”的方案供 Web 任务使用，聊天任务在额度或鉴权失败时会按列表顺序尝试其余方案。Codex 的审批策略、沙箱模式和网页搜索写入 `CODEX_HOME/config.toml`。登录密钥不写入模型方案；页面还可用当前方案发送最多 4000 字的内容进行真实连通性测试。
 
-### 在远程服务器连接 Codex / Claude Code
+### 在远程服务器连接 Codex
 
-可以使用官方 CLI 登录。请在运行 cpx 的同一系统用户终端中执行 `codex login --device-auth`，然后按终端显示的验证地址和一次性设备码完成登录：
+浏览器打开 cpx 的“Agent 设置”，在 Codex 区域点击“ChatGPT 设备码登录”，然后：
 
 1. 在任意可信浏览器打开验证地址。
 2. 登录拥有 Codex 权限的 ChatGPT 账号并输入设备码。
-3. 执行 `codex login status` 验证结果，再到模型管理页测试对应配置。
+3. 返回页面等待状态变为“已连接”，再使用页面测试。
 
-Codex CLI 将凭据保存在运行 cpx 的系统用户自己的凭据目录，不写入 `console-settings.json`。如果设备码登录不可用，可在同一用户终端直接执行 `codex login`。不要把 callback 地址发到聊天、日志或截图中。参见 [Codex Authentication](https://learn.chatgpt.com/docs/auth)。
-
-Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通过 `claude auth status --json` 复核。Codex 和 Claude Code 凭据均由官方 CLI 保存和刷新，cpx 不直接持有 OAuth refresh token。
+Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `console-settings.json`。也可在页面填写 OpenAI API Key；cpx 不直接持有 OAuth refresh token。参见 [Codex Authentication](https://learn.chatgpt.com/docs/auth)。
 
 三端均可运行，但 cpx 服务必须与完成登录的 CLI 使用同一系统用户：
 
 | 平台    | 支持方式                | 注意事项                                                                                                                                                            |
 | ------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux   | 原生 Node.js / Docker   | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex` 和 `/root/.claude`。                                                                        |
-| macOS   | 原生 Node.js            | Codex 可使用系统钥匙串或 `~/.codex`；Claude Code OAuth 凭据可能存入 macOS Keychain，因此后台服务需以完成授权的登录用户运行并具备钥匙串访问权。                      |
-| Windows | 原生 PowerShell，或 WSL | cpx 会通过 shell 解析 npm 的 `.cmd` 包装脚本。Claude Code 原生 Windows 还需要 Git for Windows；也可把整套 cpx 部署在 WSL 中，避免混用 Windows 与 WSL 的 HOME/凭据。 |
+| Linux   | 原生 Node.js / Docker   | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex`。 |
+| macOS   | 原生 Node.js            | Codex 可使用系统钥匙串或 `~/.codex`；后台服务必须以完成授权的用户运行。 |
+| Windows | 原生 PowerShell，或 WSL | cpx 会通过 shell 解析 npm 的 `.cmd` 包装脚本；不要混用 Windows 与 WSL 的 HOME/凭据。 |
 
 不要在一个系统用户下授权、再让另一个服务账户运行 cpx，否则状态检查会显示未登录。
 
@@ -88,14 +117,16 @@ Claude Code 使用同一服务用户在终端执行 `claude auth login`，并通
 源码部署快速步骤：
 
 1. 在电脑获取仓库源码，把完整 `cpx` 文件夹上传到 NAS 持久化目录
-2. 在极空间文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces` 和 `logs` 子目录
+2. 在极空间文件管理器中创建 `data/codex`、`data/workspaces` 和 `logs` 子目录
 3. 打开“Docker → Compose → 新建项目”，项目存储位置选择上传后的 `cpx` 目录
 4. 导入或粘贴根目录 `docker-compose.yml`，确认后由极空间自动构建并启动
-5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub 和至少一个 Coding Agent
+5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub、Codex 和所需消息平台
 
-更新时在电脑取得新源码，通过文件管理器覆盖代码文件但保留 NAS 上的 `data`、`config` 和 `logs`，然后在 Compose 项目详情中选择重新构建。NAS 无法稳定访问软件源或资源有限时，可改用部署文档中的离线镜像方案。
+更新已经运行的实例时，先在极空间 Compose 页面停止项目并备份 `data`、`config`、`logs`；在电脑取得新源码后，通过极空间文件管理器覆盖程序文件，但绝不能覆盖或删除这三个持久化目录。由于本版本把消息平台切换为纯长连接，还需要在 Compose 编辑器中同步新版 `docker-compose.yml`，再选择“重新构建并重新创建”并查看健康状态与日志。不要选择“删除数据卷”。NAS 无法稳定访问软件源或资源有限时，可在开发机构建并导出镜像，通过极空间镜像页面导入后修改镜像标签、重新创建容器。完整步骤见 [更新已运行实例](docs/DEPLOYMENT.md#十更新)。
 
-Codex CLI 不需要在 NAS 上单独安装。Compose 构建镜像时，`Dockerfile` 会自动安装 `@openai/codex@latest`；离线镜像包中也已经包含 Codex。容器启动后进入 cpx 的“模型设置”，在 Codex 项点击连接并完成设备码登录，再执行页面内测试。登录资料通过 `./data/codex:/root/.codex` 持久化，重新构建容器不会主动删除。
+从旧消息配置升级后，在页面重新填写钉钉 Client ID/Client Secret 或飞书 App ID/App Secret；旧的 HTTP 回调地址、签名 Secret 和固定群 Webhook 环境变量不再使用。已有 `data/codex` 会继续保留 Codex 登录。
+
+Codex CLI 不需要在 NAS 上单独安装。`Dockerfile` 会安装 `@openai/codex`，离线镜像包也包含它。容器启动后进入“Agent 设置”完成登录、刷新账号模型目录、保存多套配置并测试。认证资料通过 `./data/codex:/root/.codex` 持久化，重新构建容器不会主动删除。
 
 NAS 网络不能直接连接 Codex 或构建软件源时，在极空间 Compose 环境变量界面配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`。代理地址必须使用容器可访问的局域网 IP，不能使用 `127.0.0.1`；基础镜像无法拉取时改用开发机构建、极空间图形界面导入镜像的方案。具体填写方式和构建/运行阶段的区别见 [部署文档的“出站代理”章节](docs/DEPLOYMENT.md#出站代理)。
 
@@ -143,12 +174,12 @@ agent-cli stop             # 提示如何停止（通过 SIGTERM）
 
 | 命令                                              | 说明                                     |
 | ------------------------------------------------- | ---------------------------------------- |
-| `开发 <owner/repo>[#基础分支] [-> 新分支] <需求>` | 使用 Codex/Claude Code 开发并默认创建 PR |
+| `开发 <owner/repo>[#基础分支] [-> 新分支] <需求>` | 使用 Codex 开发并默认创建 PR |
 | `最近任务 [数量]`                                 | 查看当前用户从当前平台创建的最近任务     |
 | `任务 <ID>`                                       | 查看任务状态；可使用返回 ID 的前 8 位    |
 | `取消任务 <ID>`                                   | 取消尚未结束的任务                       |
 
-基础分支省略时使用仓库默认分支；新分支省略时自动生成 `cpx/task-*`。开发命令会先确认当前 GitHub Token 能访问仓库、基础分支存在且指定的新分支尚不存在，然后复用模型设置中的 Agent 顺序和对应 CLI 的已有配置。任务完成、失败或取消后，系统会通过当前来源平台配置的群机器人 Webhook 再推送一次最终状态；有 PR 时同时返回链接。
+基础分支省略时使用仓库默认分支；新分支省略时自动生成 `cpx/task-*`。开发命令会先确认当前 GitHub Token 能访问仓库、基础分支存在且指定的新分支尚不存在，然后使用当前 Agent 配置；额度或鉴权失败时按配置列表回退。任务完成、失败或取消后，系统会通过发起命令的同一长连接会话推送最终状态；有 PR 时同时返回链接。
 
 钉钉示例：
 
@@ -201,15 +232,14 @@ server:
   host: 0.0.0.0
 
 dingtalk:
-  webhookUrl: '' # https://oapi.dingtalk.com/robot/send?access_token=xxx
-  secret: '' # SECxxx 加签密钥
-  enableVerify: true # 是否校验签名
+  enabled: false
+  clientId: '' # Client ID / AppKey
+  clientSecret: '' # Client Secret / AppSecret
 
 feishu:
-  webhookUrl: '' # https://open.feishu.cn/open-apis/bot/v2/hook/xxx
+  enabled: false
   appId: ''
   appSecret: ''
-  enableVerify: true
 
 github:
   token: '' # ghp_xxx Personal Access Token
@@ -265,9 +295,10 @@ confirmationTtl: 300 # 确认超时秒数
 
 ```bash
 AGENT_SERVER_PORT=3000
-AGENT_DINGTALK_WEBHOOK_URL=https://...
-AGENT_DINGTALK_SECRET=SECxxx
-AGENT_FEISHU_WEBHOOK_URL=https://...
+AGENT_DINGTALK_ENABLED=true
+AGENT_DINGTALK_CLIENT_ID=dingxxx
+AGENT_DINGTALK_CLIENT_SECRET=xxx
+AGENT_FEISHU_ENABLED=true
 AGENT_FEISHU_APP_ID=cli_xxx
 AGENT_FEISHU_APP_SECRET=xxx
 AGENT_GITHUB_TOKEN=ghp_xxx
@@ -276,7 +307,7 @@ AGENT_LOGGING_LEVEL=info
 AGENT_STORAGE_PATH=./data/agent.db
 ```
 
-Coding Agent 配置完全沿用 CLI 和服务进程环境：Codex 可使用 `CODEX_API_KEY`，Claude Code 可使用 `ANTHROPIC_API_KEY`。模型、Base URL 和密钥不在 Web 控制台中保存。
+Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录；认证信息由 CLI 管理，模型方案不保存 API Key。
 
 ## HTTP API
 
@@ -286,12 +317,15 @@ Coding Agent 配置完全沿用 CLI 和服务进程环境：Codex 可使用 `COD
 
 | 端点                                       | 说明                                           |
 | ------------------------------------------ | ---------------------------------------------- |
-| `GET/POST /api/console/settings`           | 读取或更新有序 Agent 关联项                    |
-| `POST /api/console/model-test`             | 向当前或已保存的单条配置发送内容并返回文本回复 |
-| `GET /api/console/agent-auth?provider=...` | 检查 Codex 或 Claude Code CLI 登录状态         |
-| `POST /api/console/agent-auth/login`       | 启动指定 Agent 的官方 CLI 登录                 |
-| `POST /api/console/agent-auth/input`       | 向等待中的 CLI 提交 callback 地址或授权码      |
-| `POST /api/console/agent-auth/cancel`      | 取消指定 Agent 的进行中登录                    |
+| `POST /api/console/model-test`             | 向 Codex 发送内容并返回文本回复                 |
+| `GET/POST /api/console/settings`           | 读取或保存多套 Codex 配置和当前配置              |
+| `GET /api/console/agent-auth?provider=codex` | 检查 Codex CLI 登录状态                        |
+| `POST /api/console/agent-auth/login`       | 启动 Codex 设备码登录                            |
+| `POST /api/console/agent-auth/api-key`     | 通过标准输入将 API Key 交给 Codex CLI           |
+| `POST /api/console/agent-auth/cancel`      | 取消进行中的 Codex 登录                         |
+| `GET /api/console/codex-models`            | 读取当前账号在 Codex `/model` 使用的模型目录     |
+| `GET/POST /api/console/codex-config`       | 读取或保存 `CODEX_HOME/config.toml` 的页面设置   |
+| `GET/POST /api/console/integrations`       | 读取状态或保存飞书/钉钉长连接配置               |
 | `GET /api/console/github`                  | 读取 Token 来源、连接状态和 PAT 创建引导       |
 | `POST /api/console/github/connect`         | 验证 GitHub Token，成功后写入配置并读取仓库    |
 | `GET /api/console/github/repositories`     | 使用已配置 Token 刷新全部可访问仓库            |
@@ -312,13 +346,7 @@ curl -X POST http://localhost:3000/command \
   -d '{"text":"help","userId":"u1","userName":"Tester","source":"cli"}'
 ```
 
-### POST /webhook/dingtalk
-
-钉钉机器人 Webhook 回调端点。需配置 `dingtalk.secret` 进行签名校验。
-
-### POST /webhook/feishu
-
-飞书机器人事件回调端点。需配置 `feishu.appSecret` 进行签名校验。
+飞书和钉钉没有 HTTP 回调端点，也不需要固定群机器人 Webhook。应用启动后主动建立出站 WebSocket/Stream 长连接；即时回复和异步任务通知回到发起命令的会话。
 
 ## Skill 插件开发
 

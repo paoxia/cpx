@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import {
   AgentModelConfiguration,
+  AgentReasoningEffort,
   AgentTask,
   AgentTaskManager,
   CodingAgentProvider,
@@ -12,10 +13,10 @@ import { GitHubClient } from '../github/GitHubClient';
 import { Logger } from '../utils/Logger';
 import {
   AgentAuthManager,
-  AgentAuthProvider,
   AgentAuthService,
-  isAgentAuthProvider,
 } from './AgentAuthManager';
+import { CodexConfigManager, CodexRuntimeConfiguration } from './CodexConfigManager';
+import { CodexModelCatalog, CodexModelCatalogReader } from './CodexModelCatalog';
 import {
   GitHubClientFactory,
   GitHubConnection,
@@ -23,24 +24,38 @@ import {
   listGitHubBranches,
 } from './GitHubExplorer';
 import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
+import {
+  isMessagingPlatform,
+  MessagingPlatform,
+  PublicMessagingConfiguration,
+} from '../integrations/MessagingIntegrationManager';
+import type { DingTalkConfig, FeishuConfig } from '../core/types';
 
 interface StoredModelConfiguration {
   id: string;
+  name: string;
   provider: CodingAgentProvider;
+  model?: string;
+  reasoningEffort: AgentReasoningEffort;
 }
 
 interface ConsoleSettings {
-  version: 4;
+  version: 5;
+  activeConfigurationId: string;
   modelConfigs: StoredModelConfiguration[];
 }
 
 interface ModelConfigurationPayload {
   id?: string;
+  name?: string;
   provider?: CodingAgentProvider;
+  model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   prompt?: string;
 }
 
 interface SettingsPayload {
+  activeConfigurationId?: string;
   modelConfigs?: ModelConfigurationPayload[];
 }
 
@@ -80,7 +95,14 @@ export interface WebConsoleOptions {
   githubClientFactory?: GitHubClientFactory;
   persistGitHubToken?: (token: string) => void;
   onGitHubTokenConnected?: (token: string) => void;
-  agentAuth?: Partial<Record<AgentAuthProvider, AgentAuthService>>;
+  agentAuth?: AgentAuthService;
+  codexConfig?: CodexConfigManager;
+  codexModels?: CodexModelCatalogReader;
+  getMessagingConfiguration?: () => PublicMessagingConfiguration;
+  saveMessagingConfiguration?: (
+    platform: MessagingPlatform,
+    config: Partial<DingTalkConfig & FeishuConfig>,
+  ) => Promise<PublicMessagingConfiguration>;
   modelTester?: ModelConfigurationTestRunner;
 }
 
@@ -105,7 +127,11 @@ export class WebConsole {
   private githubClientFactory: GitHubClientFactory;
   private persistGitHubToken?: (token: string) => void;
   private onGitHubTokenConnected?: (token: string) => void;
-  private agentAuth: Record<AgentAuthProvider, AgentAuthService>;
+  private agentAuth: AgentAuthService;
+  private codexConfig: CodexConfigManager;
+  private codexModels: CodexModelCatalogReader;
+  private getMessagingConfiguration?: () => PublicMessagingConfiguration;
+  private saveMessagingConfiguration?: WebConsoleOptions['saveMessagingConfiguration'];
   private modelTester: ModelConfigurationTestRunner;
 
   constructor(
@@ -128,10 +154,11 @@ export class WebConsole {
       options.githubClientFactory ?? ((token) => new GitHubClient(token, this.logger));
     this.persistGitHubToken = options.persistGitHubToken;
     this.onGitHubTokenConnected = options.onGitHubTokenConnected;
-    this.agentAuth = {
-      codex: options.agentAuth?.codex ?? new AgentAuthManager('codex', this.logger),
-      claude: options.agentAuth?.claude ?? new AgentAuthManager('claude', this.logger),
-    };
+    this.agentAuth = options.agentAuth ?? new AgentAuthManager(this.logger);
+    this.codexConfig = options.codexConfig ?? new CodexConfigManager();
+    this.codexModels = options.codexModels ?? new CodexModelCatalog();
+    this.getMessagingConfiguration = options.getMessagingConfiguration;
+    this.saveMessagingConfiguration = options.saveMessagingConfiguration;
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
@@ -183,10 +210,7 @@ export class WebConsole {
   }
 
   async stop(): Promise<void> {
-    await Promise.all([
-      this.taskManager.stop(),
-      ...Object.values(this.agentAuth).map((service) => service.stop()),
-    ]);
+    await Promise.all([this.taskManager.stop(), this.agentAuth.stop()]);
   }
 
   private registerAssets(httpServer: HttpServer): void {
@@ -243,6 +267,8 @@ export class WebConsole {
           status: 200,
           body: await this.modelTester.test({
             provider: configuration.provider,
+            ...(configuration.model ? { model: configuration.model } : {}),
+            reasoningEffort: configuration.reasoningEffort,
             ...(prompt ? { prompt } : {}),
           }),
           headers: API_HEADERS,
@@ -259,8 +285,8 @@ export class WebConsole {
 
     httpServer.register('GET', '/api/console/agent-auth', async (_body, _headers, query) => {
       try {
-        const service = this.agentAuthService(query.provider);
-        return { status: 200, body: await service.getStatus(), headers: API_HEADERS };
+        this.assertCodexProvider(query.provider);
+        return { status: 200, body: await this.agentAuth.getStatus(), headers: API_HEADERS };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
       }
@@ -269,20 +295,20 @@ export class WebConsole {
     httpServer.register('POST', '/api/console/agent-auth/login', async (body) => {
       try {
         const payload = parseJson<{ provider?: string }>(body);
-        const service = this.agentAuthService(payload.provider);
-        return { status: 202, body: await service.startLogin(), headers: API_HEADERS };
+        this.assertCodexProvider(payload.provider);
+        return { status: 202, body: await this.agentAuth.startLogin(), headers: API_HEADERS };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
       }
     });
 
-    httpServer.register('POST', '/api/console/agent-auth/input', async (body) => {
+    httpServer.register('POST', '/api/console/agent-auth/api-key', async (body) => {
       try {
-        const payload = parseJson<{ provider?: string; input?: string }>(body);
-        const service = this.agentAuthService(payload.provider);
+        const payload = parseJson<{ provider?: string; apiKey?: string }>(body);
+        if (payload.provider !== 'codex') throw new Error('API Key 登录只支持 codex');
         return {
           status: 200,
-          body: service.submitInput(payload.input ?? ''),
+          body: await this.agentAuth.loginWithApiKey(payload.apiKey ?? ''),
           headers: API_HEADERS,
         };
       } catch (error) {
@@ -293,10 +319,74 @@ export class WebConsole {
     httpServer.register('POST', '/api/console/agent-auth/cancel', async (body) => {
       try {
         const payload = parseJson<{ provider?: string }>(body);
-        const service = this.agentAuthService(payload.provider);
-        return service.cancelLogin()
+        this.assertCodexProvider(payload.provider);
+        return this.agentAuth.cancelLogin()
           ? { status: 200, body: { success: true }, headers: API_HEADERS }
           : { status: 409, body: { error: '当前没有进行中的登录' }, headers: API_HEADERS };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('GET', '/api/console/codex-config', async () => {
+      try {
+        return { status: 200, body: this.codexConfig.getConfig(), headers: API_HEADERS };
+      } catch (error) {
+        return { status: 500, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('GET', '/api/console/codex-models', async () => {
+      try {
+        const auth = await this.agentAuth.getStatus();
+        if (!auth.authenticated) {
+          return { status: 409, body: { error: '请先登录 Codex，再刷新模型列表' }, headers: API_HEADERS };
+        }
+        return { status: 200, body: await this.codexModels.list(), headers: API_HEADERS };
+      } catch (error) {
+        return { status: 502, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('POST', '/api/console/codex-config', async (body) => {
+      try {
+        const payload = parseJson<CodexRuntimeConfiguration>(body);
+        return {
+          status: 200,
+          body: this.codexConfig.saveConfig(payload),
+          headers: API_HEADERS,
+        };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
+    httpServer.register('GET', '/api/console/integrations', async () => {
+      if (!this.getMessagingConfiguration) {
+        return { status: 503, body: { error: '消息平台服务未初始化' }, headers: API_HEADERS };
+      }
+      return { status: 200, body: this.getMessagingConfiguration(), headers: API_HEADERS };
+    });
+
+    httpServer.register('POST', '/api/console/integrations', async (body) => {
+      try {
+        if (!this.saveMessagingConfiguration) throw new Error('消息平台服务未初始化');
+        const payload = parseJson<{
+          platform?: MessagingPlatform;
+          enabled?: boolean;
+          clientId?: string;
+          clientSecret?: string;
+          appId?: string;
+          appSecret?: string;
+        }>(body);
+        if (!isMessagingPlatform(payload.platform)) throw new Error('消息平台无效');
+        if (typeof payload.enabled !== 'boolean') throw new Error('enabled 必须是布尔值');
+        const config = normalizeMessagingPayload(payload.platform, payload);
+        return {
+          status: 200,
+          body: await this.saveMessagingConfiguration(payload.platform, config),
+          headers: API_HEADERS,
+        };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
       }
@@ -451,16 +541,15 @@ export class WebConsole {
     try {
       const stored = JSON.parse(readFileSync(this.settingsPath, 'utf8')) as unknown;
       if (isRecord(stored) && Array.isArray(stored.modelConfigs)) {
-        const validated = validateStoredSettings(stored.modelConfigs);
-        const hadLegacyOverrides = stored.modelConfigs.some(
-          (configuration) =>
-            isRecord(configuration) &&
-            ['model', 'baseUrl', 'apiKey'].some((field) => field in configuration),
+        const validated = validateStoredSettings(
+          stored.modelConfigs,
+          typeof stored.activeConfigurationId === 'string'
+            ? stored.activeConfigurationId
+            : undefined,
         );
         if (
-          stored.version !== 4 ||
-          validated.modelConfigs.length !== stored.modelConfigs.length ||
-          hadLegacyOverrides
+          stored.version !== 5 ||
+          validated.modelConfigs.length !== stored.modelConfigs.length
         ) {
           this.persistSettings(validated);
         }
@@ -475,21 +564,25 @@ export class WebConsole {
     }
   }
 
-  private agentAuthService(provider: unknown): AgentAuthService {
-    if (!isAgentAuthProvider(provider)) {
-      throw new Error('provider 必须是 codex 或 claude');
+  private assertCodexProvider(provider: unknown): asserts provider is 'codex' {
+    if (provider !== 'codex') {
+      throw new Error('provider 必须是 codex');
     }
-    return this.agentAuth[provider];
   }
 
   private updateSettings(payload: SettingsPayload): void {
     if (!Array.isArray(payload.modelConfigs)) {
       throw new Error('modelConfigs 必须是数组');
     }
+    const modelConfigs = normalizeModelConfigurationPayloads(payload.modelConfigs);
     const nextSettings: ConsoleSettings = {
-      version: 4,
-      modelConfigs: normalizeModelConfigurationPayloads(payload.modelConfigs),
+      version: 5,
+      activeConfigurationId: payload.activeConfigurationId?.trim() || modelConfigs[0].id,
+      modelConfigs,
     };
+    if (!nextSettings.modelConfigs.some((item) => item.id === nextSettings.activeConfigurationId)) {
+      throw new Error('当前配置不存在');
+    }
     this.persistSettings(nextSettings);
     this.settings = nextSettings;
   }
@@ -499,24 +592,23 @@ export class WebConsole {
   }
 
   private executionConfigurations(useFallback: boolean): AgentModelConfiguration[] {
+    const active = this.settings.modelConfigs.find(
+      (item) => item.id === this.settings.activeConfigurationId,
+    )!;
     const configurations = useFallback
-      ? this.settings.modelConfigs
-      : this.settings.modelConfigs.slice(0, 1);
-    return configurations.map((configuration) => ({
-      id: configuration.id,
-      provider: configuration.provider,
-    }));
+      ? [active, ...this.settings.modelConfigs.filter((item) => item.id !== active.id)]
+      : [active];
+    return configurations.map((configuration) => ({ ...configuration }));
   }
 
   private publicSettings(): {
-    version: 4;
-    modelConfigs: Array<{
-      id: string;
-      provider: CodingAgentProvider;
-    }>;
+    version: 5;
+    activeConfigurationId: string;
+    modelConfigs: StoredModelConfiguration[];
   } {
     return {
-      version: 4,
+      version: 5,
+      activeConfigurationId: this.settings.activeConfigurationId,
       modelConfigs: this.settings.modelConfigs.map((configuration) => ({ ...configuration })),
     };
   }
@@ -539,29 +631,50 @@ function parseJson<T>(body: Buffer): T {
   }
 }
 
-const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex', 'claude'];
+const VALID_PROVIDERS: readonly CodingAgentProvider[] = ['codex'];
+const VALID_REASONING_EFFORTS: readonly AgentReasoningEffort[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+];
 function createDefaultSettings(): ConsoleSettings {
   return {
-    version: 4,
+    version: 5,
+    activeConfigurationId: 'default-codex',
     modelConfigs: [
-      { id: 'default-codex', provider: 'codex' },
-      { id: 'default-claude', provider: 'claude' },
+      {
+        id: 'default-codex',
+        name: 'Codex 默认配置',
+        provider: 'codex',
+        reasoningEffort: 'high',
+      },
     ],
   };
 }
 
-function validateStoredSettings(modelConfigs: unknown[]): ConsoleSettings {
+function validateStoredSettings(
+  modelConfigs: unknown[],
+  activeConfigurationId?: string,
+): ConsoleSettings {
   const supported = modelConfigs.filter(
     (configuration) =>
       isRecord(configuration) &&
-      (configuration.provider === 'codex' || configuration.provider === 'claude'),
+      VALID_PROVIDERS.includes(configuration.provider as CodingAgentProvider),
   );
   if (supported.length === 0) {
     return structuredClone(DEFAULT_SETTINGS);
   }
+  const normalized = normalizeModelConfigurationPayloads(supported as ModelConfigurationPayload[]);
   return {
-    version: 4,
-    modelConfigs: normalizeModelConfigurationPayloads(supported as ModelConfigurationPayload[]),
+    version: 5,
+    activeConfigurationId: normalized.some((item) => item.id === activeConfigurationId)
+      ? activeConfigurationId!
+      : normalized[0].id,
+    modelConfigs: normalized,
   };
 }
 
@@ -587,9 +700,24 @@ function normalizeModelConfigurationPayloads(
     if (!payload.provider || !VALID_PROVIDERS.includes(payload.provider)) {
       throw new Error(`第 ${index + 1} 条模型配置的 Agent 无效`);
     }
+    const name = payload.name?.trim() || `Codex 配置 ${index + 1}`;
+    if (name.length > 60 || /[\r\n\0]/.test(name)) {
+      throw new Error(`第 ${index + 1} 条配置名称无效`);
+    }
+    const model = payload.model?.trim() || undefined;
+    if (model && !/^[a-zA-Z0-9._:/-]{1,128}$/.test(model)) {
+      throw new Error(`第 ${index + 1} 条模型名称无效`);
+    }
+    const reasoningEffort = payload.reasoningEffort ?? 'high';
+    if (!VALID_REASONING_EFFORTS.includes(reasoningEffort)) {
+      throw new Error(`第 ${index + 1} 条推理强度无效`);
+    }
     return {
       id,
+      name,
       provider: payload.provider,
+      ...(model ? { model } : {}),
+      reasoningEffort,
     };
   });
 }
@@ -614,8 +742,10 @@ function migrateLegacySettings(stored: unknown): ConsoleSettings {
   return validateStoredSettings(
     order.map((provider) => ({
       id: `migrated-${provider}`,
+      name: 'Codex 迁移配置',
       provider,
     })),
+    `migrated-${defaultProvider}`,
   );
 }
 
@@ -656,4 +786,42 @@ function githubErrorResponse(error: unknown): {
       : 400;
   const status = statusCode >= 400 && statusCode < 500 ? statusCode : 502;
   return { status, body: { error: errorMessage(error) }, headers: API_HEADERS };
+}
+
+function normalizeMessagingPayload(
+  platform: MessagingPlatform,
+  payload: {
+    enabled?: boolean;
+    clientId?: string;
+    clientSecret?: string;
+    appId?: string;
+    appSecret?: string;
+  },
+): Partial<DingTalkConfig & FeishuConfig> {
+  const enabled = Boolean(payload.enabled);
+  if (platform === 'dingtalk') {
+    return {
+      enabled,
+      ...(normalizeCredential(payload.clientId, 'Client ID') ? { clientId: payload.clientId!.trim() } : {}),
+      ...(normalizeCredential(payload.clientSecret, 'Client Secret')
+        ? { clientSecret: payload.clientSecret!.trim() }
+        : {}),
+    };
+  }
+  return {
+    enabled,
+    ...(normalizeCredential(payload.appId, 'App ID') ? { appId: payload.appId!.trim() } : {}),
+    ...(normalizeCredential(payload.appSecret, 'App Secret')
+      ? { appSecret: payload.appSecret!.trim() }
+      : {}),
+  };
+}
+
+function normalizeCredential(value: string | undefined, label: string): string | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (normalized.length > 4096 || /[\r\n\0]/.test(normalized)) {
+    throw new Error(`${label} 格式无效`);
+  }
+  return normalized;
 }

@@ -1,5 +1,5 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
-import { CodingAgentProvider } from '../agents/AgentTaskManager';
+import { AgentReasoningEffort, CodingAgentProvider } from '../agents/AgentTaskManager';
 import { AGENT_ADAPTERS } from '../agents/agentAdapters';
 import { AgentProcessError, classifyAgentError } from '../agents/errorClassifier';
 import { Logger } from '../utils/Logger';
@@ -7,6 +7,7 @@ import { Logger } from '../utils/Logger';
 export interface ModelTestConfiguration {
   provider: CodingAgentProvider;
   model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   baseUrl?: string;
   apiKey?: string;
   prompt?: string;
@@ -57,8 +58,7 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
         [
           configuration.apiKey,
           env[adapter.apiKeyEnvVar],
-          env.ANTHROPIC_AUTH_TOKEN,
-          configuration.provider === 'codex' ? env.OPENAI_API_KEY : undefined,
+          env.OPENAI_API_KEY,
         ].filter((value): value is string => Boolean(value)),
       ),
     );
@@ -91,7 +91,11 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
       try {
         child = this.spawnCommand(
           adapter.command,
-          adapter.buildArgs(configuration.model, configuration.baseUrl),
+          adapter.buildArgs(
+            configuration.model,
+            configuration.baseUrl,
+            configuration.reasoningEffort,
+          ),
           {
             cwd: this.workingDirectory,
             env,

@@ -64,7 +64,7 @@ describe('AgentTaskManager', () => {
       if (command === 'gh') {
         return fakeProcess('https://github.com/acme/repo/pull/42\n');
       }
-      if (command === 'codex' || command === 'claude') {
+      if (command === 'codex') {
         return fakeProcess('{"type":"result","result":"done"}\n', '', 0, holdAgent);
       }
       return fakeProcess();
@@ -106,7 +106,7 @@ describe('AgentTaskManager', () => {
     expect(agentInput).toContain('用户任务：修复构建');
     expect(spawnMock).toHaveBeenCalledWith(
       'codex',
-      expect.arrayContaining(['exec', '--json', '--sandbox', 'workspace-write']),
+      expect.arrayContaining(['exec', '--json', '--color', 'never']),
       expect.objectContaining({
         env: expect.objectContaining({ CODEX_API_KEY: 'test-openai-key' }),
       }),
@@ -120,7 +120,7 @@ describe('AgentTaskManager', () => {
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     manager.setSecrets({ githubToken: 'github_pat_task-secret' });
     const created = manager.create({
-      provider: 'claude',
+      provider: 'codex',
       repository: 'https://github.com/acme/repo',
       prompt: '更新说明',
       baseBranch: 'develop',
@@ -228,7 +228,7 @@ describe('AgentTaskManager', () => {
         configurations: [
           {
             id: 'unsafe-gateway',
-            provider: 'claude',
+            provider: 'codex',
             baseUrl: 'https://secret@example.com/v1#token',
           },
         ],
@@ -238,19 +238,27 @@ describe('AgentTaskManager', () => {
   });
 
   it('主 Agent rate_limit 时应切换到备选并成功', async () => {
+    let codexCalls = 0;
     spawnMock.mockReset();
     spawnMock.mockImplementation((command: string, args: string[]) => {
       if (command === 'git' && args[0] === 'status') return fakeProcess(gitStatusOutput);
       if (command === 'gh') return fakeProcess('https://github.com/acme/repo/pull/42\n');
       if (command === 'git') return fakeProcess('');
-      if (command === 'codex') return fakeProcess('', 'Error: rate limit exceeded\n', 1);
-      if (command === 'claude') return fakeProcess('{"type":"result","result":"done"}\n');
+      if (command === 'codex') {
+        codexCalls += 1;
+        return codexCalls === 1
+          ? fakeProcess('', 'Error: rate limit exceeded\n', 1)
+          : fakeProcess('{"type":"result","result":"done"}\n');
+      }
       return fakeProcess();
     });
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude'],
+      configurations: [
+        { id: 'primary', provider: 'codex' },
+        { id: 'backup', provider: 'codex' },
+      ],
       repository: 'acme/repo',
       prompt: '修复构建',
     });
@@ -263,7 +271,11 @@ describe('AgentTaskManager', () => {
       status: 'failed',
       errorKind: 'rate_limit',
     });
-    expect(task.attempts[1]).toMatchObject({ provider: 'claude', status: 'success' });
+    expect(task.attempts[1]).toMatchObject({
+      configurationId: 'backup',
+      provider: 'codex',
+      status: 'success',
+    });
 
     const gitCloneCalls = spawnMock.mock.calls.filter(
       ([command, args]) => command === 'git' && args[0] === 'clone',
@@ -293,6 +305,7 @@ describe('AgentTaskManager', () => {
           id: 'codex-fast',
           provider: 'codex',
           model: 'gpt-fast',
+          reasoningEffort: 'low',
           baseUrl: 'https://gateway.example.com/v1/',
           apiKey: 'key-fast',
         },
@@ -300,6 +313,7 @@ describe('AgentTaskManager', () => {
           id: 'codex-deep',
           provider: 'codex',
           model: 'gpt-deep',
+          reasoningEffort: 'ultra',
           baseUrl: 'https://backup.example.com/v1',
           apiKey: 'key-deep',
         },
@@ -314,12 +328,14 @@ describe('AgentTaskManager', () => {
         id: 'codex-fast',
         provider: 'codex',
         model: 'gpt-fast',
+        reasoningEffort: 'low',
         baseUrl: 'https://gateway.example.com/v1',
       },
       {
         id: 'codex-deep',
         provider: 'codex',
         model: 'gpt-deep',
+        reasoningEffort: 'ultra',
         baseUrl: 'https://backup.example.com/v1',
       },
     ]);
@@ -336,10 +352,16 @@ describe('AgentTaskManager', () => {
     expect(calls[0][1]).toEqual(
       expect.arrayContaining(['--config', 'openai_base_url="https://gateway.example.com/v1"']),
     );
+    expect(calls[0][1]).toEqual(
+      expect.arrayContaining(['--config', 'model_reasoning_effort="low"']),
+    );
     expect(calls[0][2]).toEqual(
       expect.objectContaining({ env: expect.objectContaining({ CODEX_API_KEY: 'key-fast' }) }),
     );
     expect(calls[1][1]).toEqual(expect.arrayContaining(['--model', 'gpt-deep']));
+    expect(calls[1][1]).toEqual(
+      expect.arrayContaining(['--config', 'model_reasoning_effort="ultra"']),
+    );
     expect(calls[1][2]).toEqual(
       expect.objectContaining({ env: expect.objectContaining({ CODEX_API_KEY: 'key-deep' }) }),
     );
@@ -351,7 +373,7 @@ describe('AgentTaskManager', () => {
     spawnMock.mockImplementation((command: string, args: string[]) => {
       if (command === 'git' && args[0] === 'status') return fakeProcess(gitStatusOutput);
       if (command === 'git') return fakeProcess('');
-      if (command === 'codex' || command === 'claude') {
+      if (command === 'codex') {
         return fakeProcess('', 'HTTP 429 too many requests\n', 1);
       }
       return fakeProcess();
@@ -359,7 +381,10 @@ describe('AgentTaskManager', () => {
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude'],
+      configurations: [
+        { id: 'primary', provider: 'codex' },
+        { id: 'backup', provider: 'codex' },
+      ],
       repository: 'acme/repo',
       prompt: '修复构建',
     });
@@ -369,7 +394,7 @@ describe('AgentTaskManager', () => {
     expect(task.attempts).toHaveLength(2);
     expect(task.attempts.every((a) => a.errorKind === 'rate_limit')).toBe(true);
     expect(task.error).toContain('Codex');
-    expect(task.error).toContain('Claude Code');
+    expect(task.attempts.map((attempt) => attempt.configurationId)).toEqual(['primary', 'backup']);
     await manager.stop();
   });
 
@@ -379,13 +404,15 @@ describe('AgentTaskManager', () => {
       if (command === 'git' && args[0] === 'status') return fakeProcess(gitStatusOutput);
       if (command === 'git') return fakeProcess('');
       if (command === 'codex') return fakeProcess('', 'syntax error in prompt\n', 2);
-      if (command === 'claude') return fakeProcess('{"type":"result","result":"done"}\n');
       return fakeProcess();
     });
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude'],
+      configurations: [
+        { id: 'primary', provider: 'codex' },
+        { id: 'backup', provider: 'codex' },
+      ],
       repository: 'acme/repo',
       prompt: '修复构建',
     });
@@ -394,8 +421,8 @@ describe('AgentTaskManager', () => {
     const task = manager.get(created.id)!;
     expect(task.attempts).toHaveLength(1);
     expect(task.attempts[0].errorKind).toBe('crash');
-    const claudeCalls = spawnMock.mock.calls.filter(([command]) => command === 'claude');
-    expect(claudeCalls).toHaveLength(0);
+    const codexCalls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+    expect(codexCalls).toHaveLength(1);
     await manager.stop();
   });
 
@@ -407,13 +434,15 @@ describe('AgentTaskManager', () => {
       if (command === 'gh') return fakeProcess('https://github.com/acme/repo/pull/42\n');
       if (command === 'git') return fakeProcess('');
       if (command === 'codex') return fakeProcess('', '', 0, holdAgent);
-      if (command === 'claude') return fakeProcess('{"type":"result","result":"done"}\n');
       return fakeProcess();
     });
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude'],
+      configurations: [
+        { id: 'primary', provider: 'codex' },
+        { id: 'backup', provider: 'codex' },
+      ],
       repository: 'acme/repo',
       prompt: '长任务',
     });
@@ -428,24 +457,32 @@ describe('AgentTaskManager', () => {
     });
 
     const task = manager.get(created.id)!;
-    const claudeCalls = spawnMock.mock.calls.filter(([command]) => command === 'claude');
-    expect(claudeCalls).toHaveLength(0);
+    const codexCalls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+    expect(codexCalls).toHaveLength(1);
     await manager.stop();
   });
 
   it('中文额度关键字应被识别为 rate_limit', async () => {
+    let codexCalls = 0;
     spawnMock.mockReset();
     spawnMock.mockImplementation((command: string, args: string[]) => {
       if (command === 'git' && args[0] === 'status') return fakeProcess(gitStatusOutput);
       if (command === 'git') return fakeProcess('');
-      if (command === 'codex') return fakeProcess('', '余额不足,请充值\n', 1);
-      if (command === 'claude') return fakeProcess('{"type":"result","result":"done"}\n');
+      if (command === 'codex') {
+        codexCalls += 1;
+        return codexCalls === 1
+          ? fakeProcess('', '余额不足,请充值\n', 1)
+          : fakeProcess('{"type":"result","result":"done"}\n');
+      }
       return fakeProcess();
     });
 
     const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
     const created = manager.create({
-      providers: ['codex', 'claude'],
+      configurations: [
+        { id: 'primary', provider: 'codex' },
+        { id: 'backup', provider: 'codex' },
+      ],
       repository: 'acme/repo',
       prompt: '修复构建',
     });
@@ -456,7 +493,7 @@ describe('AgentTaskManager', () => {
       provider: 'codex',
       errorKind: 'rate_limit',
     });
-    expect(task.attempts[1]).toMatchObject({ provider: 'claude', status: 'success' });
+    expect(task.attempts[1]).toMatchObject({ provider: 'codex', status: 'success' });
     await manager.stop();
   });
 });

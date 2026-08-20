@@ -24,19 +24,19 @@ services:
       ALL_PROXY: ${ALL_PROXY:-}
       NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
       CODEX_API_KEY: ${CODEX_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CODEX_HOME: /root/.codex
       GH_TOKEN: ${GH_TOKEN:-}
       AGENT_GITHUB_TOKEN: ${AGENT_GITHUB_TOKEN:-}
       AGENT_GITHUB_DEFAULT_REPO: ${AGENT_GITHUB_DEFAULT_REPO:-}
-      AGENT_DINGTALK_WEBHOOK_URL: ${AGENT_DINGTALK_WEBHOOK_URL:-}
-      AGENT_DINGTALK_SECRET: ${AGENT_DINGTALK_SECRET:-}
-      AGENT_FEISHU_WEBHOOK_URL: ${AGENT_FEISHU_WEBHOOK_URL:-}
+      AGENT_DINGTALK_ENABLED: ${AGENT_DINGTALK_ENABLED:-}
+      AGENT_DINGTALK_CLIENT_ID: ${AGENT_DINGTALK_CLIENT_ID:-}
+      AGENT_DINGTALK_CLIENT_SECRET: ${AGENT_DINGTALK_CLIENT_SECRET:-}
+      AGENT_FEISHU_ENABLED: ${AGENT_FEISHU_ENABLED:-}
       AGENT_FEISHU_APP_ID: ${AGENT_FEISHU_APP_ID:-}
       AGENT_FEISHU_APP_SECRET: ${AGENT_FEISHU_APP_SECRET:-}
     volumes:
       - ./data:/app/data
       - ./data/codex:/root/.codex
-      - ./data/claude:/root/.claude
       - ./config:/app/config
       - ./logs:/app/logs
     # 极空间 Docker 默认以 root 运行；git/gh 在 root 下无需额外权限配置

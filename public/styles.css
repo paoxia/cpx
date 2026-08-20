@@ -854,6 +854,161 @@ select:focus-visible {
   max-width: 980px;
 }
 
+.integrations-header h1 {
+  max-width: 980px;
+}
+
+.integration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.integration-card {
+  display: grid;
+  gap: 18px;
+  padding: clamp(24px, 3vw, 38px);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: radial-gradient(circle at 100% 0, rgba(215, 255, 95, 0.055), transparent 28rem), var(--panel);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.22);
+}
+
+.integration-card-heading,
+.integration-card-heading > div {
+  display: flex;
+  align-items: center;
+}
+
+.integration-card-heading {
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.integration-card-heading > div {
+  gap: 12px;
+}
+
+.integration-card-heading h2,
+.integration-card-heading p {
+  margin: 0;
+}
+
+.integration-card-heading h2 {
+  font-size: 18px;
+}
+
+.integration-card-heading p,
+.integration-status-message {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.agent-profile-panel {
+  grid-column: 1 / -1;
+}
+
+.agent-profile-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.15fr);
+  gap: 24px;
+  padding: 0 28px 28px;
+}
+
+.agent-profile-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.agent-profile-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.025);
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-profile-item:hover,
+.agent-profile-item.active {
+  border-color: rgba(120, 255, 210, 0.5);
+  background: rgba(72, 220, 165, 0.08);
+}
+
+.agent-profile-item span {
+  display: grid;
+  gap: 5px;
+}
+
+.agent-profile-item small {
+  color: var(--muted);
+}
+
+.agent-profile-item em {
+  color: var(--accent);
+  font-style: normal;
+  font-size: 12px;
+}
+
+.profile-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .agent-profile-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.platform-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  color: #0a0a0b;
+  border-radius: 11px;
+  background: var(--accent);
+  font-weight: 700;
+}
+
+.integration-toggle {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #101011;
+}
+
+.integration-status-message {
+  min-height: 18px;
+  margin: 0;
+  line-height: 1.6;
+}
+
+.integration-steps {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 16px 16px 16px 32px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.integration-steps code,
+.codex-config-grid code {
+  font-family: var(--mono);
+}
+
 .model-header-actions {
   display: flex;
   align-items: center;
@@ -1053,8 +1208,7 @@ select:focus-visible {
   border-color: var(--accent-dim);
 }
 
-#codex-auth-output,
-#claude-auth-output {
+#codex-auth-output {
   grid-column: 1 / -1;
   max-height: 130px;
   margin: 0;
@@ -1077,6 +1231,20 @@ select:focus-visible {
   min-width: 0;
   padding: clamp(24px, 3vw, 38px);
   border-right: 1px solid var(--line);
+}
+
+.codex-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.codex-config-grid .save-button {
+  align-self: end;
+}
+
+.codex-test-panel {
+  margin-top: 24px;
 }
 
 .model-config-toolbar {
@@ -1877,6 +2045,10 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .integration-grid {
+    grid-template-columns: 1fr;
+  }
+
   .model-management-layout {
     grid-template-columns: 1fr;
   }
@@ -2050,9 +2222,12 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  #codex-auth-output,
-  #claude-auth-output {
+  #codex-auth-output {
     grid-column: auto;
+  }
+
+  .codex-config-grid {
+    grid-template-columns: 1fr;
   }
 }
 

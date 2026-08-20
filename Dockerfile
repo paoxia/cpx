@@ -41,9 +41,8 @@ RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/deb
     ca-certificates curl git gh gnupg openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
-# 全局安装 Codex 和 Claude Code CLI
-RUN npm install -g --registry="${NPM_REGISTRY}" \
-    @openai/codex@latest @anthropic-ai/claude-code@latest
+# 全局安装 Codex CLI
+RUN npm install -g --registry="${NPM_REGISTRY}" @openai/codex@latest
 
 WORKDIR /app
 
@@ -60,6 +59,7 @@ COPY config/ ./config/
 RUN mkdir -p /app/data /app/logs
 
 ENV NODE_ENV=production \
+    CODEX_HOME=/root/.codex \
     AGENT_SERVER_HOST=0.0.0.0 \
     AGENT_SERVER_PORT=3000 \
     AGENT_STORAGE_PATH=/app/data/agent.db
