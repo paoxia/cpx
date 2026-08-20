@@ -14,7 +14,7 @@ export type RequestHandler = (
 
 /**
  * 基于 Node 内置 http 模块的轻量 HTTP 服务
- * 仅处理 webhook 接收，路由到注册的处理器
+ * 提供本地命令、控制台和健康检查 HTTP 路由
  */
 export class HttpServer {
   private server: Server | null = null;

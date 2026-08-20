@@ -16,7 +16,7 @@ cpx（Agent System）是面向开发者和小型技术团队的自托管自动�
 
 ### 远程触发任务
 
-用户从钉钉或飞书发送命令，系统验证 Webhook、执行命令并将结果回传到原平台。用户可以查看 GitHub 仓库与分支，把自然语言需求委托给 Coding Agent，并在任务结束后收到状态和 Pull Request 链接。HTTP `/command` 端点用于本地测试和集成调试。
+用户从钉钉或飞书发送命令，系统通过平台长连接接收消息、执行命令并将结果回传到原会话。用户可以查看 GitHub 仓库与分支，把自然语言需求委托给 Codex，并在任务结束后收到状态和 Pull Request 链接。HTTP `/command` 端点用于本地测试和集成调试。
 
 ### 安全地修改 GitHub 内容
 
@@ -28,7 +28,7 @@ cpx（Agent System）是面向开发者和小型技术团队的自托管自动�
 
 ### 委托开发任务
 
-用户可在本地 Web 控制台或钉钉、飞书中指定 GitHub 仓库、分支和任务说明。系统按控制台保存的 Codex/Claude Code 顺序在独立克隆中运行 Agent；控制台仅在用户显式选择后创建 Pull Request，聊天开发任务则默认创建 Pull Request 并异步回推结果。
+用户可在本地 Web 控制台或钉钉、飞书中指定 GitHub 仓库、分支和任务说明。系统按控制台保存的 Codex 配置顺序在独立克隆中运行 Agent；控制台仅在用户显式选择后创建 Pull Request，聊天开发任务则默认创建 Pull Request 并异步回推结果。
 
 ## 产品原则
 
@@ -40,7 +40,7 @@ cpx（Agent System）是面向开发者和小型技术团队的自托管自动�
 
 ## 当前范围
 
-当前产品包括 CLI 生命周期管理、HTTP 服务、钉钉与飞书 Webhook、GitHub 仓库/分支查询与文件/PR 流程、聊天及 Web Coding Agent 任务、Skill 执行、MCP 连接、权限确认、审计日志、SQLite 状态存储，以及本机 Codex 和 Claude Code CLI 管理。
+当前产品包括 CLI 生命周期管理、HTTP 服务、钉钉 Stream 与飞书 WebSocket 长连接、GitHub 仓库/分支查询与文件/PR 流程、聊天及 Web Codex 任务、Skill 执行、MCP 连接、权限确认、审计日志、SQLite 状态存储，以及本机 Codex CLI 登录、模型目录与多配置管理。
 
 远程 Agent 注册、持久化任务队列、Docker/Kubernetes 交付物以及企业身份与多租户能力不属于当前已实现范围。后续方向见 [路线图](plans/roadmap.md)。
 

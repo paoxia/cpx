@@ -27,9 +27,13 @@
             <span class="nav-icon">⑂</span>
             <span>GitHub</span>
           </button>
-          <button class="nav-item" id="models-tab" data-view="models" type="button">
+          <button class="nav-item" id="integrations-tab" data-view="integrations" type="button">
+            <span class="nav-icon">◫</span>
+            <span>消息平台</span>
+          </button>
+          <button class="nav-item" id="codex-tab" data-view="codex" type="button">
             <span class="nav-icon">◎</span>
-            <span>模型设置</span>
+            <span>Agent 设置</span>
           </button>
         </nav>
 
@@ -62,7 +66,7 @@
             <button
               class="icon-button"
               id="top-settings"
-              data-view="models"
+              data-view="codex"
               type="button"
               aria-label="打开模型配置"
             >
@@ -78,19 +82,11 @@
                   <h2>创建开发任务</h2>
                 </div>
                 <div class="execution-order-preview" id="execution-order-preview">
-                  尚未加载模型配置
+                  <span><b>1</b>Codex</span>
                 </div>
               </div>
 
               <form id="task-form">
-                <label class="fallback-toggle">
-                  <input id="auto-fallback" type="checkbox" checked />
-                  <span class="toggle"></span>
-                  <span>
-                    <strong>失败时按配置顺序继续尝试</strong>
-                    <small>额度耗尽或鉴权失败时，切换到下一条模型配置</small>
-                  </span>
-                </label>
                 <div class="field-row">
                   <label class="field field-grow">
                     <span>GitHub 仓库</span>
@@ -318,73 +314,154 @@
           </footer>
         </div>
 
-        <div class="app-view" id="models-view" hidden>
+        <div class="app-view" id="integrations-view" hidden>
+          <header class="topbar integrations-header">
+            <div>
+              <p class="eyebrow">CHAT CONTROL</p>
+              <h1>连接消息平台，<br /><span>从手机直接操控 cpx。</span></h1>
+            </div>
+          </header>
+
+          <section class="integration-grid">
+            <form class="integration-card" id="feishu-form">
+              <div class="integration-card-heading">
+                <div><span class="platform-mark">飞</span><div><h2>飞书</h2><p>官方 WebSocket 长连接</p></div></div>
+                <span class="connection-badge" id="feishu-status">未启用</span>
+              </div>
+              <label class="toggle-option integration-toggle">
+                <input id="feishu-enabled" type="checkbox" />
+                <span class="toggle"></span>
+                <span><strong>启用飞书机器人</strong><small>NAS 只需出站联网，无需公网回调地址</small></span>
+              </label>
+              <label class="field"><span>App ID</span><input id="feishu-app-id" type="text" placeholder="cli_…" autocomplete="off" /><small id="feishu-app-id-hint">飞书开放平台 → 凭证与基础信息</small></label>
+              <label class="field"><span>App Secret</span><input id="feishu-app-secret" type="password" placeholder="已配置时留空可保留" autocomplete="new-password" /><small id="feishu-app-secret-hint">Secret 不会通过 API 回显</small></label>
+              <p class="integration-status-message" id="feishu-status-message">尚未加载状态。</p>
+              <button class="save-button" type="submit">保存并连接</button>
+              <ol class="integration-steps">
+                <li>创建企业自建应用并添加“机器人”能力</li>
+                <li>事件订阅选择“使用长连接接收事件”</li>
+                <li>添加 <code>im.message.receive_v1</code>，申请收发消息权限并发布</li>
+              </ol>
+            </form>
+
+            <form class="integration-card" id="dingtalk-form">
+              <div class="integration-card-heading">
+                <div><span class="platform-mark">钉</span><div><h2>钉钉</h2><p>官方 Stream 长连接</p></div></div>
+                <span class="connection-badge" id="dingtalk-status">未启用</span>
+              </div>
+              <label class="toggle-option integration-toggle">
+                <input id="dingtalk-enabled" type="checkbox" />
+                <span class="toggle"></span>
+                <span><strong>启用钉钉机器人</strong><small>使用 Stream 模式，不配置 HTTP 回调</small></span>
+              </label>
+              <label class="field"><span>Client ID（AppKey）</span><input id="dingtalk-client-id" type="text" placeholder="ding…" autocomplete="off" /><small id="dingtalk-client-id-hint">钉钉开放平台 → 应用凭证</small></label>
+              <label class="field"><span>Client Secret（AppSecret）</span><input id="dingtalk-client-secret" type="password" placeholder="已配置时留空可保留" autocomplete="new-password" /><small id="dingtalk-client-secret-hint">Secret 不会通过 API 回显</small></label>
+              <p class="integration-status-message" id="dingtalk-status-message">尚未加载状态。</p>
+              <button class="save-button" type="submit">保存并连接</button>
+              <ol class="integration-steps">
+                <li>创建企业内部应用并添加“机器人”能力</li>
+                <li>机器人消息接收模式选择 Stream 模式</li>
+                <li>发布应用后，把机器人加入可信群或直接单聊</li>
+              </ol>
+            </form>
+          </section>
+          <footer class="page-footer">
+            <span>凭据保存在本地 <code>config/config.yaml</code>，接口只返回是否已配置</span>
+            <span>无需公网 IP、域名或端口转发</span>
+          </footer>
+        </div>
+
+        <div class="app-view" id="codex-view" hidden>
           <header class="topbar models-header">
             <div>
-              <p class="eyebrow">MODEL ROUTING</p>
-              <h1>管理关联模型，<br /><span>定义 Agent 执行顺序。</span></h1>
-            </div>
-            <div class="model-header-actions">
-              <button
-                class="icon-button"
-                id="add-model-config"
-                type="button"
-                aria-label="添加模型配置"
-              >
-                ＋
-              </button>
+              <p class="eyebrow">AGENT RUNTIME</p>
+              <h1>保存多套 Codex 配置，<br /><span>按任务切换模型与推理强度。</span></h1>
             </div>
           </header>
 
           <section class="model-management-layout">
-            <article class="model-config-panel">
+            <article class="model-config-panel agent-profile-panel">
               <div class="model-config-toolbar">
-                <div>
-                  <span class="step-index">01</span>
-                  <h2>关联模型 <em id="model-config-count">0</em></h2>
+                <div><span class="step-index">01</span><h2>Codex 配置方案</h2></div>
+                <div class="profile-form-actions">
+                  <button class="secondary-button" id="models-refresh" type="button">刷新模型列表</button>
+                  <button class="secondary-button" id="profile-new" type="button">新增配置</button>
                 </div>
-                <p>排列 Codex 与 Claude Code；从上到下依次执行，并可逐条测试。</p>
               </div>
+              <div class="agent-profile-layout">
+                <div class="agent-profile-list" id="profile-list"></div>
+                <form id="profile-form" class="codex-config-grid">
+                  <input id="profile-id" type="hidden" />
+                  <label class="field"><span>配置名称</span><input id="profile-name" type="text" maxlength="60" placeholder="例如：Codex 深度开发" required /></label>
+                  <label class="field"><span>模型</span><select id="profile-model"><option value="">登录 Codex 后刷新模型列表</option></select><small>与 Codex 登录后交互式 <code>/model</code> 的可选目录一致</small></label>
+                  <label class="field"><span>推理强度</span><select id="profile-reasoning"><option value="high">high</option></select><small>只显示当前模型支持的强度</small></label>
+                  <div class="profile-form-actions"><button class="save-button" type="submit">保存配置</button><button class="secondary-button" id="profile-delete" type="button">删除</button></div>
+                </form>
+              </div>
+              <p class="integration-status-message" id="model-catalog-message">登录后刷新模型目录。设为“当前”的配置用于 Web 任务；聊天任务遇到额度或鉴权失败时，会按列表顺序尝试其余配置。</p>
+            </article>
 
-              <form id="model-settings-form">
-                <div class="model-config-list" id="model-config-list"></div>
-                <div class="model-config-actions">
-                  <button class="secondary-button" id="add-model-config-bottom" type="button">
-                    ＋ 添加模型配置
-                  </button>
-                  <button class="save-button" type="submit">保存全部配置</button>
+            <article class="codex-auth-panel">
+              <div class="codex-auth-heading">
+                <div><span class="step-index">02</span><div><h2>Codex 登录</h2><p>支持 ChatGPT 设备码或 OpenAI API Key</p></div></div>
+                <span class="connection-badge" id="codex-auth-status">正在检查</span>
+              </div>
+              <div class="codex-auth-body">
+                <div class="codex-auth-summary">
+                  <div class="agent-auth-summary-title"><b>CODEX CLI</b><span class="connection-badge" id="codex-cli-status">检查中</span></div>
+                  <strong id="codex-auth-message">正在读取容器内登录状态…</strong>
+                  <span id="codex-auth-method">认证方式：未知</span>
+                  <div class="codex-auth-buttons">
+                    <button class="save-button" id="codex-device-login" type="button">ChatGPT 设备码登录</button>
+                    <button class="secondary-button" id="codex-cancel-login" type="button" hidden>取消登录</button>
+                  </div>
                 </div>
+                <div class="codex-device-details" id="codex-device-details" hidden>
+                  <div class="device-auth-step"><span>1</span><div><strong>打开验证页面</strong><a id="codex-verification-url" target="_blank" rel="noreferrer">等待地址…</a></div></div>
+                  <div class="device-auth-step"><span>2</span><div><strong>输入设备码</strong><div class="device-code-row"><code id="codex-user-code">等待设备码…</code><button class="text-button" id="codex-copy-code" type="button">复制</button></div></div></div>
+                  <pre id="codex-auth-output"></pre>
+                </div>
+                <form class="secret-section" id="codex-api-key-form">
+                  <div><h3>或使用 OpenAI API Key</h3><p>Key 通过 stdin 交给 <code>codex login --with-api-key</code>，不会写进 cpx 配置。</p></div>
+                  <label class="field"><span>OpenAI API Key</span><input id="codex-api-key" type="password" placeholder="sk-…" autocomplete="new-password" /></label>
+                  <button class="secondary-button" type="submit">验证并登录</button>
+                </form>
+              </div>
+            </article>
+
+            <article class="model-config-panel">
+              <div class="model-config-toolbar"><div><span class="step-index">03</span><h2>Codex 安全设置</h2></div><p>保存到 <code>CODEX_HOME/config.toml</code></p></div>
+              <form id="codex-config-form" class="codex-config-grid">
+                <label class="field"><span>审批策略</span><select id="codex-approval"><option value="untrusted">untrusted</option><option value="on-request">on-request</option><option value="never">never</option></select></label>
+                <label class="field"><span>沙箱模式</span><select id="codex-sandbox"><option value="read-only">read-only</option><option value="workspace-write">workspace-write</option><option value="danger-full-access">danger-full-access</option></select></label>
+                <label class="field"><span>网页搜索</span><select id="codex-web-search"><option value="cached">cached</option><option value="indexed">indexed</option><option value="live">live</option><option value="disabled">disabled</option></select></label>
+                <button class="save-button" type="submit">保存 Codex 配置</button>
               </form>
+              <section class="model-config-test codex-test-panel">
+                <div class="model-config-test-header"><div><strong>测试当前配置</strong><small id="active-profile-label">发起一次真实调用，不使用工具或修改文件。</small></div></div>
+                <div class="model-config-test-input"><textarea id="codex-test-prompt" rows="3" maxlength="4000" placeholder="例如：请用一句话介绍你自己"></textarea><button class="save-button" id="codex-test-submit" type="button">发送并测试</button></div>
+                <div class="model-test-terminal" id="codex-test-terminal" aria-live="polite"><p class="muted">登录并保存配置后，可在这里验证。</p></div>
+              </section>
             </article>
 
             <aside class="model-help-panel">
-              <span class="step-index">02</span>
-              <h2>执行规则</h2>
+              <span class="step-index">04</span>
+              <h2>安全提示</h2>
               <ol>
-                <li><strong>第一条</strong><span>作为任务默认使用的模型配置。</span></li>
-                <li><strong>顺序回退</strong><span>仅在额度耗尽或鉴权失败时继续下一条。</span></li>
-                <li>
-                  <strong>CLI 配置</strong
-                  ><span>模型、服务地址与凭据均由本机 Codex 或 Claude Code 管理。</span>
-                </li>
-                <li>
-                  <strong>配置测试</strong
-                  ><span>在对应关联项内验证 CLI 登录和模型配置是否可用。</span>
-                </li>
+                 <li><strong>后台任务</strong><span>无人值守运行建议使用 <code>workspace-write</code> 与 <code>never</code>。</span></li>
+                <li><strong>高风险</strong><span><code>danger-full-access</code> 会扩大 Agent 文件访问范围。</span></li>
+                <li><strong>持久化</strong><span>登录资料保存在 NAS 的 <code>data/codex</code>。</span></li>
               </ol>
               <div class="security-note">
-                <strong>配置位置</strong>
-                <p>
-                  如需切换模型、中转服务或账号，请直接修改对应 CLI
-                  配置；控制台不会保存或覆盖这些值。
-                </p>
+                <strong>控制台边界</strong>
+                <p>能够访问本页面的人可以替换 Agent 身份并启动代码任务，请只在可信内网中开放。</p>
               </div>
             </aside>
           </section>
 
           <footer class="page-footer">
-            <span>模型配置保存在 <code>data/console-settings.json</code></span>
-            <button class="text-button" id="reset-model-configs" type="button">恢复默认顺序</button>
+            <span>Codex 认证目录通过 Compose 持久化</span>
+            <a href="https://developers.openai.com/codex/auth" target="_blank" rel="noreferrer">Codex 官方认证说明 ↗</a>
           </footer>
         </div>
       </main>

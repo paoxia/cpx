@@ -5,18 +5,17 @@ server:
   port: 3000
   host: 0.0.0.0
 
-# 钉钉机器人配置
+# 钉钉 Stream 长连接机器人配置
 dingtalk:
-  webhookUrl: ""            # https://oapi.dingtalk.com/robot/send?access_token=xxx
-  secret: ""                # SECxxx 加签密钥
-  enableVerify: true        # 是否校验签名
+  enabled: false
+  clientId: ""             # Client ID / AppKey
+  clientSecret: ""         # Client Secret / AppSecret
 
-# 飞书机器人配置
+# 飞书 WebSocket 长连接机器人配置
 feishu:
-  webhookUrl: ""            # https://open.feishu.cn/open-apis/bot/v2/hook/xxx
-  appId: ""
-  appSecret: ""
-  enableVerify: true
+  enabled: false
+  appId: ""                # cli_ 开头的 App ID
+  appSecret: ""            # 应用 App Secret
 
 # GitHub 配置
 github:

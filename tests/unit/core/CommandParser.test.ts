@@ -51,6 +51,19 @@ describe('CommandParser Coding Agent 命令', () => {
       args: { id: 'abcdef12' },
     });
   });
+
+  it('应保留消息来源会话路由但不改变用户身份', () => {
+    const command = parser.parse('/agent 版本', {
+      userId: 'user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-1:user-1',
+    });
+    expect(command).toMatchObject({
+      userId: 'user-1',
+      replyRouteId: 'chat-1:user-1',
+    });
+  });
 });
 
 function parse(text: string) {

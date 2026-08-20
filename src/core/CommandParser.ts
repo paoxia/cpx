@@ -6,6 +6,7 @@ export interface ParsedUserInfo {
   userId: string;
   userName: string;
   source: CommandSource;
+  replyRouteId?: string;
 }
 
 /**
@@ -41,6 +42,7 @@ export class CommandParser {
       source: userInfo.source,
       userId: userInfo.userId,
       userName: userInfo.userName,
+      ...(userInfo.replyRouteId ? { replyRouteId: userInfo.replyRouteId } : {}),
       rawText,
       name,
       args,

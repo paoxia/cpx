@@ -1,7 +1,7 @@
 /**
  * Agent 子进程错误分类。
  *
- * 当 codex / claude CLI 退出码非 0 或启动失败时,AgentTaskManager
+ * 当 codex CLI 退出码非 0 或启动失败时，AgentTaskManager
  * 通过 classifyAgentError 判定错误种类,以决定是否触发 fallback:
  *  - rate_limit / auth:额度耗尽或鉴权失败,可切换到下一个 Agent
  *  - crash / unknown:Agent 自身崩溃或 CLI 未安装,不切换

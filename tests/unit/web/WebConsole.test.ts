@@ -7,6 +7,7 @@ import { Logger } from '../../../src/utils/Logger';
 import { GitHubError } from '../../../src/utils/errors';
 import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
 import type { AgentAuthService } from '../../../src/web/AgentAuthManager';
+import { CodexConfigManager } from '../../../src/web/CodexConfigManager';
 import type {
   ModelConfigurationTestRunner,
   ModelTestConfiguration,
@@ -57,9 +58,12 @@ describe('WebConsole', () => {
     });
     const html = (response.body as Buffer).toString('utf8');
     expect(html).toContain('id="github-tab"');
-    expect(html).toContain('id="models-tab"');
-    expect(html).toContain('关联模型');
-    expect(html).not.toContain('id="model-test-dialog"');
+    expect(html).toContain('id="integrations-tab"');
+    expect(html).toContain('id="codex-tab"');
+    expect(html).toContain('WebSocket 长连接');
+    expect(html).toContain('Agent 设置');
+    expect(html).not.toContain('Claude Code');
+    expect(html).toContain('Codex 配置方案');
     expect(html).toContain('id="github-create-token"');
     expect(html).toContain('id="repository-picker"');
     expect(html).toContain('id="branch-picker"');
@@ -67,16 +71,15 @@ describe('WebConsole', () => {
     expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');
-    expect(html).not.toContain('id="codex-auth-badge"');
+    expect(html).toContain('id="codex-auth-status"');
 
     const scriptResponse = await server.handler('GET', '/app.js')(Buffer.alloc(0), {}, {});
     const script = (scriptResponse.body as Buffer).toString('utf8');
-    expect(script).toContain('data-config-action="test"');
-    expect(script).toContain('data-model-test-prompt');
-    expect(script).toContain('CLI 已配置模型');
-    expect(script).not.toContain('data-field="model"');
-    expect(script).not.toContain('data-field="baseUrl"');
-    expect(script).not.toContain('data-field="apiKey"');
+    expect(script).toContain('/api/console/integrations');
+    expect(script).toContain('/api/console/codex-config');
+    expect(script).toContain('/api/console/agent-auth/api-key');
+    expect(script).toContain('/api/console/codex-models');
+    expect(script).not.toContain('/webhook/');
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
@@ -96,15 +99,13 @@ describe('WebConsole', () => {
     );
   });
 
-  it('应只按顺序持久化 Agent 关联项并丢弃旧模型、地址和密钥字段', async () => {
+  it('应持久化多套 Agent 模型配置并丢弃旧地址和密钥字段', async () => {
     const getSettings = server.handler('GET', '/api/console/settings');
     const updateSettings = server.handler('POST', '/api/console/settings');
     expect((await getSettings(Buffer.alloc(0), {}, {})).body).toMatchObject({
-      version: 4,
-      modelConfigs: [
-        { provider: 'codex' },
-        { provider: 'claude' },
-      ],
+      version: 5,
+      activeConfigurationId: 'default-codex',
+      modelConfigs: [{ provider: 'codex' }],
     });
 
     const response = await updateSettings(
@@ -112,11 +113,11 @@ describe('WebConsole', () => {
         JSON.stringify({
           modelConfigs: [
             {
-              id: 'claude-opus',
-              provider: 'claude',
-              model: 'opus',
+              id: 'codex-deep',
+              provider: 'codex',
+              model: 'gpt-deep',
               baseUrl: 'https://gateway.example.com/',
-              apiKey: 'secret-claude',
+              apiKey: 'secret-codex',
             },
             { id: 'codex-main', provider: 'codex', model: 'gpt-5.1-codex' },
           ],
@@ -127,17 +128,20 @@ describe('WebConsole', () => {
     );
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
-      version: 4,
+      version: 5,
+      activeConfigurationId: 'codex-deep',
       modelConfigs: [
         {
-          id: 'claude-opus',
-          provider: 'claude',
+          id: 'codex-deep',
+          provider: 'codex',
+          model: 'gpt-deep',
+          reasoningEffort: 'high',
         },
         { id: 'codex-main', provider: 'codex' },
       ],
     });
     expect(response.headers).toEqual({ 'Cache-Control': 'no-store' });
-    expect(JSON.stringify(response.body)).not.toContain('secret-claude');
+    expect(JSON.stringify(response.body)).not.toContain('secret-codex');
 
     const settingsPath = join(TMP_DIR, 'console-settings.json');
     expect(existsSync(settingsPath)).toBe(true);
@@ -145,14 +149,14 @@ describe('WebConsole', () => {
       version: number;
       modelConfigs: Array<{ id: string; provider: string }>;
     };
-    expect(stored.version).toBe(4);
+    expect(stored.version).toBe(5);
     expect(stored.modelConfigs.map((configuration) => configuration.id)).toEqual([
-      'claude-opus',
+      'codex-deep',
       'codex-main',
     ]);
-    expect(JSON.stringify(stored)).not.toContain('secret-claude');
+    expect(JSON.stringify(stored)).not.toContain('secret-codex');
     expect(JSON.stringify(stored)).not.toContain('gateway.example.com');
-    expect(JSON.stringify(stored)).not.toContain('"model"');
+    expect(JSON.stringify(stored)).toContain('gpt-deep');
   });
 
   it('应使用当前 Agent 关联项测试连通性且只依赖 CLI 配置', async () => {
@@ -165,8 +169,8 @@ describe('WebConsole', () => {
           success: true,
           provider: configuration.provider,
           model: configuration.model,
-          message: 'Claude Code 已成功响应，模型配置可用。',
-          response: '你好，我是 Claude。',
+          message: 'Codex 已成功响应，模型配置可用。',
+          response: '你好，我是 Codex。',
           durationMs: 123,
         };
       },
@@ -183,9 +187,9 @@ describe('WebConsole', () => {
         JSON.stringify({
           modelConfigs: [
             {
-              id: 'claude-sonnet',
-              provider: 'claude',
-              model: 'sonnet',
+              id: 'codex-main',
+              provider: 'codex',
+              model: 'gpt-test',
               baseUrl: 'https://gateway.example.com',
               apiKey: 'secret-key',
             },
@@ -199,9 +203,9 @@ describe('WebConsole', () => {
     const response = await server.handler('POST', '/api/console/model-test')(
       Buffer.from(
         JSON.stringify({
-          id: 'claude-sonnet',
-          provider: 'claude',
-          model: 'sonnet',
+          id: 'codex-main',
+          provider: 'codex',
+          model: 'gpt-test',
           baseUrl: 'https://gateway.example.com',
           prompt: '请介绍一下自己',
         }),
@@ -214,15 +218,17 @@ describe('WebConsole', () => {
       status: 200,
       body: {
         success: true,
-        provider: 'claude',
-        response: '你好，我是 Claude。',
+        provider: 'codex',
+        response: '你好，我是 Codex。',
         durationMs: 123,
       },
       headers: { 'Cache-Control': 'no-store' },
     });
     expect(tested).toEqual([
       {
-        provider: 'claude',
+        provider: 'codex',
+        model: 'gpt-test',
+        reasoningEffort: 'high',
         prompt: '请介绍一下自己',
       },
     ]);
@@ -273,7 +279,9 @@ describe('WebConsole', () => {
       {},
     );
     expect(response).toMatchObject({ status: 200, body: { success: false } });
-    expect(tested).toEqual([{ provider: 'codex' }]);
+    expect(tested).toEqual([
+      { provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' },
+    ]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
@@ -291,6 +299,78 @@ describe('WebConsole', () => {
       {},
     );
     expect(taskResponse).toMatchObject({ status: 400 });
+  });
+
+  it('应保存 Codex 运行配置并通过消息平台接口隐藏 Secret', async () => {
+    await webConsole.stop();
+    server = new FakeHttpServer();
+    const savedPlatforms: string[] = [];
+    const publicConfiguration = {
+      dingtalk: {
+        platform: 'dingtalk' as const,
+        displayName: '钉钉',
+        enabled: true,
+        configured: true,
+        state: 'connected' as const,
+        message: '已连接',
+        hasClientId: true,
+        hasClientSecret: true,
+      },
+      feishu: {
+        platform: 'feishu' as const,
+        displayName: '飞书',
+        enabled: false,
+        configured: false,
+        state: 'disabled' as const,
+        message: '未启用',
+        hasAppId: false,
+        hasAppSecret: false,
+      },
+    };
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        codexConfig: new CodexConfigManager(join(TMP_DIR, 'codex')),
+        getMessagingConfiguration: () => publicConfiguration,
+        saveMessagingConfiguration: async (platform, config) => {
+          savedPlatforms.push(`${platform}:${config.enabled}:${config.clientId}:${config.clientSecret}`);
+          return publicConfiguration;
+        },
+      },
+    );
+
+    const codex = await server.handler('POST', '/api/console/codex-config')(
+      Buffer.from(
+        JSON.stringify({
+          model: 'gpt-5.2-codex',
+          modelReasoningEffort: 'high',
+          approvalPolicy: 'never',
+          sandboxMode: 'workspace-write',
+          webSearch: 'cached',
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(codex).toMatchObject({ status: 200, body: { model: 'gpt-5.2-codex' } });
+
+    const integration = await server.handler('POST', '/api/console/integrations')(
+      Buffer.from(
+        JSON.stringify({
+          platform: 'dingtalk',
+          enabled: true,
+          clientId: 'ding-id',
+          clientSecret: 'ding-secret',
+        }),
+      ),
+      {},
+      {},
+    );
+    expect(integration).toMatchObject({ status: 200, body: publicConfiguration });
+    expect(JSON.stringify(integration.body)).not.toContain('ding-secret');
+    expect(savedPlatforms).toEqual(['dingtalk:true:ding-id:ding-secret']);
   });
 
   it('应返回空任务列表以及明确的查询和取消错误', async () => {
@@ -327,7 +407,7 @@ describe('WebConsole', () => {
         JSON.stringify({
           modelConfigs: [
             { id: 'same', provider: 'codex' },
-            { id: 'same', provider: 'claude' },
+            { id: 'same', provider: 'codex' },
           ],
         }),
       ),
@@ -337,7 +417,7 @@ describe('WebConsole', () => {
     expect(duplicate).toMatchObject({ status: 400 });
   });
 
-  it('应将 v3 配置迁移为只含 Agent 的 v4 配置并删除旧密钥', async () => {
+  it('应将 v3 配置迁移为可切换的 v5 配置并删除旧密钥与地址', async () => {
     await webConsole.stop();
     const settingsPath = join(TMP_DIR, 'console-settings.json');
     writeFileSync(
@@ -347,10 +427,10 @@ describe('WebConsole', () => {
         modelConfigs: [
           {
             id: 'association',
-            provider: 'claude',
-            model: 'sonnet',
+            provider: 'codex',
+            model: 'gpt-old',
             baseUrl: 'https://gateway.example.com',
-            apiKey: 'claude-secret',
+            apiKey: 'codex-secret',
           },
         ],
       }),
@@ -364,13 +444,22 @@ describe('WebConsole', () => {
 
     const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
     expect(response.body).toEqual({
-      version: 4,
-      modelConfigs: [{ id: 'association', provider: 'claude' }],
+      version: 5,
+      activeConfigurationId: 'association',
+      modelConfigs: [
+        {
+          id: 'association',
+          name: 'Codex 配置 1',
+          provider: 'codex',
+          model: 'gpt-old',
+          reasoningEffort: 'high',
+        },
+      ],
     });
     const persisted = readFileSync(settingsPath, 'utf8');
-    expect(persisted).not.toContain('claude-secret');
+    expect(persisted).not.toContain('codex-secret');
     expect(persisted).not.toContain('gateway.example.com');
-    expect(persisted).not.toContain('"model"');
+    expect(persisted).toContain('gpt-old');
   });
 
   it('应将旧版固定模型设置迁移为有序 Agent 配置且清除模型覆盖', async () => {
@@ -378,11 +467,9 @@ describe('WebConsole', () => {
     writeFileSync(
       join(TMP_DIR, 'console-settings.json'),
       JSON.stringify({
-        defaultProvider: 'claude',
+        defaultProvider: 'legacy-provider',
         codexModel: 'gpt-5.1-codex',
-        claudeModel: 'opus',
-        codebuddyModel: 'cb-pro',
-        fallbackOrder: ['codex', 'claude', 'codebuddy'],
+        fallbackOrder: ['codex', 'legacy-provider'],
       }),
     );
     server = new FakeHttpServer();
@@ -394,13 +481,10 @@ describe('WebConsole', () => {
 
     const response = await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {});
     expect(response.body).toMatchObject({
-      version: 4,
-      modelConfigs: [
-        { provider: 'claude' },
-        { provider: 'codex' },
-      ],
+      version: 5,
+      modelConfigs: [{ provider: 'codex' }],
     });
-    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 4');
+    expect(readFileSync(join(TMP_DIR, 'console-settings.json'), 'utf8')).toContain('"version": 5');
   });
 
   it('应验证 GitHub Token、分页读取全部仓库并在成功后持久化', async () => {
@@ -644,9 +728,15 @@ describe('WebConsole', () => {
           message: '请在浏览器完成设备授权。',
         };
       },
-      submitInput: () => {
-        throw new Error('Codex 不接受输入');
-      },
+      loginWithApiKey: async () => ({
+        provider: 'codex',
+        displayName: 'Codex',
+        loginMode: 'device-code',
+        state: 'authenticated',
+        authenticated: true,
+        cliAvailable: true,
+        authMethod: 'API Key',
+      }),
       cancelLogin: () => {
         if (!waiting) return false;
         waiting = false;
@@ -660,7 +750,24 @@ describe('WebConsole', () => {
       server as unknown as import('../../../src/core/HttpServer').HttpServer,
       join(TMP_DIR, 'agent.db'),
       new Logger('error'),
-      { agentAuth: { codex: codexAuth } },
+      {
+        agentAuth: codexAuth,
+        codexModels: {
+          list: async () => ({
+            source: 'codex-cli',
+            fetchedAt: 1,
+            models: [
+              {
+                id: 'gpt-test',
+                displayName: 'GPT Test',
+                description: 'test model',
+                defaultReasoningEffort: 'medium',
+                supportedReasoningEfforts: ['low', 'medium', 'high'],
+              },
+            ],
+          }),
+        },
+      },
     );
 
     const before = await server.handler('GET', '/api/console/agent-auth')(
@@ -669,6 +776,16 @@ describe('WebConsole', () => {
       { provider: 'codex' },
     );
     expect(before.body).toMatchObject({ authenticated: true, authMethod: 'chatgpt' });
+
+    const models = await server.handler('GET', '/api/console/codex-models')(
+      Buffer.alloc(0),
+      {},
+      {},
+    );
+    expect(models).toMatchObject({
+      status: 200,
+      body: { source: 'codex-cli', models: [{ id: 'gpt-test' }] },
+    });
 
     const started = await server.handler('POST', '/api/console/agent-auth/login')(
       Buffer.from(JSON.stringify({ provider: 'codex' })),

@@ -5,13 +5,13 @@
 ## 已交付基线
 
 - TypeScript CLI 与程序化 `AgentSystem` API。
-- HTTP 健康检查、测试命令端点、钉钉和飞书文本 Webhook。
+- HTTP 健康检查、测试命令端点、钉钉 Stream 和飞书 WebSocket 文本消息。
 - 中英文命令解析和统一结果格式化。
 - GitHub 文件读取、创建/修改文件并创建 Pull Request。
 - Skill 安装底层能力、动态加载、执行超时和能力注入。
 - MCP stdio、WebSocket、HTTP 传输和 JSON-RPC 调用。
 - 分支保护、操作黑名单、危险操作确认和 SQLite 审计。
-- Web 开发控制台、本机 Codex/Claude Code 任务、有序模型回退、GitHub PAT 创建引导与凭据接入、隔离 Git 工作区、状态日志和可选 PR 发布。
+- Web 开发控制台、本机 Codex 任务、账号模型目录、多套配置与有序回退、GitHub PAT 创建引导与凭据接入、隔离 Git 工作区、状态日志和可选 PR 发布。
 - 单元测试与跨组件命令流测试。
 
 ## 下一步候选

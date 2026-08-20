@@ -11,6 +11,8 @@ export interface Command {
   source: CommandSource;
   userId: string;
   userName: string;
+  /** 消息平台会话路由，不作为用户身份或权限标识。 */
+  replyRouteId?: string;
   rawText: string;
   name: string;
   args: Record<string, unknown>;
@@ -255,16 +257,15 @@ export interface ServerConfig {
 }
 
 export interface DingTalkConfig {
-  webhookUrl?: string;
-  secret?: string;
-  enableVerify: boolean;
+  enabled: boolean;
+  clientId?: string;
+  clientSecret?: string;
 }
 
 export interface FeishuConfig {
-  webhookUrl?: string;
+  enabled: boolean;
   appId?: string;
   appSecret?: string;
-  enableVerify: boolean;
 }
 
 export interface GitHubConfig {

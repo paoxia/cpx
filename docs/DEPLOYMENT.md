@@ -17,7 +17,7 @@
 
 > cpx 的 Web 控制台、`/command` 和 `/api/console/*` 当前没有通用身份认证，却可以启动 Agent、修改仓库并推送分支。不要把 3000 端口直接映射到公网，也不要在路由器上为它配置端口转发。
 
-建议只在家庭或办公内网访问。确需远程管理时，应在可信反向代理后增加 TLS、登录认证和访问限制。钉钉或飞书只需要公网回调时，仅代理对应 webhook 路径，不要同时公开控制台和 `/api/console/*`。
+建议只在家庭或办公内网访问。确需远程管理时，应在可信反向代理后增加 TLS、登录认证和访问限制。钉钉和飞书均使用由容器主动发起的长连接，不需要对公网开放任何回调路径。
 
 ## 二、准备工作
 
@@ -58,7 +58,7 @@ git archive --format=zip --output=cpx-source.zip dev
 1. 创建持久化目录 `<CPX_DIR>`；
 2. 上传源码 ZIP 并解压到该目录；
 3. 确认 `Dockerfile`、`docker-compose.yml`、`package.json`、`src/` 和 `public/` 位于同一层；
-4. 创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs` 子目录；
+4. 创建 `data/codex`、`data/workspaces`、`config` 和 `logs` 子目录；
 5. 将该目录访问权限限制为管理员或可信用户。
 
 源码包本身已经包含 `config/config.example.yaml` 和 `config/permissions.example.yaml`。不要删除整个 `config` 目录。
@@ -83,7 +83,7 @@ git archive --format=zip --output=cpx-source.zip dev
 不需要在极空间或容器内手工安装 Codex。镜像构建时，项目 `Dockerfile` 会执行：
 
 ```dockerfile
-RUN npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest
+RUN npm install -g @openai/codex@latest
 ```
 
 因此源码 Compose 构建成功后，`codex` 命令已经包含在容器镜像中；开发机生成的离线镜像包也包含同一套 CLI。可以在极空间构建日志中找到这一步，确认 npm 安装完成。如果这一步失败，通常是 NAS 无法访问 npm 或相关下载源，应先检查构建日志和 NAS 出站网络，或者改用开发机构建的离线镜像。
@@ -92,19 +92,19 @@ RUN npm install -g @openai/codex@latest @anthropic-ai/claude-code@latest
 
 ### 5. 环境变量
 
-默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、Claude Code、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
+默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
 
-推荐启动后通过 cpx Web 控制台连接 GitHub，并完成 Codex 或 Claude Code 登录。如果确实要通过环境变量提供密钥，可在极空间 Compose 项目的环境变量界面填写对应变量，再保存并重新创建容器：
+推荐启动后通过 cpx Web 控制台连接 GitHub，并完成 Codex 登录。如果确实要通过环境变量提供密钥，可在极空间 Compose 项目的环境变量界面填写对应变量，再保存并重新创建容器：
 
 ```dotenv
 CODEX_API_KEY=
-ANTHROPIC_API_KEY=
 GH_TOKEN=
 AGENT_GITHUB_TOKEN=
 AGENT_GITHUB_DEFAULT_REPO=
-AGENT_DINGTALK_WEBHOOK_URL=
-AGENT_DINGTALK_SECRET=
-AGENT_FEISHU_WEBHOOK_URL=
+AGENT_DINGTALK_ENABLED=true
+AGENT_DINGTALK_CLIENT_ID=
+AGENT_DINGTALK_CLIENT_SECRET=
+AGENT_FEISHU_ENABLED=true
 AGENT_FEISHU_APP_ID=
 AGENT_FEISHU_APP_SECRET=
 AGENT_LOGGING_LEVEL=info
@@ -114,7 +114,7 @@ NPM_REGISTRY=https://registry.npmjs.org
 
 空值应保持为空，不要填写 `sk-...`、`ghp_xxx` 等示例占位符。环境变量来源的 GitHub Token 不能在 cpx 页面中替换；更新时需要在 Compose 项目中修改变量并重新创建容器。
 
-`APT_MIRROR` 和 `NPM_REGISTRY` 只在源码镜像构建阶段使用。它们默认分别使用 Debian 和 npm 官方源；国内开发或构建环境可分别设置为 `http://mirrors.aliyun.com` 和 `https://registry.npmmirror.com`。APT 仓库元数据和软件包由 Debian 签名验证；使用 HTTP 可避免基础镜像尚未安装 CA 证书时的循环依赖。`NPM_REGISTRY` 会同时用于项目依赖、Codex CLI 和 Claude Code CLI 的 npm 包下载。两个变量都不会写入最终容器环境，也不能代理运行时模型请求。
+`APT_MIRROR` 和 `NPM_REGISTRY` 只在源码镜像构建阶段使用。它们默认分别使用 Debian 和 npm 官方源；国内开发或构建环境可分别设置为 `http://mirrors.aliyun.com` 和 `https://registry.npmmirror.com`。APT 仓库元数据和软件包由 Debian 签名验证；使用 HTTP 可避免基础镜像尚未安装 CA 证书时的循环依赖。`NPM_REGISTRY` 会同时用于项目依赖和 Codex CLI 的 npm 包下载。两个变量都不会写入最终容器环境，也不能代理运行时模型请求。
 
 #### 出站代理
 
@@ -229,7 +229,7 @@ scripts/docker-build.sh latest linux/arm64
 1. 通过文件管理器把 `cpx-latest.tar` 和 `docker-compose.image.yml` 上传到持久化目录；
 2. 打开“Docker → 镜像”，选择本地镜像导入，导入 `cpx-latest.tar`；
 3. 确认镜像列表中出现 `cpx:latest`；
-4. 在文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
+4. 在文件管理器中创建 `data/codex`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
 5. 打开“Docker → Compose → 新建项目”；
 6. 项目存储位置选择该持久化目录；
 7. 导入或粘贴 `docker-compose.image.yml` 的内容并创建项目。
@@ -283,36 +283,28 @@ http://<NAS-IP>:3000
 
 NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，不需要为 NAS 宿主机配置额外的仓库凭据。
 
-## 七、连接 Codex 或 Claude Code
+## 七、连接 Codex 并选择模型
 
-进入控制台“模型设置”。每一项代表一个 Agent 及其执行顺序，账号、模型和网关设置来自容器内对应的官方 CLI。
+进入控制台“Agent 设置”。每一项代表一套 Codex 模型与推理强度配置。
 
 ### Codex
 
-1. 在 Codex 项点击连接或登录；
+1. 在 Codex 区域点击“ChatGPT 设备码登录”，或输入 OpenAI API Key；
 2. 等待页面显示验证地址和一次性设备码；
 3. 在可信浏览器打开验证地址并完成设备码登录；
 4. 返回控制台，等待状态显示“已连接”；
-5. 输入一条简短内容并执行测试。
+5. 点击“刷新模型列表”；页面会读取当前账号在 Codex 交互式 `/model` 中使用的同一模型目录；
+6. 选择模型及该模型支持的推理强度，保存为一套配置；
+7. 输入一条简短内容并执行测试。
 
 登录资料保存在 `<CPX_DIR>/data/codex`，容器重建后继续保留。
-
-### Claude Code
-
-1. 在 Claude Code 项点击连接或登录；
-2. 在可信浏览器打开页面显示的官方授权地址；
-3. 如果页面要求回填授权码或完整 callback 地址，将它粘贴回控制台；
-4. 等待状态显示“已连接”；
-5. 执行一次简短测试。
-
-登录资料保存在 `<CPX_DIR>/data/claude`。授权码和 callback 地址都属于敏感信息，不要放入日志或截图。
 
 ## 八、运行第一条验证任务
 
 不要把首次验证直接指向重要仓库。建议准备一个测试仓库：
 
 1. 在“GitHub”页确认测试仓库可见；
-2. 在“模型设置”中确认至少一个 Agent 测试成功；
+2. 在“Agent 设置”中确认至少一套 Codex 配置测试成功；
 3. 创建任务并选择明确的基础分支；
 4. 首次不要勾选“创建 Pull Request”；
 5. 输入“读取 README 并总结启动方式，不修改文件”等无破坏性任务；
@@ -372,8 +364,8 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 
 - `data/agent.db` 是 SQLite 数据库；
 - `data/workspaces/` 保存任务克隆和未提交改动；
-- `data/console-settings.json` 保存 Agent 关联和执行顺序；
-- `data/codex/`、`data/claude/` 保存 CLI 登录资料；
+- `data/console-settings.json` 保存 Codex 配置和当前选择；
+- `data/codex/` 保存 Codex CLI 登录资料；
 - `data/mihomo/` 在启用可选 Mihomo Compose 时保存代理配置与运行数据；
 - `config/config.yaml` 可能保存通过 Web 控制台验证的 GitHub Token。
 
@@ -387,13 +379,12 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 
 ## 十二、钉钉和飞书机器人
 
-Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或飞书事件回调由平台服务器发起，NAS 需要平台可访问的 HTTPS 地址。
+Web 控制台在内网部署后即可使用，不需要公网入口。进入“消息平台”页填写应用凭据并启用：
 
-- 钉钉回调路径：`/webhook/dingtalk`；
-- 飞书回调路径：`/webhook/feishu`；
-- 配置钉钉加签 Secret 或飞书 App Secret，并保持签名校验开启；
-- 反向代理只开放需要的 webhook 路径；
-- 不要通过同一个公开入口暴露 `/`、`/command` 或 `/api/console/*`。
+- 钉钉在开放平台创建企业内部应用和机器人，消息接收模式选择 Stream；填写 Client ID（AppKey）和 Client Secret（AppSecret）；
+- 飞书在开放平台创建企业自建应用并启用机器人，在事件订阅中选择“使用长连接接收事件”；填写 App ID 和 App Secret；
+- 两个平台均由 cpx 主动建立 WebSocket/Stream 连接，不配置 HTTP 回调地址，也不配置固定群 Webhook；
+- 保存后在页面确认“已连接”，再向机器人发消息。回复会发送到产生该消息的会话。
 
 命令语法见 [README.md](../README.md) 的“聊天命令”小节。
 
@@ -413,11 +404,11 @@ Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或�
 | 端口已被占用 | 在 Compose 编辑器中修改映射左侧，例如 `13000:3000`，再重新创建项目 |
 | GitHub 页面验证失败 | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限 |
 | 私有仓库返回 403 | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址 |
-| Agent 显示未连接 | 在模型设置中重新登录并测试，检查 `data/codex` 或 `data/claude` 挂载是否存在 |
+| Agent 显示未连接 | 在 Agent 设置中重新登录并测试，检查 `data/codex` 挂载是否存在 |
 | Agent 返回 401 | 检查 Compose 环境变量中是否存在无效占位值，并重新完成官方登录 |
 | `cpx-mihomo` 不断重启 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 可被 Mihomo 解析且 `mixed-port` 为 7890 |
 | Mihomo 正常但 Agent 请求超时 | 检查代理组选择、最终匹配规则、节点状态，以及 cpx 使用的代理地址是否为 `http://mihomo:7890` |
 | 更新后仍运行旧版本 | 在 Compose 项目详情确认执行了重新构建或重新创建，并检查当前容器镜像标识 |
-| 重建后登录丢失 | 检查 `data/codex` 和 `data/claude` 是否仍挂载到原来的项目存储目录 |
+| 重建后登录丢失 | 检查 `data/codex` 是否仍挂载到原来的项目存储目录 |
 
-需要反馈问题时，从极空间界面导出或复制 Compose 项目状态、容器健康状态和最近日志。分享前删除 Token、Webhook 地址、授权 callback、仓库敏感内容和其他凭据。
+需要反馈问题时，从极空间界面导出或复制 Compose 项目状态、容器健康状态和最近日志。分享前删除 Token、应用 Secret、仓库敏感内容和其他凭据。

@@ -12,14 +12,24 @@ import {
   lastLine,
 } from './errorClassifier';
 
-export type CodingAgentProvider = 'codex' | 'claude';
+export type CodingAgentProvider = 'codex';
+export type AgentReasoningEffort =
+  | 'minimal'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'xhigh'
+  | 'max'
+  | 'ultra';
 export type AgentTaskStatus =
   'queued' | 'preparing' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentModelConfiguration {
   id: string;
+  name?: string;
   provider: CodingAgentProvider;
   model?: string;
+  reasoningEffort?: AgentReasoningEffort;
   baseUrl?: string;
   apiKey?: string;
 }
@@ -89,7 +99,6 @@ export interface AgentTask {
 
 export interface AgentRuntimeSecrets {
   openaiApiKey?: string;
-  anthropicApiKey?: string;
   githubToken?: string;
 }
 
@@ -98,7 +107,7 @@ const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 
 /**
- * 为 Codex/Claude Code 准备隔离工作区并管理非交互任务生命周期。
+ * 为 Codex 准备隔离工作区并管理非交互任务生命周期。
  * 任务保存在内存中；工作区和 Git 历史保存在 workspaceRoot 下。
  */
 export class AgentTaskManager {
@@ -400,12 +409,13 @@ export class AgentTaskManager {
     const prompt = buildPrompt(task.prompt);
     const env: NodeJS.ProcessEnv = { ...process.env };
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
-    const legacyApiKey = {
-      codex: this.secrets.openaiApiKey,
-      claude: this.secrets.anthropicApiKey,
-    }[provider];
+    const legacyApiKey = this.secrets.openaiApiKey;
     adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
-    const args = adapter.buildArgs(configuration.model, configuration.baseUrl);
+    const args = adapter.buildArgs(
+      configuration.model,
+      configuration.baseUrl,
+      configuration.reasoningEffort,
+    );
     await this.runProcess(
       task,
       adapter.command,
@@ -749,10 +759,17 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
         throw new Error('API Key 格式无效');
       }
       const baseUrl = normalizeBaseUrl(configuration.baseUrl);
+      const name = configuration.name?.trim() || undefined;
+      if (name && (name.length > 60 || /[\r\n\0]/.test(name))) {
+        throw new Error('配置名称格式无效');
+      }
+      const reasoningEffort = normalizeReasoningEffort(configuration.reasoningEffort);
       return {
         id,
+        ...(name ? { name } : {}),
         provider: configuration.provider,
         model,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         apiKey,
       };
@@ -769,6 +786,25 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
     provider,
     model,
   }));
+}
+
+function normalizeReasoningEffort(
+  value?: AgentReasoningEffort,
+): AgentReasoningEffort | undefined {
+  if (!value) return undefined;
+  const supported: AgentReasoningEffort[] = [
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+    'ultra',
+  ];
+  if (!supported.includes(value)) {
+    throw new Error('Codex 推理强度无效');
+  }
+  return value;
 }
 
 function normalizeBaseUrl(input: string | undefined): string | undefined {

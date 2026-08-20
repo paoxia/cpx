@@ -10,10 +10,9 @@ import { DatabaseService } from '../storage/Database';
 import { PermissionManager } from '../permissions/PermissionManager';
 import { PendingConfirmationStore } from '../permissions/PendingConfirmationStore';
 import { AuditLogger } from '../permissions/AuditLogger';
-import { DingTalkWebhook } from '../integrations/dingtalk/DingTalkWebhook';
-import { DingTalkClient } from '../integrations/dingtalk/DingTalkClient';
-import { FeishuWebhook } from '../integrations/feishu/FeishuWebhook';
-import { FeishuClient } from '../integrations/feishu/FeishuClient';
+import {
+  MessagingIntegrationManager,
+} from '../integrations/MessagingIntegrationManager';
 import { GitHubClient } from '../github/GitHubClient';
 import { GitHubService } from '../github/GitHubService';
 import { SkillInstaller } from '../skills/SkillInstaller';
@@ -31,6 +30,7 @@ interface MessagingTaskOrigin {
   source: CommandSource;
   userId: string;
   commandId: string;
+  replyRouteId?: string;
 }
 
 /**
@@ -49,10 +49,7 @@ export class AgentSystem {
   private permissionManager: PermissionManager;
   private confirmationStore: PendingConfirmationStore;
   private auditLogger: AuditLogger;
-  private dingTalkWebhook: DingTalkWebhook;
-  private dingTalkClient: DingTalkClient;
-  private feishuWebhook: FeishuWebhook;
-  private feishuClient: FeishuClient;
+  private messagingIntegrations: MessagingIntegrationManager;
   private githubService?: GitHubService;
   private skillInstaller: SkillInstaller;
   private skillLoader: SkillLoader;
@@ -61,7 +58,12 @@ export class AgentSystem {
   private webConsole: WebConsole;
   private messagingTaskOrigins = new Map<string, MessagingTaskOrigin>();
   private running = false;
-  private resultPusher?: (source: CommandSource, message: unknown) => Promise<void>;
+  private resultPusher?: (
+    source: CommandSource,
+    userId: string,
+    message: unknown,
+    replyRouteId?: string,
+  ) => Promise<void>;
 
   constructor(configDir: string = './config') {
     this.configManager = new ConfigManager(configDir);
@@ -83,19 +85,13 @@ export class AgentSystem {
     this.auditLogger = new AuditLogger(this.database);
     this.router.setPermissionChecker((cmd) => this.permissionManager.check(cmd));
 
-    // 钉钉/飞书集成
-    this.dingTalkWebhook = new DingTalkWebhook(
-      this.config.dingtalk.secret,
-      this.config.dingtalk.enableVerify,
+    // 钉钉/飞书官方 WebSocket 长连接；不开放平台 HTTP 回调端点。
+    this.messagingIntegrations = new MessagingIntegrationManager(
+      this.config.dingtalk,
+      this.config.feishu,
       this.logger,
+      (text, userInfo) => this.processCommand(text, userInfo),
     );
-    this.dingTalkClient = new DingTalkClient(this.config.dingtalk.webhookUrl, this.logger);
-    this.feishuWebhook = new FeishuWebhook(
-      this.config.feishu.appSecret,
-      this.config.feishu.enableVerify,
-      this.logger,
-    );
-    this.feishuClient = new FeishuClient(this.config.feishu.webhookUrl, this.logger);
 
     // GitHub 服务
     if (this.config.github.token) {
@@ -125,6 +121,29 @@ export class AgentSystem {
           : 'none',
       persistGitHubToken: (token) => this.configManager.saveGitHubToken(token),
       onGitHubTokenConnected: (token) => this.activateGitHubToken(token),
+      getMessagingConfiguration: () => this.messagingIntegrations.getPublicConfiguration(),
+      saveMessagingConfiguration: async (platform, next) => {
+        if (platform === 'dingtalk') {
+          const current = this.config.dingtalk;
+          this.config = this.configManager.saveMessagingConfig('dingtalk', {
+            ...current,
+            enabled: Boolean(next.enabled),
+            clientId: next.clientId || current.clientId,
+            clientSecret: next.clientSecret || current.clientSecret,
+          });
+        } else {
+          const current = this.config.feishu;
+          this.config = this.configManager.saveMessagingConfig('feishu', {
+            ...current,
+            enabled: Boolean(next.enabled),
+            appId: next.appId || current.appId,
+            appSecret: next.appSecret || current.appSecret,
+          });
+        }
+        const saved = platform === 'dingtalk' ? this.config.dingtalk : this.config.feishu;
+        await this.messagingIntegrations.configure(platform, saved);
+        return this.messagingIntegrations.getPublicConfiguration();
+      },
     });
 
     this.skillManager = new SkillManager(
@@ -136,13 +155,9 @@ export class AgentSystem {
     );
 
     // 结果推送器：按来源路由到对应客户端
-    this.setResultPusher(async (source, message) => {
-      if (source === 'dingtalk') {
-        await this.dingTalkClient.push(message as Record<string, unknown>);
-      } else if (source === 'feishu') {
-        await this.feishuClient.push(message as Record<string, unknown>);
-      }
-    });
+    this.setResultPusher((source, userId, message, replyRouteId) =>
+      this.messagingIntegrations.push(source, userId, message, replyRouteId),
+    );
 
     this.registerBasicHandlers();
     this.registerConfirmationHandlers();
@@ -150,12 +165,18 @@ export class AgentSystem {
     this.registerCodingAgentHandlers();
     this.registerSkillHandlers();
     this.registerMcpHandlers();
-    this.registerWebhookEndpoints();
     this.registerTestEndpoint();
   }
 
   /** 设置结果推送回调（由集成层注入） */
-  setResultPusher(pusher: (source: CommandSource, message: unknown) => Promise<void>): void {
+  setResultPusher(
+    pusher: (
+      source: CommandSource,
+      userId: string,
+      message: unknown,
+      replyRouteId?: string,
+    ) => Promise<void>,
+  ): void {
     this.resultPusher = pusher;
   }
 
@@ -195,7 +216,7 @@ export class AgentSystem {
     return this.auditLogger;
   }
 
-  /** 处理原始命令文本（webhook 和 CLI 共用入口） */
+  /** 处理原始命令文本（消息长连接、HTTP 测试和 CLI 共用入口） */
   async processCommand(rawText: string, userInfo: ParsedUserInfo): Promise<CommandResult> {
     let command: Command;
     try {
@@ -242,7 +263,12 @@ export class AgentSystem {
     if (userInfo.source !== 'cli' && this.resultPusher) {
       try {
         const formatted = this.formatter.format(result, userInfo.source);
-        await this.resultPusher(userInfo.source, formatted);
+        await this.resultPusher(
+          userInfo.source,
+          userInfo.userId,
+          formatted,
+          userInfo.replyRouteId,
+        );
       } catch (err) {
         this.logger.error(`结果推送失败: ${(err as Error).message}`);
       }
@@ -267,6 +293,7 @@ export class AgentSystem {
     });
     this.confirmationStore.startExpiryCleanup();
     await this.httpServer.start();
+    await this.messagingIntegrations.start();
     await this.mcpManager.start();
     this.running = true;
     this.logger.info(`Agent System v${VERSION} 已启动`);
@@ -281,6 +308,7 @@ export class AgentSystem {
     this.confirmationStore.stopExpiryCleanup();
     this.configManager.stopWatching();
     await this.webConsole.stop();
+    await this.messagingIntegrations.stop();
     await this.mcpManager.stop();
     await this.httpServer.stop();
     this.eventBus.destroy();
@@ -719,6 +747,7 @@ export class AgentSystem {
           source: command.source,
           userId: command.userId,
           commandId: command.id,
+          ...(command.replyRouteId ? { replyRouteId: command.replyRouteId } : {}),
         });
         this.auditLogger.record({
           action: 'agent_delegate',
@@ -849,7 +878,12 @@ export class AgentSystem {
         message: formatCodingTask(task, true),
         prUrl: task.pullRequestUrl,
       };
-      await this.resultPusher(origin.source, this.formatter.format(result, origin.source));
+      await this.resultPusher(
+        origin.source,
+        origin.userId,
+        this.formatter.format(result, origin.source),
+        origin.replyRouteId,
+      );
       this.auditLogger.record({
         action: 'agent_delegate',
         userId: origin.userId,
@@ -862,56 +896,6 @@ export class AgentSystem {
     } catch (error) {
       this.logger.error(`Coding Agent 任务结果推送失败: ${errorMessage(error)}`);
     }
-  }
-
-  /** 注册钉钉/飞书 Webhook 端点 */
-  private registerWebhookEndpoints(): void {
-    // 钉钉 webhook
-    this.httpServer.register('POST', '/webhook/dingtalk', async (body, headers) => {
-      const timestamp = (headers.timestamp as string) ?? '';
-      const sign = (headers.sign as string) ?? '';
-
-      if (!this.dingTalkWebhook.verify(timestamp, sign)) {
-        return { status: 403, body: { error: '签名校验失败' } };
-      }
-
-      const parsed = this.dingTalkWebhook.parse(body);
-      if (!parsed) {
-        return { status: 400, body: { error: '无法解析消息' } };
-      }
-
-      // 异步处理命令，立即返回 200 防止钉钉重试
-      this.processCommand(parsed.text, parsed.userInfo).catch((err) => {
-        this.logger.error(`钉钉命令处理异常: ${(err as Error).message}`);
-      });
-      return { status: 200, body: { success: true } };
-    });
-
-    // 飞书 webhook
-    this.httpServer.register('POST', '/webhook/feishu', async (body, headers) => {
-      // URL 验证（challenge）
-      const verification = this.feishuWebhook.isUrlVerification(body);
-      if (verification) {
-        return { status: 200, body: { challenge: verification.challenge } };
-      }
-
-      // 签名校验
-      const timestamp = (headers['x-lark-request-timestamp'] as string) ?? '';
-      const signature = (headers['x-lark-signature'] as string) ?? '';
-      if (!this.feishuWebhook.verify(timestamp, body.toString('utf8'), signature)) {
-        return { status: 403, body: { error: '签名校验失败' } };
-      }
-
-      const parsed = this.feishuWebhook.parse(body);
-      if (!parsed) {
-        return { status: 400, body: { error: '无法解析消息' } };
-      }
-
-      this.processCommand(parsed.text, parsed.userInfo).catch((err) => {
-        this.logger.error(`飞书命令处理异常: ${(err as Error).message}`);
-      });
-      return { status: 200, body: { success: true } };
-    });
   }
 
   /** 注册测试端点 /command（用于无钉钉/飞书时测试命令管道） */

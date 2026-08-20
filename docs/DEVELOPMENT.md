@@ -13,7 +13,7 @@ npm run lint           # 检查 src 下的 TypeScript
 npm run format         # 格式化 src 下的 TypeScript
 ```
 
-本地启动前先执行 `npm run dev init`，再编辑生成的 `config/config.yaml` 与 `config/permissions.yaml`。不要提交实际令牌、Webhook 地址或本地数据库。
+本地启动前先执行 `npm run dev init`，再编辑生成的 `config/config.yaml` 与 `config/permissions.yaml`。不要提交实际令牌、应用 Secret 或本地数据库。
 
 ## 代码组织
 
@@ -49,11 +49,11 @@ npm run lint
 | 改动         | 需要检查                                                                                                                       |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | 命令语法     | 中英文解析、空参数、未知命令                                                                                                   |
-| Webhook      | 有效签名、无效签名、异常负载                                                                                                   |
+| 消息长连接   | 启停、凭据更新、消息去重、原会话回复和异常负载                                                                                  |
 | 权限         | 允许、拒绝、确认、过期四条路径                                                                                                 |
 | GitHub/MCP   | 成功、超时、限流或断连                                                                                                         |
 | Coding Agent | 输入校验、进程失败、取消、无改动和 PR 发布                                                                                     |
-| Web 控制台   | 静态资源响应头、有序模型设置、密钥持久化与脱敏、Codex/Claude Code CLI 登录、GitHub PAT 引导与凭据注入、旧配置迁移和 API 错误码 |
+| Web 控制台   | 静态资源响应头、多套 Codex 配置、账号模型目录、密钥持久化与脱敏、Codex CLI 登录、GitHub PAT 引导与凭据注入、旧配置迁移和 API 错误码 |
 | SQLite       | 新数据库初始化和已有数据库重复启动                                                                                             |
 | Docker/NAS   | Compose 解析、目标架构镜像、持久化目录、健康检查；当前开发代码的 NAS 试运行见 [NAS 开发调试指南](NAS-DEBUGGING.md)             |
 

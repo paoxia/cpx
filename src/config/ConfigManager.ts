@@ -6,7 +6,7 @@ import { Logger } from '../utils/Logger';
 import { ConfigError } from '../utils/errors';
 import { DEFAULT_CONFIG } from './defaults';
 import { AppConfigSchema } from './schema';
-import type { AppConfig } from '../core/types';
+import type { AppConfig, DingTalkConfig, FeishuConfig } from '../core/types';
 
 /**
  * 配置管理器：加载、合并、校验、热更新
@@ -126,6 +126,58 @@ export class ConfigManager {
     }
   }
 
+  /** 将页面验证过的消息平台配置保存到 config.yaml，并更新当前内存配置。 */
+  saveMessagingConfig(
+    platform: 'dingtalk' | 'feishu',
+    next: DingTalkConfig | FeishuConfig,
+  ): AppConfig {
+    const candidate = structuredClone(this.config);
+    if (platform === 'dingtalk') {
+      candidate.dingtalk = next as DingTalkConfig;
+    } else {
+      candidate.feishu = next as FeishuConfig;
+    }
+    const result = AppConfigSchema.safeParse(candidate);
+    if (!result.success) {
+      const issues = result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+      throw new ConfigError(`消息平台配置校验失败: ${issues.join('; ')}`);
+    }
+
+    const fileConfig = this.readFileConfig();
+    fileConfig[platform] = structuredClone(result.data[platform]);
+    this.writeFileConfig(fileConfig, `无法保存${platform === 'dingtalk' ? '钉钉' : '飞书'}配置`);
+    this.config = result.data as AppConfig;
+    return this.config;
+  }
+
+  private readFileConfig(): Record<string, unknown> {
+    const configPath = join(this.configDir, 'config.yaml');
+    if (!existsSync(configPath)) return {};
+    try {
+      const parsed = yaml.load(readFileSync(configPath, 'utf8'));
+      if (parsed === undefined || parsed === null) return {};
+      if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('根节点必须是对象');
+      }
+      return parsed as Record<string, unknown>;
+    } catch (err) {
+      throw new ConfigError(`解析 config.yaml 失败: ${(err as Error).message}`);
+    }
+  }
+
+  private writeFileConfig(fileConfig: Record<string, unknown>, message: string): void {
+    try {
+      mkdirSync(this.configDir, { recursive: true });
+      writeFileSync(
+        join(this.configDir, 'config.yaml'),
+        yaml.dump(fileConfig, { noRefs: true, lineWidth: -1, sortKeys: false }),
+        { encoding: 'utf8', mode: 0o600 },
+      );
+    } catch (err) {
+      throw new ConfigError(`${message}: ${(err as Error).message}`);
+    }
+  }
+
   setOnReload(callback: () => void): void {
     this.onReload = callback;
   }
@@ -198,9 +250,10 @@ export function deepMerge<T>(target: T, source: unknown): T {
 const ENV_MAP: Record<string, string> = {
   AGENT_SERVER_PORT: 'server.port',
   AGENT_SERVER_HOST: 'server.host',
-  AGENT_DINGTALK_WEBHOOK_URL: 'dingtalk.webhookUrl',
-  AGENT_DINGTALK_SECRET: 'dingtalk.secret',
-  AGENT_FEISHU_WEBHOOK_URL: 'feishu.webhookUrl',
+  AGENT_DINGTALK_ENABLED: 'dingtalk.enabled',
+  AGENT_DINGTALK_CLIENT_ID: 'dingtalk.clientId',
+  AGENT_DINGTALK_CLIENT_SECRET: 'dingtalk.clientSecret',
+  AGENT_FEISHU_ENABLED: 'feishu.enabled',
   AGENT_FEISHU_APP_ID: 'feishu.appId',
   AGENT_FEISHU_APP_SECRET: 'feishu.appSecret',
   AGENT_GITHUB_TOKEN: 'github.token',
@@ -238,6 +291,8 @@ function setByPath(obj: Record<string, unknown>, path: string, value: string): v
   // 数字类型转换
   if (lastKey === 'port' || lastKey === 'executionTimeout' || lastKey === 'confirmationTtl') {
     current[lastKey] = parseInt(value, 10);
+  } else if (lastKey === 'enabled') {
+    current[lastKey] = /^(1|true|yes|on)$/i.test(value);
   } else {
     current[lastKey] = value;
   }

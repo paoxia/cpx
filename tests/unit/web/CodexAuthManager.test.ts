@@ -24,7 +24,7 @@ describe('AgentAuthManager', () => {
   it('应使用 codex login status 识别 ChatGPT 登录', async () => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
-    const manager = new AgentAuthManager('codex', new Logger('error'), spawnMock);
+    const manager = new AgentAuthManager(new Logger('error'), spawnMock);
 
     const statusPromise = manager.getStatus();
     child.stdout.write('Logged in using ChatGPT\n');
@@ -48,7 +48,7 @@ describe('AgentAuthManager', () => {
     const statusProcess = fakeProcess();
     const processes = [loginProcess, statusProcess];
     const spawnMock = vi.fn(() => processes.shift()!) as unknown as typeof spawn;
-    const manager = new AgentAuthManager('codex', new Logger('error'), spawnMock);
+    const manager = new AgentAuthManager(new Logger('error'), spawnMock);
 
     await expect(manager.startLogin()).resolves.toMatchObject({ state: 'waiting' });
     loginProcess.stdout.write(
@@ -75,7 +75,6 @@ describe('AgentAuthManager', () => {
   it('应允许取消进行中的设备码登录', async () => {
     const child = fakeProcess();
     const manager = new AgentAuthManager(
-      'codex',
       new Logger('error'),
       vi.fn(() => child) as unknown as typeof spawn,
     );
@@ -86,27 +85,31 @@ describe('AgentAuthManager', () => {
     expect(manager.cancelLogin()).toBe(false);
   });
 
-  it('应识别 Claude Code JSON 状态并允许向登录进程提交 callback', async () => {
-    const statusProcess = fakeProcess();
+  it('应通过标准输入提交 API Key，并在登录后复核状态', async () => {
     const loginProcess = fakeProcess();
-    const processes = [statusProcess, loginProcess];
+    const statusProcess = fakeProcess();
+    const processes = [loginProcess, statusProcess];
     const spawnMock = vi.fn(() => processes.shift()!) as unknown as typeof spawn;
-    const manager = new AgentAuthManager('claude', new Logger('error'), spawnMock);
+    const manager = new AgentAuthManager(new Logger('error'), spawnMock);
 
-    const statusPromise = manager.getStatus();
-    statusProcess.stdout.write('{"loggedIn":true,"authMethod":"oauth_token"}');
+    const loginPromise = manager.loginWithApiKey('sk-test-secret');
+    expect(loginProcess.stdin.read()?.toString()).toBe('sk-test-secret\n');
+    loginProcess.emit('close', 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    statusProcess.stdout.write('Logged in using an API key\n');
     statusProcess.emit('close', 0);
-    await expect(statusPromise).resolves.toMatchObject({
-      provider: 'claude',
-      authenticated: true,
-      authMethod: 'oauth_token',
-    });
 
-    await manager.startLogin();
-    loginProcess.stdout.write('Open https://claude.ai/oauth/authorize to continue\n');
-    expect(
-      manager.submitInput('http://localhost/callback?code=claude-code-value&state=state-value'),
-    ).toMatchObject({ state: 'waiting' });
-    expect(loginProcess.stdin.read()?.toString()).toBe('claude-code-value\n');
+    await expect(loginPromise).resolves.toMatchObject({
+      provider: 'codex',
+      authenticated: true,
+      authMethod: 'API Key',
+    });
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      1,
+      'codex',
+      ['login', '--with-api-key'],
+      expect.objectContaining({ windowsHide: true }),
+    );
   });
+
 });
