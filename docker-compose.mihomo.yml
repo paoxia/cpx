@@ -1,17 +1,22 @@
 services:
+  mihomo:
+    image: ${MIHOMO_IMAGE:-metacubex/mihomo:v1.19.30}
+    container_name: cpx-mihomo
+    restart: unless-stopped
+    command:
+      - -d
+      - /root/.config/mihomo
+    volumes:
+      - ./data/mihomo:/root/.config/mihomo
+    expose:
+      - "7890"
+
   cpx:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        HTTP_PROXY: ${HTTP_PROXY:-}
-        HTTPS_PROXY: ${HTTPS_PROXY:-}
-        ALL_PROXY: ${ALL_PROXY:-}
-        NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
-        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
-        APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org}
+    image: ${CPX_IMAGE:-cpx:latest}
     container_name: cpx
     restart: unless-stopped
+    depends_on:
+      - mihomo
     ports:
       - "3000:3000"
     environment:
@@ -19,10 +24,10 @@ services:
       AGENT_SERVER_HOST: 0.0.0.0
       AGENT_SERVER_PORT: 3000
       AGENT_LOGGING_LEVEL: ${AGENT_LOGGING_LEVEL:-info}
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      ALL_PROXY: ${ALL_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,::1}
+      HTTP_PROXY: http://mihomo:7890
+      HTTPS_PROXY: http://mihomo:7890
+      ALL_PROXY: ""
+      NO_PROXY: localhost,127.0.0.1,::1,mihomo
       CODEX_API_KEY: ${CODEX_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GH_TOKEN: ${GH_TOKEN:-}
@@ -39,5 +44,4 @@ services:
       - ./data/claude:/root/.claude
       - ./config:/app/config
       - ./logs:/app/logs
-    # 极空间 Docker 默认以 root 运行；git/gh 在 root 下无需额外权限配置
     user: "0:0"

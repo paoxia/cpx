@@ -11,8 +11,28 @@ PLATFORM="${2:-${DOCKER_PLATFORM:-linux/amd64}}"
 IMAGE="cpx:${VERSION}"
 TAR="cpx-${VERSION}.tar"
 
+# Docker daemon 代理负责拉取 Dockerfile frontend 和基础镜像；这里的
+# build args 负责把开发机已有的代理配置传给 apt、npm 等构建步骤。
+# 不打印代理值，避免包含认证信息的 URL 进入终端日志。
+BUILD_ARGS=()
+for PROXY_NAME in HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY; do
+  PROXY_VALUE="${!PROXY_NAME:-}"
+  if [[ -n "${PROXY_VALUE}" ]]; then
+    BUILD_ARGS+=(--build-arg "${PROXY_NAME}=${PROXY_VALUE}")
+  fi
+done
+if [[ -n "${NPM_REGISTRY:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "NPM_REGISTRY=${NPM_REGISTRY}")
+fi
+if [[ -n "${APT_MIRROR:-}" ]]; then
+  BUILD_ARGS+=(--build-arg "APT_MIRROR=${APT_MIRROR}")
+fi
+
 echo "==> Building ${IMAGE} for ${PLATFORM}"
-docker build --platform "${PLATFORM}" -t "${IMAGE}" .
+if (( ${#BUILD_ARGS[@]} > 0 )); then
+  echo "==> Forwarding configured build network settings"
+fi
+docker build "${BUILD_ARGS[@]}" --platform "${PLATFORM}" -t "${IMAGE}" .
 
 echo "==> Saving to ${TAR}"
 docker save -o "${TAR}" "${IMAGE}"

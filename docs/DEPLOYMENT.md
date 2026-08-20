@@ -108,9 +108,13 @@ AGENT_FEISHU_WEBHOOK_URL=
 AGENT_FEISHU_APP_ID=
 AGENT_FEISHU_APP_SECRET=
 AGENT_LOGGING_LEVEL=info
+APT_MIRROR=http://deb.debian.org
+NPM_REGISTRY=https://registry.npmjs.org
 ```
 
 空值应保持为空，不要填写 `sk-...`、`ghp_xxx` 等示例占位符。环境变量来源的 GitHub Token 不能在 cpx 页面中替换；更新时需要在 Compose 项目中修改变量并重新创建容器。
+
+`APT_MIRROR` 和 `NPM_REGISTRY` 只在源码镜像构建阶段使用。它们默认分别使用 Debian 和 npm 官方源；国内开发或构建环境可分别设置为 `http://mirrors.aliyun.com` 和 `https://registry.npmmirror.com`。APT 仓库元数据和软件包由 Debian 签名验证；使用 HTTP 可避免基础镜像尚未安装 CA 证书时的循环依赖。`NPM_REGISTRY` 会同时用于项目依赖、Codex CLI 和 Claude Code CLI 的 npm 包下载。两个变量都不会写入最终容器环境，也不能代理运行时模型请求。
 
 #### 出站代理
 
@@ -136,6 +140,46 @@ NO_PROXY=localhost,127.0.0.1,::1
 保存环境变量后，在极空间 Compose 项目详情中选择重新构建并重新创建容器，再通过“模型设置”重新执行 Codex 登录或测试。设备码页面由电脑或手机浏览器打开，因此该浏览器也必须具备可用网络。
 
 构建参数无法控制 Docker 在构建开始前拉取 `node:22-slim` 基础镜像。如果构建日志停在拉取基础镜像，需在极空间 Docker 应用或系统网络界面配置 Docker 的出站代理；若当前系统界面没有该选项，使用本文“开发机构建并在 NAS 导入镜像”的备用方式。导入镜像后仍需在 `docker-compose.image.yml` 项目中填写上述运行时代理变量，Codex 才能从容器访问模型服务。
+
+#### NAS 内置 Mihomo 容器
+
+已有合法可用的 Clash/Mihomo 配置时，可以使用根目录 [docker-compose.mihomo.yml](../docker-compose.mihomo.yml)，在同一个 Compose 项目中运行 cpx 与 Mihomo：
+
+```text
+cpx → http://mihomo:7890 → Mihomo 配置的上游 → 外部服务
+```
+
+这份 Compose 使用显式 HTTP 代理，不启用 TUN，不需要 `privileged`、`NET_ADMIN`、`/dev/net/tun`、host 网络或 NAS 终端。Mihomo 的 7890 端口只通过 Compose 默认网络提供给 cpx，没有映射到 NAS 或局域网。代理容器本身仍需具有合法可用的上游配置；只启动一个空代理容器不能改变外部服务的可达性或地区支持政策。
+
+##### 首次准备
+
+1. 在开发机或可信设备上复制 [config/mihomo.example.yaml](../config/mihomo.example.yaml)，并命名为 `config.yaml`；
+2. 用真实订阅地址替换示例中的 `https://example.invalid/replace-with-your-subscription-url`；订阅地址必须用引号包裹；
+3. 通过极空间文件管理器创建 `<CPX_DIR>/data/mihomo`，把配置上传为 `<CPX_DIR>/data/mihomo/config.yaml`；
+4. 限制该目录的访问权限。实际配置可能包含订阅地址、节点密码和其他凭据，不应提交到 Git 或复制到不可信备份。
+
+如果 NAS 不能直接拉取镜像，在开发机按 NAS 架构准备 cpx 与 Mihomo 镜像。以下示例适用于 amd64：
+
+```bash
+scripts/docker-build.sh latest linux/amd64
+docker pull --platform linux/amd64 metacubex/mihomo:v1.19.30
+docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
+```
+
+ARM64 NAS 把两个命令中的平台改为 `linux/arm64`，并相应修改导出文件名。这些命令只在开发机执行。随后通过极空间文件管理器上传 `cpx-latest.tar`、Mihomo 镜像包和 `docker-compose.mihomo.yml`，再从 Docker 镜像页面导入两个镜像。Mihomo 的默认镜像版本固定在 Compose 的 `MIHOMO_IMAGE` 默认值中；升级前应先核对配置兼容性，也可以在 Compose 环境变量中显式选择其他已导入版本。
+
+在极空间“Docker → Compose”中新建项目，项目存储位置选择 `<CPX_DIR>`，导入或粘贴 `docker-compose.mihomo.yml`。创建后依次检查：
+
+1. `cpx-mihomo` 日志没有配置解析、订阅下载或节点连接错误；
+2. `cpx` 日志显示服务监听 `0.0.0.0:3000`；
+3. 浏览器访问 `http://<NAS-IP>:3000/health`；
+4. 在 cpx“模型设置”中重新连接并测试 Codex。
+
+如果 Mihomo 正常运行但 Codex 仍然超时，检查当前代理组是否选择了可用节点、最终 `MATCH` 规则是否走代理，以及用于设备码登录的电脑或手机是否也能打开验证页面。
+
+##### 开发阶段快速迭代
+
+Mihomo 镜像和配置只准备一次、每轮仅替换 cpx 开发镜像的完整操作流程，见 [极空间 NAS 开发调试指南](NAS-DEBUGGING.md)。该文档同时说明同名镜像缓存、唯一开发标签、图形界面验证和日志脱敏方式。
 
 ### 6. 端口调整
 
@@ -185,7 +229,7 @@ scripts/docker-build.sh latest linux/arm64
 1. 通过文件管理器把 `cpx-latest.tar` 和 `docker-compose.image.yml` 上传到持久化目录；
 2. 打开“Docker → 镜像”，选择本地镜像导入，导入 `cpx-latest.tar`；
 3. 确认镜像列表中出现 `cpx:latest`；
-4. 在文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs`；
+4. 在文件管理器中创建 `data/codex`、`data/claude`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
 5. 打开“Docker → Compose → 新建项目”；
 6. 项目存储位置选择该持久化目录；
 7. 导入或粘贴 `docker-compose.image.yml` 的内容并创建项目。
@@ -320,7 +364,7 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 ```text
 <CPX_DIR>/config/
 <CPX_DIR>/data/
-<CPX_DIR>/docker-compose.yml
+<CPX_DIR>/docker-compose.yml        # 或实际使用的 docker-compose.mihomo.yml
 <CPX_DIR>/logs/                 # 可选，便于排障
 ```
 
@@ -330,6 +374,7 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 - `data/workspaces/` 保存任务克隆和未提交改动；
 - `data/console-settings.json` 保存 Agent 关联和执行顺序；
 - `data/codex/`、`data/claude/` 保存 CLI 登录资料；
+- `data/mihomo/` 在启用可选 Mihomo Compose 时保存代理配置与运行数据；
 - `config/config.yaml` 可能保存通过 Web 控制台验证的 GitHub Token。
 
 一致备份流程：
@@ -358,6 +403,8 @@ Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或�
 |---|---|
 | 找不到 Compose 功能 | 更新极空间 Docker 应用和系统版本，确认当前机型支持 Compose 项目 |
 | 源码构建无法下载依赖 | 查看项目构建日志，检查 NAS DNS、默认网关以及 Docker Hub、Debian、npm 和 GitHub 连通性；网络受限时改用离线镜像 |
+| 构建停在 `apt-get` | 设置构建变量 `APT_MIRROR=http://mirrors.aliyun.com` 后重新构建 |
+| 构建停在 `npm install` | 设置构建变量 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新构建；这只处理 npm 包 |
 | `exec format error` | 离线镜像架构与 NAS 不一致；在开发机按正确平台重新构建并导入 |
 | `better-sqlite3` 加载失败 | 检查镜像架构；源码方案应在 NAS 本机重新构建，离线方案应重新生成对应架构镜像 |
 | 容器不断重启 | 打开 `cpx` 容器日志，检查配置、目录挂载、目录权限和数据库错误 |
@@ -368,6 +415,8 @@ Web 控制台在内网部署后即可使用，不需要公网入口。钉钉或�
 | 私有仓库返回 403 | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址 |
 | Agent 显示未连接 | 在模型设置中重新登录并测试，检查 `data/codex` 或 `data/claude` 挂载是否存在 |
 | Agent 返回 401 | 检查 Compose 环境变量中是否存在无效占位值，并重新完成官方登录 |
+| `cpx-mihomo` 不断重启 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 可被 Mihomo 解析且 `mixed-port` 为 7890 |
+| Mihomo 正常但 Agent 请求超时 | 检查代理组选择、最终匹配规则、节点状态，以及 cpx 使用的代理地址是否为 `http://mihomo:7890` |
 | 更新后仍运行旧版本 | 在 Compose 项目详情确认执行了重新构建或重新创建，并检查当前容器镜像标识 |
 | 重建后登录丢失 | 检查 `data/codex` 和 `data/claude` 是否仍挂载到原来的项目存储目录 |
 

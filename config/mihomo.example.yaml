@@ -1,0 +1,56 @@
+# Mihomo 订阅配置示例。
+# 复制为 data/mihomo/config.yaml 后，替换下方订阅地址。
+# 订阅地址和下载后的节点凭据属于敏感信息，不要提交实际配置。
+
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+
+profile:
+  store-selected: true
+
+proxy-providers:
+  subscription:
+    type: http
+    url: "https://example.invalid/replace-with-your-subscription-url"
+    path: ./proxy_providers/subscription.yaml
+    interval: 3600
+    # 首次启动尚无可用节点，订阅地址必须能够直连下载。
+    proxy: DIRECT
+    header:
+      User-Agent:
+        - mihomo
+    health-check:
+      enable: true
+      url: https://www.gstatic.com/generate_204
+      interval: 300
+      timeout: 5000
+      lazy: true
+      expected-status: 204
+    override:
+      udp: true
+
+proxy-groups:
+  - name: AUTO
+    type: url-test
+    use:
+      - subscription
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 100
+    lazy: true
+
+  - name: PROXY
+    type: select
+    proxies:
+      - AUTO
+      - DIRECT
+    use:
+      - subscription
+
+# 该容器专用于 cpx 出站，默认让所有请求使用 PROXY。
+rules:
+  - MATCH,PROXY

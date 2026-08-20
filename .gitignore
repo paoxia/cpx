@@ -87,6 +87,7 @@ cpx-*.tar.gz
 /data/console-settings.json
 /data/codex/
 /data/claude/
+/data/mihomo/
 /data/workspaces/
 data/*.db
 data/*.db-shm

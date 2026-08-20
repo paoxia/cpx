@@ -86,6 +86,6 @@ SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations
 - 系统是单进程、单机 SQLite 架构，没有分布式任务调度。
 - 控制台只调度本机 Codex 与 Claude Code CLI，没有远程 Agent 注册、持久化队列、并发调度或重启恢复。
 - 控制台 API 任务不经过聊天命令的 `PermissionManager` 与 SQLite 命令审计；聊天开发命令经过命令黑名单检查并记录委托及终态审计。两类任务都以独立 Git 克隆和 CLI 沙箱参数为执行边界。
-- 仓库提供面向单机和极空间 NAS 的 Dockerfile、Compose 配置与构建部署脚本；目前没有 Kubernetes 部署文件。
+- 仓库提供面向单机和极空间 NAS 的 Dockerfile、Compose 配置与构建部署脚本；可选的 `docker-compose.mihomo.yml` 在同一 Docker 网络中增加显式 HTTP 代理伴随容器，但不改变 cpx 单进程架构。目前没有 Kubernetes 部署文件。
 - Skill 在主进程内以 Node.js 模块执行，不构成安全沙箱。
 - HTTP 服务没有通用认证层；部署边界和已知风险见 [docs/SECURITY.md](docs/SECURITY.md)。

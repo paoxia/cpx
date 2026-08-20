@@ -69,6 +69,8 @@ Skill 通过 `npm install` 安装并在主 Node.js 进程中使用 `require` 加
 - 验证成功的 GitHub Token 以明文保存在 `config/config.yaml`（环境变量来源除外），应限制配置目录读取权限。HTTPS Git 子进程通过环境变量和不含 Token 的 askpass helper 鉴权，不得把 Token 拼入远端 URL 或记录到任务日志。
 - stdio MCP 可以启动本地进程，配置文件本身应视为可执行权限。
 - WebSocket 与 HTTP MCP 地址应指向可信服务，生产环境使用加密传输。
+- 可选的 Mihomo 部署把代理配置保存在 `data/mihomo/config.yaml`；其中的订阅地址和节点凭据属于密钥材料。默认 Compose 不向宿主机映射 Mihomo 代理或控制端口，不应为方便调试把这些端口直接暴露到公网。
+- `APT_MIRROR` 和 `NPM_REGISTRY` 允许镜像构建使用第三方 Debian/npm 镜像；构建者必须信任所选镜像服务并审查构建输出。这些值只作为 build args 使用，不应携带认证凭据，也不会写入最终容器环境。
 - 日志与错误信息不得包含 Token、Webhook 密钥或完整敏感负载。
 
 ## 生产部署最低要求

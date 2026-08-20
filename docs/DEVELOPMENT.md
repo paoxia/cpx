@@ -55,6 +55,7 @@ npm run lint
 | Coding Agent | 输入校验、进程失败、取消、无改动和 PR 发布                                                                                     |
 | Web 控制台   | 静态资源响应头、有序模型设置、密钥持久化与脱敏、Codex/Claude Code CLI 登录、GitHub PAT 引导与凭据注入、旧配置迁移和 API 错误码 |
 | SQLite       | 新数据库初始化和已有数据库重复启动                                                                                             |
+| Docker/NAS   | Compose 解析、目标架构镜像、持久化目录、健康检查；当前开发代码的 NAS 试运行见 [NAS 开发调试指南](NAS-DEBUGGING.md)             |
 
 ## 文档维护
 
