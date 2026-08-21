@@ -123,6 +123,14 @@ export interface AgentRuntimeSecrets {
   githubToken?: string;
 }
 
+/** 仅注入对应任务的消息平台工具，不进入公开任务快照。 */
+export interface AgentPlatformToolContext {
+  endpoint: string;
+  token: string;
+  taskId: string;
+  platform: 'dingtalk' | 'feishu';
+}
+
 const MAX_LOG_ENTRIES = 800;
 const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
@@ -139,6 +147,7 @@ export class AgentTaskManager {
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
   private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
+  private platformToolContexts = new Map<string, AgentPlatformToolContext>();
   private terminalWaiters = new Map<string, Set<(task: AgentTask) => void>>();
   private gitAskPassPath?: string;
   private repositoryLocks = new Map<string, Promise<void>>();
@@ -156,6 +165,16 @@ export class AgentTaskManager {
 
   setSecrets(secrets: AgentRuntimeSecrets): void {
     this.secrets = { ...this.secrets, ...secrets };
+  }
+
+  setPlatformToolContext(taskId: string, context: AgentPlatformToolContext): void {
+    if (!this.tasks.has(taskId)) {
+      throw new Error('任务不存在');
+    }
+    if (context.taskId !== taskId) {
+      throw new Error('平台工具任务范围不匹配');
+    }
+    this.platformToolContexts.set(taskId, { ...context });
   }
 
   create(request: AgentTaskRequest): AgentTask {
@@ -304,6 +323,7 @@ export class AgentTaskManager {
     }
     this.processes.clear();
     this.executionConfigurations.clear();
+    this.platformToolContexts.clear();
   }
 
   private validateRequest(request: AgentTaskRequest): {
@@ -527,7 +547,6 @@ export class AgentTaskManager {
   ): Promise<void> {
     const provider = configuration.provider;
     const adapter = AGENT_ADAPTERS[provider];
-    const prompt = buildPrompt(task.prompt);
     const env: NodeJS.ProcessEnv = { ...process.env };
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
     const legacyApiKey = this.secrets.openaiApiKey;
@@ -544,16 +563,44 @@ export class AgentTaskManager {
           configuration.baseUrl,
           configuration.reasoningEffort,
         );
+    const platformTools = this.platformToolContexts.get(task.id);
+    if (platformTools) {
+      this.configurePlatformTools(args, env, platformTools, Boolean(resumeThreadId));
+    }
     await this.runProcess(
       task,
       adapter.command,
       args,
       workspace,
-      prompt,
+      buildPrompt(task.prompt, Boolean(platformTools)),
       true,
       env,
       adapter.useShellOnWindows,
     );
+  }
+
+  private configurePlatformTools(
+    args: string[],
+    env: NodeJS.ProcessEnv,
+    context: AgentPlatformToolContext,
+    resume: boolean,
+  ): void {
+    env.CPX_PLATFORM_TOOL_URL = context.endpoint;
+    env.CPX_PLATFORM_TOOL_TOKEN = context.token;
+    env.CPX_PLATFORM_TOOL_TASK_ID = context.taskId;
+    env.CPX_PLATFORM_NAME = context.platform;
+
+    const server = platformMcpServerCommand();
+    const config = [
+      `mcp_servers.cpx_platform.command=${JSON.stringify(server.command)}`,
+      `mcp_servers.cpx_platform.args=${JSON.stringify(server.args)}`,
+      'mcp_servers.cpx_platform.env_vars=["CPX_PLATFORM_TOOL_URL","CPX_PLATFORM_TOOL_TOKEN","CPX_PLATFORM_TOOL_TASK_ID","CPX_PLATFORM_NAME"]',
+      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      'mcp_servers.cpx_platform.default_tools_approval_mode="approve"',
+      'mcp_servers.cpx_platform.required=true',
+    ];
+    const insertionIndex = resume ? Math.max(3, args.length - 2) : Math.max(2, args.length - 1);
+    args.splice(insertionIndex, 0, ...config.flatMap((value) => ['--config', value]));
   }
 
   private async publishPullRequest(task: AgentTask, workspace: string): Promise<void> {
@@ -918,15 +965,30 @@ function buildCommitTitle(prompt: string): string {
   return `feat: ${summary || 'complete agent task'}`;
 }
 
-function buildPrompt(taskPrompt: string): string {
-  return [
+function buildPrompt(taskPrompt: string, hasPlatformTools = false): string {
+  const instructions = [
     '你正在由 cpx 开发控制台执行任务。',
     '请只在当前 Git 仓库中工作，先理解现有代码，再实现用户目标并运行相关验证。',
     '不要执行 git push、创建 PR 或修改仓库外文件；发布步骤由 cpx 在用户授权后处理。',
-    '完成后总结改动、验证结果和仍存在的风险。',
-    '',
-    `用户任务：${taskPrompt}`,
-  ].join('\n');
+  ];
+  if (hasPlatformTools) {
+    instructions.push(
+      '这个任务来自消息平台。任务建立后的自然语言要求都由你在当前会话中理解和执行。',
+      '你可以使用 cpx_platform MCP 工具读取当前平台上下文，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
+      'cpx 会自动回传你的最终回复，因此不要用平台工具重复发送最终总结。',
+    );
+  }
+  instructions.push('完成后总结改动、验证结果和仍存在的风险。', '', `用户任务：${taskPrompt}`);
+  return instructions.join('\n');
+}
+
+function platformMcpServerCommand(): { command: string; args: string[] } {
+  const compiled = join(__dirname, 'platformMcpServer.js');
+  if (existsSync(compiled)) {
+    return { command: process.execPath, args: [compiled] };
+  }
+  const source = join(__dirname, 'platformMcpServer.ts');
+  return { command: process.execPath, args: [require.resolve('tsx/cli'), source] };
 }
 
 function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfiguration[] {

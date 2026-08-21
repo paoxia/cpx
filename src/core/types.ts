@@ -316,6 +316,7 @@ export type AuditAction =
   | 'skill_execute'
   | 'mcp_call'
   | 'agent_delegate'
+  | 'agent_platform_tool'
   | 'command_received'
   | 'command_completed'
   | 'command_failed';

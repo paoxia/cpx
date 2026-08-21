@@ -233,6 +233,13 @@ describe('命令管道集成测试', () => {
     vi.spyOn(webConsole, 'createCodingTask').mockReturnValue(queuedTask);
     vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(completedTask);
     vi.spyOn(webConsole, 'getCodingTask').mockReturnValue(completedTask);
+    let platformToolContext:
+      Parameters<typeof webConsole.setCodingTaskPlatformTools>[1] | undefined;
+    const platformToolsSpy = vi
+      .spyOn(webConsole, 'setCodingTaskPlatformTools')
+      .mockImplementation((_taskId, context) => {
+        platformToolContext = context;
+      });
 
     const pushed: Array<{ message: unknown; replyRouteId?: string }> = [];
     system.setResultPusher(async (_source, _userId, message, replyRouteId) => {
@@ -259,6 +266,15 @@ describe('命令管道集成测试', () => {
       createPullRequest: true,
       useFallback: true,
     });
+    expect(platformToolsSpy).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({
+        taskId,
+        platform: 'feishu',
+        endpoint: 'http://127.0.0.1:3999/api/internal/agent-platform-tool',
+        token: expect.any(String),
+      }),
+    );
     await vi.waitFor(() => expect(pushed).toHaveLength(2));
     expect(JSON.stringify(pushed)).toContain('Coding Agent 开发完成');
     expect(JSON.stringify(pushed)).toContain('https://github.com/paoxia/cpx/pull/99');
@@ -279,6 +295,48 @@ describe('命令管道集成测试', () => {
     });
     expect(otherUser.success).toBe(false);
     expect(otherUser.message).toContain('不是你在当前平台创建');
+
+    await system.start();
+    const unauthorized = await fetch(platformToolContext!.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, tool: 'platform_get_context', args: {} }),
+    });
+    expect(unauthorized.status).toBe(401);
+
+    const contextResponse = await fetch(platformToolContext!.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${platformToolContext!.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ taskId, tool: 'platform_get_context', args: {} }),
+    });
+    expect(await contextResponse.json()).toMatchObject({
+      result: {
+        platform: 'feishu',
+        taskId,
+        conversationBound: true,
+        capabilities: ['platform_send_message'],
+      },
+    });
+
+    const pushedBeforePlatformTool = pushed.length;
+    const sendResponse = await fetch(platformToolContext!.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${platformToolContext!.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        tool: 'platform_send_message',
+        args: { text: '正在运行回归测试' },
+      }),
+    });
+    expect(sendResponse.status).toBe(200);
+    expect(pushed).toHaveLength(pushedBeforePlatformTool + 1);
+    expect(JSON.stringify(pushed.at(-1))).toContain('正在运行回归测试');
 
     const continuedQueued = {
       ...completedTask,
@@ -318,6 +376,32 @@ describe('命令管道集成测试', () => {
     expect(continueSpy).toHaveBeenCalledWith(taskId, '把按钮颜色改成蓝色', true);
     await vi.waitFor(() => expect(pushed).toHaveLength(pushedBeforeNaturalLanguage + 2));
     expect(JSON.stringify(pushed)).toContain('按钮颜色已经修改为蓝色');
+
+    const pushedBeforeLegacyCommand = pushed.length;
+    const commandLikeText = await system.processCommand('/agent 查看GitHub', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-123:feishu-user-1',
+    });
+    expect(commandLikeText.success).toBe(true);
+    expect(continueSpy).toHaveBeenLastCalledWith(taskId, '查看GitHub', true);
+    await vi.waitFor(() => expect(pushed).toHaveLength(pushedBeforeLegacyCommand + 2));
+
+    const pushedBeforeCrossConversationContinue = pushed.length;
+    const explicitContinue = await system.processCommand('/agent 继续 abcdef12 再补充一个测试', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-other:feishu-user-1',
+    });
+    expect(explicitContinue.success).toBe(true);
+    await vi.waitFor(() => expect(pushed).toHaveLength(pushedBeforeCrossConversationContinue + 2));
+    const crossConversationRoutes = pushed
+      .slice(pushedBeforeCrossConversationContinue)
+      .map((item) => item.replyRouteId);
+    expect(crossConversationRoutes).toContain('chat-other:feishu-user-1');
+    expect(crossConversationRoutes).toContain('chat-123:feishu-user-1');
   });
 });
 

@@ -29,7 +29,20 @@ interface MessagingTaskOrigin {
   userId: string;
   commandId: string;
   replyRouteId?: string;
+  platformToolToken?: string;
 }
+
+const MESSAGING_TASK_CONTROL_COMMANDS = new Set([
+  'agent_develop',
+  'agent_task_continue',
+  'agent_task_list',
+  'agent_task_status',
+  'agent_task_cancel',
+  'help',
+  'version',
+  'confirm',
+  'cancel',
+]);
 
 /**
  * AgentSystem 编排根：装配并管理所有模块的生命周期
@@ -163,6 +176,7 @@ export class AgentSystem {
     this.registerCodingAgentHandlers();
     this.registerSkillHandlers();
     this.registerMcpHandlers();
+    this.registerPlatformToolEndpoint();
     this.registerTestEndpoint();
   }
 
@@ -228,6 +242,7 @@ export class AgentSystem {
         message: `命令解析失败: ${message}`,
       };
     }
+    command = this.delegateMessagingInputToTask(command);
 
     this.auditLogger.record({
       action: 'command_received',
@@ -923,11 +938,133 @@ export class AgentSystem {
   }
 
   private bindMessagingTask(task: AgentTask, command: Command): void {
-    this.messagingTaskOrigins.set(task.id, {
-      source: command.source,
-      userId: command.userId,
+    const existing = this.messagingTaskOrigins.get(task.id);
+    const platformToolToken =
+      command.source === 'dingtalk' || command.source === 'feishu'
+        ? (existing?.platformToolToken ?? randomUUID())
+        : undefined;
+    const origin: MessagingTaskOrigin = {
+      source: existing?.source ?? command.source,
+      userId: existing?.userId ?? command.userId,
       commandId: command.id,
-      ...(command.replyRouteId ? { replyRouteId: command.replyRouteId } : {}),
+      ...(existing?.replyRouteId || command.replyRouteId
+        ? { replyRouteId: existing?.replyRouteId ?? command.replyRouteId }
+        : {}),
+      ...(platformToolToken ? { platformToolToken } : {}),
+    };
+    this.messagingTaskOrigins.set(task.id, origin);
+    if (platformToolToken && (command.source === 'dingtalk' || command.source === 'feishu')) {
+      this.webConsole.setCodingTaskPlatformTools(task.id, {
+        endpoint: this.platformToolEndpoint(),
+        token: platformToolToken,
+        taskId: task.id,
+        platform: command.source,
+      });
+    }
+  }
+
+  private delegateMessagingInputToTask(command: Command): Command {
+    if (
+      command.source === 'cli' ||
+      command.name === 'agent_chat' ||
+      MESSAGING_TASK_CONTROL_COMMANDS.has(command.name) ||
+      !this.latestMessagingTask(command)
+    ) {
+      return command;
+    }
+    return {
+      ...command,
+      name: 'agent_chat',
+      args: { prompt: this.parser.userText(command.rawText, command.source) },
+    };
+  }
+
+  private platformToolEndpoint(): string {
+    const configuredHost = this.config.server.host.trim();
+    const host =
+      configuredHost === '0.0.0.0'
+        ? '127.0.0.1'
+        : configuredHost === '::'
+          ? '[::1]'
+          : configuredHost.includes(':') && !configuredHost.startsWith('[')
+            ? `[${configuredHost}]`
+            : configuredHost;
+    return `http://${host}:${this.config.server.port}/api/internal/agent-platform-tool`;
+  }
+
+  private registerPlatformToolEndpoint(): void {
+    this.httpServer.register('POST', '/api/internal/agent-platform-tool', async (body, headers) => {
+      let payload: { taskId?: string; tool?: string; args?: Record<string, unknown> };
+      try {
+        payload = JSON.parse(body.toString('utf8')) as typeof payload;
+      } catch {
+        return { status: 400, body: { error: 'Invalid JSON' } };
+      }
+      const origin = payload.taskId ? this.messagingTaskOrigins.get(payload.taskId) : undefined;
+      const authorization = Array.isArray(headers.authorization)
+        ? headers.authorization[0]
+        : headers.authorization;
+      if (
+        !origin?.platformToolToken ||
+        authorization !== `Bearer ${origin.platformToolToken}` ||
+        (origin.source !== 'dingtalk' && origin.source !== 'feishu')
+      ) {
+        return { status: 401, body: { error: 'Unauthorized' } };
+      }
+
+      if (payload.tool === 'platform_get_context') {
+        return {
+          status: 200,
+          body: {
+            result: {
+              platform: origin.source,
+              taskId: payload.taskId,
+              conversationBound: true,
+              capabilities: ['platform_send_message'],
+            },
+          },
+        };
+      }
+      if (payload.tool !== 'platform_send_message') {
+        return { status: 400, body: { error: 'Unsupported platform tool' } };
+      }
+      const text = payload.args?.text;
+      if (typeof text !== 'string' || !text.trim() || text.length > 6000) {
+        return { status: 400, body: { error: 'text must contain 1 to 6000 characters' } };
+      }
+      if (!this.resultPusher) {
+        return { status: 503, body: { error: 'Platform result pusher is unavailable' } };
+      }
+
+      try {
+        await this.resultPusher(
+          origin.source,
+          origin.userId,
+          platformTextMessage(origin.source, text.trim()),
+          origin.replyRouteId,
+        );
+        this.auditLogger.record({
+          action: 'agent_platform_tool',
+          userId: origin.userId,
+          source: origin.source,
+          commandId: origin.commandId,
+          operation: 'platform_send_message',
+          result: 'success',
+          details: `task ${payload.taskId}`,
+        });
+        return { status: 200, body: { result: '消息已发送到当前任务绑定的原会话。' } };
+      } catch (error) {
+        this.auditLogger.record({
+          action: 'agent_platform_tool',
+          userId: origin.userId,
+          source: origin.source,
+          commandId: origin.commandId,
+          operation: 'platform_send_message',
+          result: 'failure',
+          details: errorMessage(error),
+        });
+        return { status: 502, body: { error: errorMessage(error) } };
+      }
     });
   }
 
@@ -1024,7 +1161,7 @@ export class AgentSystem {
       '• 任务 <ID> - 查看 Coding Agent 任务进度',
       '• 继续 <ID> <需求> - 在原工作区和 Codex 会话中继续修改',
       '• 取消任务 <ID> - 取消运行中的任务',
-      '• 飞书普通文本 - 继续当前会话最近的 Coding Agent 任务',
+      '• 飞书/钉钉任务内文本 - 交给当前会话的 Codex 继续处理',
       '• 修改 <file> <description> - 修改 GitHub 文件并创建 PR',
       '• 新建文件 <file> <description> - 创建 GitHub 文件',
       '• 读取文件 <file> - 读取 GitHub 文件内容',
@@ -1060,6 +1197,12 @@ function displayRepository(repository: string): string {
     .replace(/^https:\/\/github\.com\//, '')
     .replace(/^git@github\.com:/, '')
     .replace(/\.git$/, '');
+}
+
+function platformTextMessage(source: CommandSource, text: string): unknown {
+  return source === 'dingtalk'
+    ? { msgtype: 'markdown', markdown: { title: 'Codex', text } }
+    : { msgtype: 'text', content: { text } };
 }
 
 function formatCodingTask(task: AgentTask, completion = false): string {

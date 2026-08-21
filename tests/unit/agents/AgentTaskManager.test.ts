@@ -146,6 +146,44 @@ describe('AgentTaskManager', () => {
     await manager.stop();
   });
 
+  it('消息平台任务应注入受限 MCP 工具且不在参数中暴露 Token', async () => {
+    const manager = createManager();
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      prompt: '修复构建',
+    });
+    manager.setPlatformToolContext(created.id, {
+      endpoint: 'http://127.0.0.1:3999/api/internal/agent-platform-tool',
+      token: 'task-scoped-platform-token',
+      taskId: created.id,
+      platform: 'feishu',
+    });
+
+    await manager.waitForTerminal(created.id);
+    const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
+    expect(codexCall?.[1]).toEqual(
+      expect.arrayContaining([
+        '--config',
+        expect.stringContaining('mcp_servers.cpx_platform.command='),
+        '--config',
+        'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      ]),
+    );
+    expect(JSON.stringify(codexCall?.[1])).not.toContain('task-scoped-platform-token');
+    expect(codexCall?.[2]).toEqual(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CPX_PLATFORM_TOOL_TOKEN: 'task-scoped-platform-token',
+          CPX_PLATFORM_TOOL_TASK_ID: created.id,
+          CPX_PLATFORM_NAME: 'feishu',
+        }),
+      }),
+    );
+    expect(agentInput).toContain('cpx_platform MCP 工具');
+    await manager.stop();
+  });
+
   it('未指定基础分支时应使用克隆生成的本地 origin/HEAD，且不再次查询远端', async () => {
     const manager = createManager();
     manager.setSecrets({ githubToken: 'github_pat_head-secret' });

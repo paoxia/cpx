@@ -31,6 +31,9 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过�
 浏览器 → WebConsole API ─────────────┐
                                     ├→ AgentTaskManager → 完整仓库缓存 → Git worktree → Codex / resume
 聊天 → CommandRouter → WebConsole ──┘                                      └→ Git + gh
+                                                                        │ cpx_platform MCP
+                                                                        ▼
+原会话 ← MessagingIntegration ← 任务专属 Token 校验的 HTTP 路由
 
 浏览器 → WebConsole API → AgentAuthManager → Codex 官方 CLI 登录与状态检查
 浏览器 → WebConsole API → CodexModelCatalog → `codex debug models` → `/model` 同源目录
@@ -57,12 +60,12 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过�
 ## 请求流程
 
 1. `MessagingIntegrationManager` 主动建立钉钉 Stream 和飞书 WebSocket 连接；`HttpServer` 的 `/command` 仅用于本地测试与集成调试。
-2. `CommandParser` 去除平台前缀，将中英文文本转换为统一的 `Command`；飞书未命中固定命令的文本转为当前会话的 `agent_chat`。
+2. `CommandParser` 去除平台前缀，将中英文文本转换为统一的 `Command`。飞书和钉钉未命中固定命令的文本转为 `agent_chat`；当会话已有任务时，`AgentSystem` 还会把除任务生命周期与确认命令外的已识别文本改为 `agent_chat`，避免固定命令抢走 Codex 上下文。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
 4. 对应处理器调用 GitHub、Coding Agent、Skill 或 MCP 服务。聊天开发命令先通过 GitHub API 验证仓库、基础分支和新分支，再创建异步任务。
-5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。Coding Agent 进入完成、失败或取消状态后，会通过同一平台的结果推送器再次发送终态和 PR 链接。
+5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。Coding Agent 进入完成、失败或取消状态后，会通过同一平台的结果推送器再次发送终态和 PR 链接。消息平台任务还会向 Codex 注入一个 stdio `cpx_platform` MCP 服务；它使用任务专属 Bearer Token 访问 cpx 内部 HTTP 路由，只能读取当前任务范围或向已绑定的原会话发送文本。
 
-控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。创建任务时，控制台或聊天命令可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录 Codex JSONL 的 `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发命令默认创建 PR，后续轮次向同一分支和 PR 推送。聊天任务按来源会话与用户记录，飞书普通文本继续最近任务。任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
+控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。创建任务时，控制台或聊天命令可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录 Codex JSONL 的 `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发命令默认创建 PR，后续轮次向同一分支和 PR 推送。聊天任务按来源会话与用户记录，飞书与钉钉任务内的非控制文本继续最近任务。任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
 
 GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新；任务页通过分页 `/repos/{owner}/{repo}/branches` 读取分支。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
 

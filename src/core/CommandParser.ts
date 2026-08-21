@@ -32,7 +32,7 @@ export interface ParsedUserInfo {
  */
 export class CommandParser {
   parse(rawText: string, userInfo: ParsedUserInfo): Command {
-    const text = this.stripPrefix(rawText, userInfo.source).trim();
+    const text = this.userText(rawText, userInfo.source);
     if (!text) {
       throw new CommandError('空命令');
     }
@@ -49,6 +49,10 @@ export class CommandParser {
       args,
       timestamp: Date.now(),
     };
+  }
+
+  userText(rawText: string, source: CommandSource): string {
+    return this.stripPrefix(rawText, source).trim();
   }
 
   /** 移除 @agent / /agent 前缀 */
@@ -226,8 +230,8 @@ export class CommandParser {
       return { name: `list_${normalized}`, args: {} };
     }
 
-    // 飞书未命中固定命令的文本直接交给当前 Coding Agent 工作区。
-    if (source === 'feishu') {
+    // 消息平台未命中控制命令的文本直接交给当前 Coding Agent 工作区。
+    if (source === 'feishu' || source === 'dingtalk') {
       return { name: 'agent_chat', args: { prompt: text } };
     }
 

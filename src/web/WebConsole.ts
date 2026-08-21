@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import {
   AgentModelConfiguration,
+  AgentPlatformToolContext,
   AgentReasoningEffort,
   AgentTask,
   AgentTaskManager,
@@ -200,6 +201,10 @@ export class WebConsole {
   cancelCodingTask(reference: string): boolean {
     const task = this.getCodingTask(reference);
     return task ? this.taskManager.cancel(task.id) : false;
+  }
+
+  setCodingTaskPlatformTools(taskId: string, context: AgentPlatformToolContext): void {
+    this.taskManager.setPlatformToolContext(taskId, context);
   }
 
   continueCodingTask(
