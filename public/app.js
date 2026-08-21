@@ -2,7 +2,10 @@ const state = {
   settings: null,
   tasks: [],
   selectedTaskId: null,
+  creatingTask: false,
   polling: false,
+  runDetailsOpenTaskIds: new Set(),
+  runOutputScrollByTaskId: new Map(),
   activeView: 'tasks',
   githubStatus: null,
   githubUser: null,
@@ -30,8 +33,12 @@ const elements = {
   branchHint: document.querySelector('#branch-hint'),
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
-  createPr: document.querySelector('#create-pr'),
   launchButton: document.querySelector('#launch-button'),
+  newTaskButton: document.querySelector('#new-task-button'),
+  newTaskToolbar: document.querySelector('#new-task-toolbar'),
+  newTaskContext: document.querySelector('#new-task-context'),
+  taskSuggestions: document.querySelector('#task-suggestions'),
+  threadHeading: document.querySelector('#thread-heading'),
   taskList: document.querySelector('#task-list'),
   taskCount: document.querySelector('#task-count'),
   taskDetail: document.querySelector('#task-detail'),
@@ -115,7 +122,9 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 elements.prompt.addEventListener('input', updatePromptCount);
 elements.repositoryPicker.addEventListener('change', handleTaskRepositorySelection);
 elements.branchPicker.addEventListener('change', handleTaskBranchSelection);
-elements.taskForm.addEventListener('submit', createTask);
+elements.taskForm.addEventListener('submit', submitTask);
+elements.newTaskButton.addEventListener('click', startNewTask);
+elements.newTaskToolbar.addEventListener('click', startNewTask);
 elements.feishuForm.addEventListener('submit', (event) => saveIntegration(event, 'feishu'));
 elements.dingtalkForm.addEventListener('submit', (event) => saveIntegration(event, 'dingtalk'));
 elements.codexDeviceLogin.addEventListener('click', startCodexDeviceLogin);
@@ -303,9 +312,16 @@ function handleTaskRepositorySelection() {
 }
 
 function selectTaskRepository(fullName, defaultBranch = '') {
+  state.creatingTask = true;
+  state.selectedTaskId = null;
   elements.repository.value = fullName;
   state.branchDefault = defaultBranch;
-  renderTaskRepositoryPicker();
+  elements.prompt.value = '';
+  elements.taskBranch.value = '';
+  enableNewTaskFields();
+  updatePromptCount();
+  renderTaskList();
+  renderTaskDetail();
 }
 
 function resetTaskBranchPicker() {
@@ -377,7 +393,9 @@ async function loadTaskBranches(repository, defaultBranch) {
     elements.branchPicker.disabled = false;
     elements.branchPicker.required = true;
     const selectedBranch =
-      branches.find((branch) => branch.name === defaultBranch)?.name || branches[0]?.name || '__new__';
+      branches.find((branch) => branch.name === defaultBranch)?.name ||
+      branches[0]?.name ||
+      '__new__';
     elements.branchPicker.value = selectedBranch;
     elements.branchHint.textContent = branches.length
       ? `已读取 ${branches.length} 个分支；选择现有分支作为基线，或新建任务分支`
@@ -409,6 +427,14 @@ function handleTaskBranchSelection() {
   elements.taskBranch.hidden = true;
   elements.taskBranch.required = false;
   elements.taskBranch.value = '';
+}
+
+function selectedTaskBaseBranch() {
+  const selectedBranch = elements.branchPicker.value;
+  if (!elements.branchPicker.hidden && !elements.branchPicker.disabled && selectedBranch) {
+    return selectedBranch === '__new__' ? state.branchDefault || undefined : selectedBranch;
+  }
+  return elements.baseBranch.value || undefined;
 }
 
 function renderGitHubConnection() {
@@ -515,10 +541,7 @@ function renderRepositories() {
 
   elements.repositoryList.querySelectorAll('[data-use-repository]').forEach((button) => {
     button.addEventListener('click', () => {
-      selectTaskRepository(
-        button.dataset.useRepository,
-        button.dataset.defaultBranch || '',
-      );
+      selectTaskRepository(button.dataset.useRepository, button.dataset.defaultBranch || '');
       switchView('tasks');
       elements.prompt.focus();
       showToast(`已选择 ${button.dataset.useRepository}`);
@@ -554,7 +577,11 @@ async function testCodex() {
   elements.codexTestTerminal.innerHTML = '';
   const profile = activeAgentProfile();
   if (!profile) return;
-  appendModelTestLine(elements.codexTestTerminal, `> ${profile.name} / ${providerLabel(profile.provider)}`, 'command');
+  appendModelTestLine(
+    elements.codexTestTerminal,
+    `> ${profile.name} / ${providerLabel(profile.provider)}`,
+    'command',
+  );
   appendModelTestLine(elements.codexTestTerminal, `你：${prompt}`, 'command');
   appendModelTestLine(elements.codexTestTerminal, '正在等待 Codex 回复…', 'muted');
   try {
@@ -563,11 +590,23 @@ async function testCodex() {
       body: JSON.stringify({ ...profile, prompt }),
     });
     elements.codexTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
-    appendModelTestLine(elements.codexTestTerminal, result.message, result.success ? 'success' : 'error');
+    appendModelTestLine(
+      elements.codexTestTerminal,
+      result.message,
+      result.success ? 'success' : 'error',
+    );
     if (result.response) {
-      appendModelTestLine(elements.codexTestTerminal, `${providerLabel(profile.provider)} 回复：\n${result.response}`, 'response');
+      appendModelTestLine(
+        elements.codexTestTerminal,
+        `${providerLabel(profile.provider)} 回复：\n${result.response}`,
+        'response',
+      );
     }
-    appendModelTestLine(elements.codexTestTerminal, `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
+    appendModelTestLine(
+      elements.codexTestTerminal,
+      `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`,
+      'muted',
+    );
     showToast(result.message, !result.success);
   } catch (error) {
     elements.codexTestTerminal.className = 'model-test-terminal error';
@@ -634,7 +673,12 @@ async function saveIntegration(event, platform) {
     elements.dingtalkClientSecret.value = '';
     renderIntegrations();
     const status = state.integrations[platform];
-    showToast(status.state === 'connected' || status.state === 'disabled' ? status.message : `配置已保存：${status.message}`, status.state === 'error');
+    showToast(
+      status.state === 'connected' || status.state === 'disabled'
+        ? status.message
+        : `配置已保存：${status.message}`,
+      status.state === 'error',
+    );
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -674,13 +718,18 @@ async function loadCodexModels(notify = false) {
 function renderModelCatalog(errorMessage) {
   const savedModel = elements.profileModel.value || activeAgentProfile()?.model || '';
   const options = state.codexModels.map(
-    (model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.displayName)} · ${escapeHtml(model.id)}</option>`,
+    (model) =>
+      `<option value="${escapeHtml(model.id)}">${escapeHtml(model.displayName)} · ${escapeHtml(model.id)}</option>`,
   );
   if (savedModel && !state.codexModels.some((model) => model.id === savedModel)) {
-    options.unshift(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel)}（已保存，当前目录不可用）</option>`);
+    options.unshift(
+      `<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel)}（已保存，当前目录不可用）</option>`,
+    );
   }
   if (!options.length) {
-    options.push(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel || '登录 Codex 后刷新模型列表')}</option>`);
+    options.push(
+      `<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel || '登录 Codex 后刷新模型列表')}</option>`,
+    );
   }
   elements.profileModel.innerHTML = options.join('');
   elements.profileModel.value = savedModel || state.codexModels[0]?.id || '';
@@ -737,8 +786,18 @@ async function refreshCodexAuth() {
 function renderCodexAuth() {
   const auth = state.codexAuth;
   if (!auth) return;
-  const tone = auth.authenticated ? 'connected' : auth.state === 'waiting' ? 'pending' : auth.state === 'failed' ? 'error' : '';
-  elements.codexAuthStatus.textContent = auth.authenticated ? '已登录' : auth.state === 'waiting' ? '等待授权' : '未登录';
+  const tone = auth.authenticated
+    ? 'connected'
+    : auth.state === 'waiting'
+      ? 'pending'
+      : auth.state === 'failed'
+        ? 'error'
+        : '';
+  elements.codexAuthStatus.textContent = auth.authenticated
+    ? '已登录'
+    : auth.state === 'waiting'
+      ? '等待授权'
+      : '未登录';
   elements.codexAuthStatus.className = `connection-badge ${tone}`;
   elements.codexCliStatus.textContent = auth.cliAvailable ? 'CLI 可用' : 'CLI 缺失';
   elements.codexCliStatus.className = `connection-badge ${auth.cliAvailable ? 'connected' : 'error'}`;
@@ -849,8 +908,14 @@ function editAgentProfile(id) {
   elements.profileId.value = profile?.id || '';
   elements.profileName.value = profile?.name || '';
   const modelId = profile?.model || state.codexModels[0]?.id || '';
-  if (modelId && !Array.from(elements.profileModel.options).some((option) => option.value === modelId)) {
-    elements.profileModel.add(new Option(`${modelId}（已保存，当前目录不可用）`, modelId, true, true), 0);
+  if (
+    modelId &&
+    !Array.from(elements.profileModel.options).some((option) => option.value === modelId)
+  ) {
+    elements.profileModel.add(
+      new Option(`${modelId}（已保存，当前目录不可用）`, modelId, true, true),
+      0,
+    );
   }
   elements.profileModel.value = modelId;
   elements.profileReasoning.dataset.savedValue = profile?.reasoningEffort || '';
@@ -893,13 +958,19 @@ async function deleteAgentProfile() {
   const id = elements.profileId.value;
   if (!id || state.settings.modelConfigs.length <= 1) return;
   const profiles = state.settings.modelConfigs.filter((item) => item.id !== id);
-  const activeId = state.settings.activeConfigurationId === id ? profiles[0].id : state.settings.activeConfigurationId;
+  const activeId =
+    state.settings.activeConfigurationId === id
+      ? profiles[0].id
+      : state.settings.activeConfigurationId;
   await persistAgentProfiles(activeId, profiles);
   editAgentProfile(activeId);
   showToast('Agent 配置已删除。');
 }
 
-async function persistAgentProfiles(activeConfigurationId, modelConfigs = state.settings.modelConfigs) {
+async function persistAgentProfiles(
+  activeConfigurationId,
+  modelConfigs = state.settings.modelConfigs,
+) {
   state.settings = await api('/api/console/settings', {
     method: 'POST',
     body: JSON.stringify({ activeConfigurationId, modelConfigs }),
@@ -915,7 +986,11 @@ function renderExecutionOrderPreview() {
 }
 
 function connectionStateLabel(stateValue) {
-  return { disabled: '未启用', connecting: '连接中', connected: '已连接', error: '连接失败' }[stateValue] || stateValue;
+  return (
+    { disabled: '未启用', connecting: '连接中', connected: '已连接', error: '连接失败' }[
+      stateValue
+    ] || stateValue
+  );
 }
 
 async function refreshTasks() {
@@ -924,8 +999,9 @@ async function refreshTasks() {
   try {
     const result = await api('/api/console/tasks');
     state.tasks = result.tasks || [];
-    if (!state.selectedTaskId && state.tasks.length) {
+    if (!state.selectedTaskId && !state.creatingTask && state.tasks.length) {
       state.selectedTaskId = state.tasks[0].id;
+      state.creatingTask = false;
     }
     renderTaskList();
     renderTaskDetail();
@@ -936,8 +1012,17 @@ async function refreshTasks() {
   }
 }
 
-async function createTask(event) {
+async function submitTask(event) {
   event.preventDefault();
+  const task = state.tasks.find((item) => item.id === state.selectedTaskId);
+  if (!state.creatingTask && task) {
+    await continueSelectedTask(task);
+    return;
+  }
+  await createTask();
+}
+
+async function createTask() {
   elements.launchButton.disabled = true;
   elements.launchButton.querySelector('span').textContent = '正在启动…';
   try {
@@ -946,23 +1031,63 @@ async function createTask(event) {
       body: JSON.stringify({
         useFallback: false,
         repository: elements.repository.value,
-        baseBranch: elements.baseBranch.value || undefined,
+        baseBranch: selectedTaskBaseBranch(),
         taskBranch: elements.taskBranch.value || undefined,
         prompt: elements.prompt.value,
-        createPullRequest: elements.createPr.checked,
       }),
     });
     state.selectedTaskId = task.id;
+    state.creatingTask = false;
     state.tasks.unshift(task);
+    elements.prompt.value = '';
+    updatePromptCount();
     renderTaskList();
     renderTaskDetail();
     showToast('任务已启动，Agent 正在准备工作区。');
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    elements.launchButton.disabled = false;
-    elements.launchButton.querySelector('span').textContent = '启动任务';
+    if (state.creatingTask) {
+      elements.launchButton.disabled = false;
+      elements.launchButton.querySelector('span').textContent = '创建任务';
+    }
   }
+}
+
+async function continueSelectedTask(task) {
+  const prompt = elements.prompt.value.trim();
+  if (!prompt) return;
+  elements.launchButton.disabled = true;
+  elements.launchButton.querySelector('span').textContent = '发送中…';
+  try {
+    const continued = await api('/api/console/task/continue', {
+      method: 'POST',
+      body: JSON.stringify({ id: task.id, prompt, useFallback: false }),
+    });
+    const index = state.tasks.findIndex((item) => item.id === continued.id);
+    if (index >= 0) state.tasks[index] = continued;
+    elements.prompt.value = '';
+    updatePromptCount();
+    renderTaskList();
+    renderTaskDetail();
+    showToast('已发送，Agent 将继续使用当前工作区。');
+  } catch (error) {
+    elements.launchButton.disabled = false;
+    elements.launchButton.querySelector('span').textContent = '发送';
+    showToast(error.message, true);
+  }
+}
+
+function startNewTask() {
+  state.creatingTask = true;
+  state.selectedTaskId = null;
+  elements.prompt.value = '';
+  elements.taskBranch.value = '';
+  enableNewTaskFields();
+  updatePromptCount();
+  renderTaskList();
+  renderTaskDetail();
+  window.requestAnimationFrame(() => elements.prompt.focus());
 }
 
 function renderTaskList() {
@@ -975,14 +1100,20 @@ function renderTaskList() {
     .map(
       (task) => `
         <button class="task-list-item ${task.id === state.selectedTaskId ? 'active' : ''}" data-task-id="${task.id}" type="button">
-          <strong>${escapeHtml(shortRepository(task.repository))}</strong>
-          <span><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.provider)}</span>
+          <strong title="${escapeHtml(task.prompt)}">${escapeHtml(task.prompt)}</strong>
+          <span class="task-list-meta">
+            <i class="mini-dot ${task.status}"></i>
+            <span class="task-list-meta-text" title="${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}">${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}</span>
+          </span>
         </button>`,
     )
     .join('');
   elements.taskList.querySelectorAll('[data-task-id]').forEach((button) => {
     button.addEventListener('click', () => {
       state.selectedTaskId = button.dataset.taskId;
+      state.creatingTask = false;
+      elements.prompt.value = '';
+      updatePromptCount();
       renderTaskList();
       renderTaskDetail();
     });
@@ -990,42 +1121,84 @@ function renderTaskList() {
 }
 
 function renderTaskDetail() {
+  rememberRunDetailsState();
   const task = state.tasks.find((item) => item.id === state.selectedTaskId);
-  if (!task) {
-    elements.taskDetail.className = 'task-detail empty-detail';
+  if (state.creatingTask || !task) {
+    state.creatingTask = true;
+    delete elements.taskDetail.dataset.taskId;
+    elements.threadHeading.innerHTML = `
+      <p class="eyebrow">NEW AGENT TASK</p>
+      <h1>新建任务</h1>
+      <p>选择仓库并描述你想完成的工作</p>`;
+    elements.taskDetail.className = 'task-detail thread-empty';
     elements.taskDetail.innerHTML = `
-      <div class="orb" aria-hidden="true"><i></i></div>
-      <h3>等待第一个任务</h3>
-      <p>提交任务后，这里会实时展示 Agent 的执行阶段、日志和 Pull Request。</p>`;
+      <div class="thread-empty-mark" aria-hidden="true">⌁</div>
+      <h2>从一个开发任务开始</h2>
+      <p>每个任务拥有独立的 Git worktree。完成第一轮后，可以在这里持续追加要求和调整代码。</p>`;
+    elements.taskForm.classList.add('new-task-mode');
+    elements.newTaskContext.hidden = false;
+    elements.taskSuggestions.hidden = false;
+    elements.prompt.disabled = false;
+    elements.prompt.placeholder = '描述要完成的工作…';
+    elements.launchButton.disabled = false;
+    elements.launchButton.querySelector('span').textContent = '创建任务';
     return;
   }
 
   const active = ['queued', 'preparing', 'running', 'publishing'].includes(task.status);
-  elements.taskDetail.className = 'task-detail';
-  elements.taskDetail.innerHTML = `
-    <div class="detail-summary">
-      <div class="detail-status">
-        <span class="status-badge"><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))}</span>
-        ${active ? '<button class="cancel-button" type="button">取消任务</button>' : ''}
-      </div>
-      <h3>${escapeHtml(task.prompt)}</h3>
-      <div class="detail-meta">${escapeHtml(task.provider.toUpperCase())}${task.model ? ` / ${escapeHtml(task.model)}` : ''}<br />${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(formatTime(task.createdAt))}</div>
+  const canContinue = !active && task.workspace && task.agentBranch;
+  const runDetailsOpen = state.runDetailsOpenTaskIds.has(task.id);
+  elements.threadHeading.innerHTML = `
+    <div class="thread-title-row">
+      <span class="status-badge"><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))}</span>
+      ${active ? '<button class="cancel-button" type="button">停止</button>' : ''}
     </div>
-    ${renderAttempts(task.attempts)}
-    <pre class="task-output" aria-label="任务输出"></pre>
-    ${task.pullRequestUrl ? `<a class="pr-link" href="${escapeHtml(task.pullRequestUrl)}" target="_blank" rel="noreferrer"><span>打开 Pull Request</span><b>↗</b></a>` : ''}
-    ${task.workspace ? `<div class="workspace-path">WORKSPACE · ${escapeHtml(task.workspace)}</div>` : ''}`;
+    <h1>${escapeHtml(task.prompt)}</h1>
+    <p>${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(task.agentBranch || task.baseBranch || '准备分支中')} · ${escapeHtml(providerLabel(task.provider))}${task.model ? ` / ${escapeHtml(task.model)}` : ''}</p>`;
+  elements.taskDetail.className = 'task-detail thread-conversation';
+  elements.taskDetail.dataset.taskId = task.id;
+  elements.taskDetail.innerHTML = `
+    <div class="conversation-stream">
+      ${task.turns.map((turn, index) => renderConversationTurn(task, turn, index)).join('')}
+    </div>
+    <details class="run-details"${runDetailsOpen ? ' open' : ''}>
+      <summary>运行详情 <span>${task.logs.length} 条日志 · ${task.attempts.length} 次执行</span></summary>
+      ${renderAttempts(task.attempts)}
+      <pre class="task-output" aria-label="任务输出">${escapeHtml(formatTaskLogs(task.logs))}</pre>
+    </details>
+    <div class="workspace-strip">
+      ${task.workspace ? `<span>WORKSPACE · ${escapeHtml(task.workspace)}</span>` : '<span>正在准备工作区…</span>'}
+      <time>${escapeHtml(formatTime(task.updatedAt))}</time>
+      </div>`;
 
-  const output = elements.taskDetail.querySelector('.task-output');
-  output.textContent = task.logs
-    .map(
-      (log) =>
-        `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`,
-    )
-    .join('\n');
-  output.scrollTop = output.scrollHeight;
+  const runDetails = elements.taskDetail.querySelector('.run-details');
+  const taskOutput = runDetails?.querySelector('.task-output');
+  restoreTaskOutputScroll(task.id, taskOutput);
+  taskOutput?.addEventListener('scroll', () => rememberTaskOutputScroll(task.id, taskOutput));
+  runDetails?.addEventListener('toggle', (event) => {
+    const details = event.currentTarget;
+    if (details.open) {
+      state.runDetailsOpenTaskIds.add(task.id);
+      restoreTaskOutputScroll(task.id, taskOutput);
+    } else {
+      state.runDetailsOpenTaskIds.delete(task.id);
+    }
+  });
 
-  elements.taskDetail.querySelector('.cancel-button')?.addEventListener('click', async () => {
+  elements.taskForm.classList.remove('new-task-mode');
+  elements.newTaskContext.hidden = true;
+  disableNewTaskFields();
+  elements.taskSuggestions.hidden = true;
+  elements.prompt.disabled = !canContinue;
+  elements.prompt.placeholder = active
+    ? 'Agent 正在工作，完成后可继续输入…'
+    : canContinue
+      ? '继续要求 Agent 调整这个任务…'
+      : '工作区未创建，无法继续此任务';
+  elements.launchButton.disabled = !canContinue;
+  elements.launchButton.querySelector('span').textContent = active ? '执行中' : '发送';
+
+  elements.threadHeading.querySelector('.cancel-button')?.addEventListener('click', async () => {
     try {
       await api('/api/console/cancel', {
         method: 'POST',
@@ -1037,6 +1210,104 @@ function renderTaskDetail() {
       showToast(error.message, true);
     }
   });
+
+  elements.taskDetail.scrollTop = elements.taskDetail.scrollHeight;
+}
+
+function rememberRunDetailsState() {
+  const taskId = elements.taskDetail.dataset.taskId;
+  const details = elements.taskDetail.querySelector('.run-details');
+  if (!taskId || !details) return;
+  if (details.open) {
+    state.runDetailsOpenTaskIds.add(taskId);
+    rememberTaskOutputScroll(taskId, details.querySelector('.task-output'));
+  } else {
+    state.runDetailsOpenTaskIds.delete(taskId);
+  }
+}
+
+function rememberTaskOutputScroll(taskId, output) {
+  if (!output) return;
+  state.runOutputScrollByTaskId.set(taskId, {
+    scrollTop: output.scrollTop,
+    followTail: output.scrollHeight - output.clientHeight - output.scrollTop <= 12,
+  });
+}
+
+function restoreTaskOutputScroll(taskId, output) {
+  if (!output) return;
+  const saved = state.runOutputScrollByTaskId.get(taskId);
+  if (!saved) return;
+  output.scrollTop = saved.followTail
+    ? output.scrollHeight
+    : Math.min(saved.scrollTop, Math.max(0, output.scrollHeight - output.clientHeight));
+}
+
+function enableNewTaskFields() {
+  elements.repositoryPicker.disabled = false;
+  elements.repository.disabled = false;
+  elements.branchPicker.disabled = false;
+  elements.baseBranch.disabled = false;
+  elements.taskBranch.disabled = false;
+  renderTaskRepositoryPicker();
+}
+
+function disableNewTaskFields() {
+  elements.repositoryPicker.disabled = true;
+  elements.repository.disabled = true;
+  elements.branchPicker.disabled = true;
+  elements.baseBranch.disabled = true;
+  elements.taskBranch.disabled = true;
+}
+
+function renderConversationTurn(task, turn, index) {
+  const response = turn.response || (index === task.turns.length - 1 ? task.lastAgentResponse : '');
+  const isCurrent = index === task.turns.length - 1;
+  const waiting = isCurrent && ['queued', 'running'].includes(turn.status) && !response;
+  return `
+    <section class="conversation-turn">
+      <article class="chat-message user-message">
+        <div class="message-avatar">你</div>
+        <div class="message-content">
+          <div class="message-label">你 <time>${escapeHtml(formatTime(turn.createdAt))}</time></div>
+          <div class="message-body">${escapeHtml(turn.prompt)}</div>
+        </div>
+      </article>
+      <article class="chat-message agent-message ${waiting ? 'waiting' : ''}">
+        <div class="message-avatar">⌁</div>
+        <div class="message-content">
+          <div class="message-label">Codex <span>${escapeHtml(turnStatusLabel(turn.status))}</span></div>
+          <div class="message-body">${
+            response
+              ? escapeHtml(response)
+              : waiting
+                ? '<span class="thinking"><i></i><i></i><i></i></span> 正在分析并修改代码…'
+                : escapeHtml(turn.error || '这一轮没有返回文本结果。')
+          }</div>
+        </div>
+      </article>
+    </section>`;
+}
+
+function formatTaskLogs(logs) {
+  return logs
+    .map(
+      (log) =>
+        `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`,
+    )
+    .join('\n');
+}
+
+function turnStatusLabel(status) {
+  return (
+    {
+      queued: '等待中',
+      running: '工作中',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已停止',
+    }[status] || status
+  );
 }
 
 async function switchView(view) {

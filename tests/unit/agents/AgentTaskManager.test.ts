@@ -8,7 +8,11 @@ const spawnMock = vi.hoisted(() => vi.fn());
 
 vi.mock('child_process', () => ({ spawn: spawnMock }));
 
-import { AgentTaskManager, normalizeRepository } from '../../../src/agents/AgentTaskManager';
+import {
+  AgentTaskManager,
+  normalizeRepository,
+  repositoryCoordinates,
+} from '../../../src/agents/AgentTaskManager';
 import { Logger } from '../../../src/utils/Logger';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-agent-tasks');
@@ -23,6 +27,14 @@ interface FakeProcess extends EventEmitter {
 let gitStatusOutput = '';
 let holdAgent = false;
 let agentInput = '';
+
+function createManager(): AgentTaskManager {
+  return new AgentTaskManager(
+    join(TMP_DIR, 'workspaces'),
+    new Logger('error'),
+    join(TMP_DIR, 'repositories'),
+  );
+}
 
 function fakeProcess(stdout = '', stderr = '', code = 0, hold = false): FakeProcess {
   const child = new EventEmitter() as FakeProcess;
@@ -58,6 +70,14 @@ describe('AgentTaskManager', () => {
     agentInput = '';
     spawnMock.mockReset();
     spawnMock.mockImplementation((command: string, args: string[]) => {
+      if (command === 'git' && args[0] === 'clone') {
+        mkdirSync(join(args[args.length - 1], '.git'), { recursive: true });
+        return fakeProcess();
+      }
+      if (command === 'git' && args[0] === 'worktree' && args[1] === 'add') {
+        mkdirSync(args[4], { recursive: true });
+        return fakeProcess();
+      }
       if (command === 'git' && args[0] === 'status') {
         return fakeProcess(gitStatusOutput);
       }
@@ -65,7 +85,12 @@ describe('AgentTaskManager', () => {
         return fakeProcess('https://github.com/acme/repo/pull/42\n');
       }
       if (command === 'codex') {
-        return fakeProcess('{"type":"result","result":"done"}\n', '', 0, holdAgent);
+        return fakeProcess(
+          '{"type":"thread.started","thread_id":"thread-1"}\n{"type":"result","result":"done"}\n',
+          '',
+          0,
+          holdAgent,
+        );
       }
       return fakeProcess();
     });
@@ -83,11 +108,15 @@ describe('AgentTaskManager', () => {
     expect(normalizeRepository('git@github.com:acme/repo.git')).toBe(
       'git@github.com:acme/repo.git',
     );
+    expect(repositoryCoordinates('git@github.com:acme/repo.git')).toEqual({
+      owner: 'acme',
+      repository: 'repo',
+    });
     expect(() => normalizeRepository('https://example.com/acme/repo')).toThrow('仅支持');
   });
 
   it('应执行 Codex 任务并保留本地工作区', async () => {
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     manager.setSecrets({ openaiApiKey: 'test-openai-key' });
 
     const created = manager.create({
@@ -102,8 +131,12 @@ describe('AgentTaskManager', () => {
 
     const task = manager.get(created.id)!;
     expect(task.agentBranch).toMatch(/^cpx\/task-/);
+    expect(task.lastAgentResponse).toBe('done');
+    expect(task.turns[0].response).toBe('done');
     expect(task.logs.some((entry) => entry.message === 'done')).toBe(true);
     expect(agentInput).toContain('用户任务：修复构建');
+    const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
+    expect(codexCall?.[1]).not.toContain('--skip-git-repo-check');
     expect(spawnMock).toHaveBeenCalledWith(
       'codex',
       expect.arrayContaining(['exec', '--json', '--color', 'never']),
@@ -115,9 +148,151 @@ describe('AgentTaskManager', () => {
     await manager.stop();
   });
 
+  it('消息平台任务应注入受限 MCP 工具且不在参数中暴露 Token', async () => {
+    const manager = createManager();
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      prompt: '修复构建',
+    });
+    manager.setPlatformToolContext(created.id, {
+      endpoint: 'http://127.0.0.1:3999/api/internal/agent-platform-tool',
+      token: 'task-scoped-platform-token',
+      taskId: created.id,
+      platform: 'feishu',
+    });
+
+    await manager.waitForTerminal(created.id);
+    const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
+    expect(codexCall?.[1]).toEqual(
+      expect.arrayContaining([
+        '--config',
+        expect.stringContaining('mcp_servers.cpx_platform.command='),
+        '--config',
+        'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      ]),
+    );
+    expect(JSON.stringify(codexCall?.[1])).not.toContain('task-scoped-platform-token');
+    expect(codexCall?.[2]).toEqual(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CPX_PLATFORM_TOOL_TOKEN: 'task-scoped-platform-token',
+          CPX_PLATFORM_TOOL_TASK_ID: created.id,
+          CPX_PLATFORM_NAME: 'feishu',
+        }),
+      }),
+    );
+    expect(agentInput).toContain('cpx_platform MCP 工具');
+    await manager.stop();
+  });
+
+  it('未指定基础分支时应使用克隆生成的本地 origin/HEAD，且不再次查询远端', async () => {
+    const manager = createManager();
+    manager.setSecrets({ githubToken: 'github_pat_head-secret' });
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      prompt: '使用默认分支',
+    });
+    await manager.waitForTerminal(created.id);
+
+    expect(spawnMock).not.toHaveBeenCalledWith(
+      'git',
+      ['remote', 'set-head', 'origin', '--auto'],
+      expect.anything(),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['worktree', 'add', '-b']),
+      expect.objectContaining({ cwd: join(TMP_DIR, 'repositories', 'acme', 'repo') }),
+    );
+    const worktreeCall = spawnMock.mock.calls.find(
+      ([command, args]) => command === 'git' && args[0] === 'worktree' && args[1] === 'add',
+    );
+    expect(worktreeCall?.[1].at(-1)).toBe('refs/remotes/origin/HEAD');
+    await manager.stop();
+  });
+
+  it('同一 GitHub 仓库的后续任务应 fetch 缓存并创建新的 worktree', async () => {
+    const manager = createManager();
+    manager.setSecrets({ githubToken: 'github_pat_cache-secret' });
+    const first = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      baseBranch: 'main',
+      prompt: '第一项任务',
+    });
+    await manager.waitForTerminal(first.id);
+    const second = manager.create({
+      provider: 'codex',
+      repository: 'https://github.com/acme/repo',
+      baseBranch: 'main',
+      prompt: '第二项任务',
+    });
+    await manager.waitForTerminal(second.id);
+
+    expect(
+      spawnMock.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone'),
+    ).toHaveLength(1);
+    expect(
+      spawnMock.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'fetch'),
+    ).toHaveLength(2);
+    expect(
+      spawnMock.mock.calls.filter(
+        ([command, args]) => command === 'git' && args[0] === 'worktree' && args[1] === 'add',
+      ),
+    ).toHaveLength(2);
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['remote', 'set-url', 'origin', 'https://github.com/acme/repo.git'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CPX_GITHUB_TOKEN: 'github_pat_cache-secret',
+          GIT_ASKPASS: expect.stringContaining('.github-askpass'),
+        }),
+      }),
+    );
+    await manager.stop();
+  });
+
+  it('应在同一 worktree 和 Codex 会话中继续追加指令', async () => {
+    const manager = createManager();
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      baseBranch: 'main',
+      prompt: '先完成第一轮',
+    });
+    const first = await manager.waitForTerminal(created.id);
+    expect(first.threadId).toBe('thread-1');
+    expect(first.repositoryPath).toBe(join(TMP_DIR, 'repositories', 'acme', 'repo'));
+    const cloneCalls = spawnMock.mock.calls.filter(
+      ([command, args]) => command === 'git' && args[0] === 'clone',
+    ).length;
+
+    const continued = manager.continueTask(created.id, { prompt: '继续补充测试' });
+    expect(continued.status).toBe('queued');
+    const second = await manager.waitForTerminal(created.id);
+
+    expect(second.status).toBe('completed');
+    expect(second.workspace).toBe(first.workspace);
+    expect(second.turns.map((turn) => turn.prompt)).toEqual(['先完成第一轮', '继续补充测试']);
+    expect(second.turns.map((turn) => turn.response)).toEqual(['done', 'done']);
+    expect(
+      spawnMock.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone'),
+    ).toHaveLength(cloneCalls);
+    expect(spawnMock).toHaveBeenCalledWith(
+      'codex',
+      expect.arrayContaining(['exec', 'resume', '--json', 'thread-1', '-']),
+      expect.objectContaining({ cwd: first.workspace }),
+    );
+    expect(agentInput).toContain('用户任务：继续补充测试');
+    await manager.stop();
+  });
+
   it('有改动且获授权时应提交、推送并创建 Pull Request', async () => {
     gitStatusOutput = ' M README.md\n';
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     manager.setSecrets({ githubToken: 'github_pat_task-secret' });
     const created = manager.create({
       provider: 'codex',
@@ -134,16 +309,42 @@ describe('AgentTaskManager', () => {
       'git',
       [
         'clone',
-        '--depth',
-        '1',
-        '--branch',
-        'develop',
+        '--no-checkout',
         'https://github.com/acme/repo.git',
-        expect.any(String),
+        join(TMP_DIR, 'repositories', 'acme', 'repo'),
       ],
       expect.objectContaining({
         env: expect.objectContaining({ GH_TOKEN: 'github_pat_task-secret' }),
       }),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['fetch', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          GH_TOKEN: 'github_pat_task-secret',
+          CPX_GITHUB_TOKEN: 'github_pat_task-secret',
+          GIT_ASKPASS: expect.stringContaining('.github-askpass'),
+          GIT_TERMINAL_PROMPT: '0',
+        }),
+      }),
+    );
+    expect(spawnMock).not.toHaveBeenCalledWith(
+      'git',
+      ['remote', 'set-head', 'origin', '--auto'],
+      expect.anything(),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      [
+        'worktree',
+        'add',
+        '-b',
+        'feature/update-docs',
+        expect.any(String),
+        'refs/remotes/origin/develop',
+      ],
+      expect.objectContaining({ cwd: join(TMP_DIR, 'repositories', 'acme', 'repo') }),
     );
     expect(spawnMock).toHaveBeenCalledWith(
       'git',
@@ -173,7 +374,7 @@ describe('AgentTaskManager', () => {
 
   it('应取消正在运行的任务，并在停止后拒绝新任务', async () => {
     holdAgent = true;
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       provider: 'codex',
       repository: 'acme/repo',
@@ -192,7 +393,7 @@ describe('AgentTaskManager', () => {
   });
 
   it('应在启动进程前拒绝无效输入', () => {
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     expect(() =>
       manager.create({ provider: 'codex', repository: 'acme/repo', prompt: '   ' }),
     ).toThrow('任务指令不能为空');
@@ -253,7 +454,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         { id: 'primary', provider: 'codex' },
@@ -298,7 +499,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         {
@@ -379,7 +580,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         { id: 'primary', provider: 'codex' },
@@ -407,7 +608,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         { id: 'primary', provider: 'codex' },
@@ -437,7 +638,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         { id: 'primary', provider: 'codex' },
@@ -477,7 +678,7 @@ describe('AgentTaskManager', () => {
       return fakeProcess();
     });
 
-    const manager = new AgentTaskManager(TMP_DIR, new Logger('error'));
+    const manager = createManager();
     const created = manager.create({
       configurations: [
         { id: 'primary', provider: 'codex' },

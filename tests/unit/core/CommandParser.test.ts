@@ -50,6 +50,29 @@ describe('CommandParser Coding Agent 命令', () => {
       name: 'agent_task_cancel',
       args: { id: 'abcdef12' },
     });
+    expect(parse('继续 abcdef12 把按钮颜色改成蓝色')).toMatchObject({
+      name: 'agent_task_continue',
+      args: { id: 'abcdef12', prompt: '把按钮颜色改成蓝色' },
+    });
+  });
+
+  it('飞书和钉钉普通文本应路由到 Coding Agent 对话', () => {
+    for (const [source, text] of [
+      ['feishu', '/agent 帮我分析一下登录流程'],
+      ['dingtalk', '@agent-bot 帮我分析一下登录流程'],
+    ] as const) {
+      expect(
+        parser.parse(text, {
+          userId: 'user-1',
+          userName: 'Tester',
+          source,
+        }),
+      ).toMatchObject({
+        name: 'agent_chat',
+        args: { prompt: '帮我分析一下登录流程' },
+      });
+    }
+    expect(parse('帮我分析一下登录流程').name).toBe('帮我分析一下登录流程');
   });
 
   it('应保留消息来源会话路由但不改变用户身份', () => {

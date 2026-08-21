@@ -1,6 +1,6 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
@@ -14,13 +14,7 @@ import {
 
 export type CodingAgentProvider = 'codex';
 export type AgentReasoningEffort =
-  | 'minimal'
-  | 'low'
-  | 'medium'
-  | 'high'
-  | 'xhigh'
-  | 'max'
-  | 'ultra';
+  'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 export type AgentTaskStatus =
   'queued' | 'preparing' | 'running' | 'publishing' | 'completed' | 'failed' | 'cancelled';
 
@@ -52,6 +46,14 @@ export interface AgentTaskRequest {
   createPullRequest?: boolean;
 }
 
+export interface AgentTaskContinuationRequest {
+  prompt: string;
+  /** 继续任务时重新读取当前模型配置；未提供时沿用原任务的公开配置。 */
+  configurations?: AgentModelConfiguration[];
+  /** 设置后可在后续轮次提交或更新同一个 Pull Request。 */
+  createPullRequest?: boolean;
+}
+
 export interface AgentTaskLog {
   timestamp: number;
   stream: 'system' | 'stdout' | 'stderr';
@@ -67,6 +69,18 @@ export interface AgentAttempt {
   status: 'running' | 'success' | 'failed';
   errorKind?: AgentErrorKind;
   /** 摘要(非完整 stderr),用于 UI 展示。 */
+  error?: string;
+}
+
+export interface AgentTaskTurn {
+  id: string;
+  prompt: string;
+  /** 当前轮次 Coding Agent 的最终回复，用于会话式界面回放。 */
+  response?: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
   error?: string;
 }
 
@@ -90,16 +104,31 @@ export interface AgentTask {
   startedAt?: number;
   completedAt?: number;
   workspace?: string;
+  /** 按 GitHub owner/repository 两级目录保存的完整本地仓库。 */
+  repositoryPath?: string;
   agentBranch?: string;
+  /** Codex JSONL 返回的会话 ID，后续轮次通过 exec resume 继续。 */
+  threadId?: string;
+  /** 当前轮次 Coding Agent 的最终文本回复，用于 Web 与聊天平台回传。 */
+  lastAgentResponse?: string;
   pullRequestUrl?: string;
   error?: string;
   logs: AgentTaskLog[];
   attempts: AgentAttempt[];
+  turns: AgentTaskTurn[];
 }
 
 export interface AgentRuntimeSecrets {
   openaiApiKey?: string;
   githubToken?: string;
+}
+
+/** 仅注入对应任务的消息平台工具，不进入公开任务快照。 */
+export interface AgentPlatformToolContext {
+  endpoint: string;
+  token: string;
+  taskId: string;
+  platform: 'dingtalk' | 'feishu';
 }
 
 const MAX_LOG_ENTRIES = 800;
@@ -114,21 +143,38 @@ export class AgentTaskManager {
   private tasks = new Map<string, AgentTask>();
   private processes = new Map<string, ChildProcessWithoutNullStreams>();
   private workspaceRoot: string;
+  private repositoryRoot: string;
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
   private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
+  private platformToolContexts = new Map<string, AgentPlatformToolContext>();
   private terminalWaiters = new Map<string, Set<(task: AgentTask) => void>>();
   private gitAskPassPath?: string;
+  private repositoryLocks = new Map<string, Promise<void>>();
   private stopped = false;
 
-  constructor(workspaceRoot: string, logger: Logger) {
+  constructor(workspaceRoot: string, logger: Logger, repositoryRoot?: string) {
     this.workspaceRoot = resolve(workspaceRoot);
+    this.repositoryRoot = resolve(
+      repositoryRoot ?? join(dirname(this.workspaceRoot), 'repositories'),
+    );
     this.logger = logger.child('AgentTasks');
     mkdirSync(this.workspaceRoot, { recursive: true });
+    mkdirSync(this.repositoryRoot, { recursive: true });
   }
 
   setSecrets(secrets: AgentRuntimeSecrets): void {
     this.secrets = { ...this.secrets, ...secrets };
+  }
+
+  setPlatformToolContext(taskId: string, context: AgentPlatformToolContext): void {
+    if (!this.tasks.has(taskId)) {
+      throw new Error('任务不存在');
+    }
+    if (context.taskId !== taskId) {
+      throw new Error('平台工具任务范围不匹配');
+    }
+    this.platformToolContexts.set(taskId, { ...context });
   }
 
   create(request: AgentTaskRequest): AgentTask {
@@ -154,6 +200,7 @@ export class AgentTaskManager {
       updatedAt: now,
       logs: [],
       attempts: [],
+      turns: [this.createTurn(normalized.prompt, now)],
     };
     this.tasks.set(task.id, task);
     this.executionConfigurations.set(task.id, configurations);
@@ -161,6 +208,54 @@ export class AgentTaskManager {
     queueMicrotask(() => {
       if (task.status !== 'cancelled') {
         void this.execute(task);
+      }
+    });
+    return this.snapshot(task);
+  }
+
+  continueTask(id: string, request: AgentTaskContinuationRequest): AgentTask {
+    if (this.stopped) {
+      throw new Error('任务管理器已停止');
+    }
+    const task = this.tasks.get(id);
+    if (!task) {
+      throw new Error('任务不存在');
+    }
+    if (!isTerminal(task.status)) {
+      throw new Error('任务仍在执行，请等待当前轮次结束');
+    }
+    if (!task.workspace || !task.agentBranch || !existsSync(task.workspace)) {
+      throw new Error('任务工作区尚未创建，无法继续');
+    }
+
+    const prompt = validatePrompt(request.prompt);
+    const configurations: AgentModelConfiguration[] = request.configurations
+      ? normalizeConfigurations({
+          repository: task.repository,
+          prompt,
+          configurations: request.configurations,
+        })
+      : task.configurations.map((configuration) => ({ ...configuration }));
+    const now = Date.now();
+    task.prompt = prompt;
+    task.provider = configurations[0].provider;
+    task.providers = configurations.map((configuration) => configuration.provider);
+    task.model = configurations[0].model;
+    task.configurations = configurations.map(
+      ({ apiKey: _apiKey, ...configuration }) => configuration,
+    );
+    task.createPullRequest = request.createPullRequest ?? task.createPullRequest;
+    task.status = 'queued';
+    task.error = undefined;
+    task.lastAgentResponse = undefined;
+    task.completedAt = undefined;
+    task.updatedAt = now;
+    task.turns.push(this.createTurn(prompt, now));
+    this.executionConfigurations.set(task.id, configurations);
+    this.addLog(task, 'system', `收到第 ${task.turns.length} 轮指令，将继续使用现有工作区。`);
+    queueMicrotask(() => {
+      if (task.status !== 'cancelled') {
+        void this.execute(task, true);
       }
     });
     return this.snapshot(task);
@@ -200,6 +295,9 @@ export class AgentTaskManager {
     task.status = 'cancelled';
     task.updatedAt = Date.now();
     task.completedAt = Date.now();
+    const turn = this.currentTurn(task);
+    turn.status = 'cancelled';
+    turn.completedAt = task.completedAt;
     this.addLog(task, 'system', '用户已取消任务。');
     this.processes.get(id)?.kill();
     this.executionConfigurations.delete(id);
@@ -213,6 +311,9 @@ export class AgentTaskManager {
       if (!isTerminal(task.status)) {
         task.status = 'cancelled';
         task.completedAt = Date.now();
+        const turn = this.currentTurn(task);
+        turn.status = 'cancelled';
+        turn.completedAt = task.completedAt;
         this.addLog(task, 'system', '服务停止，任务已取消。');
         this.notifyTerminal(task);
       }
@@ -222,6 +323,7 @@ export class AgentTaskManager {
     }
     this.processes.clear();
     this.executionConfigurations.clear();
+    this.platformToolContexts.clear();
   }
 
   private validateRequest(request: AgentTaskRequest): {
@@ -234,13 +336,7 @@ export class AgentTaskManager {
   } {
     const configurations = normalizeConfigurations(request);
     const repository = normalizeRepository(request.repository);
-    const prompt = request.prompt?.trim();
-    if (!prompt) {
-      throw new Error('任务指令不能为空');
-    }
-    if (prompt.length > 20_000) {
-      throw new Error('任务指令不能超过 20000 个字符');
-    }
+    const prompt = validatePrompt(request.prompt);
     const baseBranch = normalizeBranchName(request.baseBranch, '基础分支');
     const taskBranch = normalizeBranchName(request.taskBranch, '新分支');
     if (taskBranch && taskBranch === baseBranch) {
@@ -256,38 +352,20 @@ export class AgentTaskManager {
     };
   }
 
-  private async execute(task: AgentTask): Promise<void> {
+  private async execute(task: AgentTask, reuseWorkspace = false): Promise<void> {
+    const turn = this.currentTurn(task);
+    const resumeThreadId = reuseWorkspace ? task.threadId : undefined;
     try {
       task.status = 'preparing';
-      task.startedAt = Date.now();
+      task.startedAt ??= Date.now();
       task.updatedAt = Date.now();
-      const workspace = join(this.workspaceRoot, task.id);
-      task.workspace = workspace;
-
-      const cloneArgs = ['clone', '--depth', '1'];
-      if (task.baseBranch) {
-        cloneArgs.push('--branch', task.baseBranch);
-      }
-      cloneArgs.push(task.repository, workspace);
-      await this.runProcess(
-        task,
-        'git',
-        cloneArgs,
-        this.workspaceRoot,
-        undefined,
-        false,
-        this.githubEnvironment(),
-      );
-      this.assertNotCancelled(task);
-
-      const branch = task.taskBranch || `cpx/task-${task.id.slice(0, 8)}`;
-      task.agentBranch = branch;
-      await this.runProcess(task, 'git', ['checkout', '-b', branch], workspace);
-      this.assertNotCancelled(task);
+      turn.status = 'running';
+      turn.startedAt = Date.now();
+      const workspace = reuseWorkspace ? task.workspace! : await this.prepareWorkspace(task);
 
       task.status = 'running';
       task.updatedAt = Date.now();
-      await this.runAgentWithFallback(task, workspace);
+      await this.runAgentWithFallback(task, workspace, resumeThreadId);
       this.assertNotCancelled(task);
 
       if (task.createPullRequest) {
@@ -299,6 +377,8 @@ export class AgentTaskManager {
       task.status = 'completed';
       task.updatedAt = Date.now();
       task.completedAt = Date.now();
+      turn.status = 'completed';
+      turn.completedAt = task.completedAt;
       this.addLog(
         task,
         'system',
@@ -316,6 +396,9 @@ export class AgentTaskManager {
       task.error = message;
       task.updatedAt = Date.now();
       task.completedAt = Date.now();
+      turn.status = 'failed';
+      turn.error = message;
+      turn.completedAt = task.completedAt;
       this.addLog(task, 'system', `任务失败：${message}`);
       this.logger.error(`任务 ${task.id} 失败: ${message}`);
       this.notifyTerminal(task);
@@ -324,11 +407,68 @@ export class AgentTaskManager {
     }
   }
 
+  private async prepareWorkspace(task: AgentTask): Promise<string> {
+    const { owner, repository } = repositoryCoordinates(task.repository);
+    const repositoryPath = join(this.repositoryRoot, owner, repository);
+    const workspace = join(this.workspaceRoot, task.id);
+    task.repositoryPath = repositoryPath;
+
+    await this.withRepositoryLock(`${owner}/${repository}`, async () => {
+      this.assertNotCancelled(task);
+      if (!existsSync(join(repositoryPath, '.git'))) {
+        const ownerPath = dirname(repositoryPath);
+        mkdirSync(ownerPath, { recursive: true });
+        this.addLog(task, 'system', `正在完整克隆仓库缓存：${owner}/${repository}`);
+        await this.runGitHubProcess(
+          task,
+          'git',
+          ['clone', '--no-checkout', task.repository, repositoryPath],
+          ownerPath,
+        );
+      } else {
+        await this.runGitHubProcess(
+          task,
+          'git',
+          ['remote', 'set-url', 'origin', task.repository],
+          repositoryPath,
+        );
+      }
+      this.assertNotCancelled(task);
+      this.addLog(task, 'system', `正在同步仓库缓存：${owner}/${repository}`);
+      await this.runGitHubProcess(
+        task,
+        'git',
+        ['fetch', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'],
+        repositoryPath,
+      );
+      await this.runProcess(task, 'git', ['worktree', 'prune'], repositoryPath);
+
+      const branch = task.taskBranch || `cpx/task-${task.id.slice(0, 8)}`;
+      const startPoint = task.baseBranch
+        ? `refs/remotes/origin/${task.baseBranch}`
+        : 'refs/remotes/origin/HEAD';
+      await this.runProcess(
+        task,
+        'git',
+        ['worktree', 'add', '-b', branch, workspace, startPoint],
+        repositoryPath,
+      );
+      task.workspace = workspace;
+      task.agentBranch = branch;
+    });
+    this.assertNotCancelled(task);
+    return workspace;
+  }
+
   /**
    * 按模型配置顺序尝试每个 Agent。额度类(rate_limit/auth)失败才切换;
    * 其他失败立即抛出。workspace 在循环外创建一次,失败时复用(不 reset)。
    */
-  private async runAgentWithFallback(task: AgentTask, workspace: string): Promise<void> {
+  private async runAgentWithFallback(
+    task: AgentTask,
+    workspace: string,
+    resumeThreadId?: string,
+  ): Promise<void> {
     const configurations = this.executionConfigurations.get(task.id) ?? task.configurations;
     for (let i = 0; i < configurations.length; i++) {
       this.assertNotCancelled(task);
@@ -351,7 +491,7 @@ export class AgentTaskManager {
       );
 
       try {
-        await this.runAgent(task, workspace, configuration);
+        await this.runAgent(task, workspace, configuration, resumeThreadId);
         attempt.status = 'success';
         attempt.endedAt = Date.now();
         return;
@@ -403,29 +543,64 @@ export class AgentTaskManager {
     task: AgentTask,
     workspace: string,
     configuration: AgentModelConfiguration | PublicAgentModelConfiguration,
+    resumeThreadId?: string,
   ): Promise<void> {
     const provider = configuration.provider;
     const adapter = AGENT_ADAPTERS[provider];
-    const prompt = buildPrompt(task.prompt);
     const env: NodeJS.ProcessEnv = { ...process.env };
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
     const legacyApiKey = this.secrets.openaiApiKey;
     adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
-    const args = adapter.buildArgs(
-      configuration.model,
-      configuration.baseUrl,
-      configuration.reasoningEffort,
-    );
+    const args = resumeThreadId
+      ? adapter.buildResumeArgs(
+          resumeThreadId,
+          configuration.model,
+          configuration.baseUrl,
+          configuration.reasoningEffort,
+        )
+      : adapter.buildArgs(
+          configuration.model,
+          configuration.baseUrl,
+          configuration.reasoningEffort,
+        );
+    const platformTools = this.platformToolContexts.get(task.id);
+    if (platformTools) {
+      this.configurePlatformTools(args, env, platformTools, Boolean(resumeThreadId));
+    }
     await this.runProcess(
       task,
       adapter.command,
       args,
       workspace,
-      prompt,
+      buildPrompt(task.prompt, Boolean(platformTools)),
       true,
       env,
       adapter.useShellOnWindows,
     );
+  }
+
+  private configurePlatformTools(
+    args: string[],
+    env: NodeJS.ProcessEnv,
+    context: AgentPlatformToolContext,
+    resume: boolean,
+  ): void {
+    env.CPX_PLATFORM_TOOL_URL = context.endpoint;
+    env.CPX_PLATFORM_TOOL_TOKEN = context.token;
+    env.CPX_PLATFORM_TOOL_TASK_ID = context.taskId;
+    env.CPX_PLATFORM_NAME = context.platform;
+
+    const server = platformMcpServerCommand();
+    const config = [
+      `mcp_servers.cpx_platform.command=${JSON.stringify(server.command)}`,
+      `mcp_servers.cpx_platform.args=${JSON.stringify(server.args)}`,
+      'mcp_servers.cpx_platform.env_vars=["CPX_PLATFORM_TOOL_URL","CPX_PLATFORM_TOOL_TOKEN","CPX_PLATFORM_TOOL_TASK_ID","CPX_PLATFORM_NAME"]',
+      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      'mcp_servers.cpx_platform.default_tools_approval_mode="approve"',
+      'mcp_servers.cpx_platform.required=true',
+    ];
+    const insertionIndex = resume ? Math.max(3, args.length - 2) : Math.max(2, args.length - 1);
+    args.splice(insertionIndex, 0, ...config.flatMap((value) => ['--config', value]));
   }
 
   private async publishPullRequest(task: AgentTask, workspace: string): Promise<void> {
@@ -459,29 +634,21 @@ export class AgentTaskManager {
       ],
       workspace,
     );
-    const githubEnvironment = this.githubEnvironment();
-    await this.runProcess(
+    await this.runGitHubProcess(
       task,
       'git',
       ['push', '-u', 'origin', task.agentBranch!],
       workspace,
-      undefined,
-      false,
-      githubEnvironment,
     );
+    if (task.pullRequestUrl) {
+      this.addLog(task, 'system', `已将新提交推送到现有 Pull Request：${task.pullRequestUrl}`);
+      return;
+    }
     const prArgs = ['pr', 'create', '--fill', '--head', task.agentBranch!];
     if (task.baseBranch) {
       prArgs.push('--base', task.baseBranch);
     }
-    const pr = await this.runProcess(
-      task,
-      'gh',
-      prArgs,
-      workspace,
-      undefined,
-      false,
-      githubEnvironment,
-    );
+    const pr = await this.runGitHubProcess(task, 'gh', prArgs, workspace);
     const url = pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0];
     if (!url) {
       throw new Error('gh 已执行，但没有返回 Pull Request URL');
@@ -511,6 +678,19 @@ export class AgentTaskManager {
       GIT_CONFIG_VALUE_0: '',
       GIT_TERMINAL_PROMPT: '0',
     };
+  }
+
+  /**
+   * 访问 GitHub 的 git/gh 命令必须经过此入口，统一注入 Token 与 AskPass。
+   * 本地 Git 操作继续使用 runProcess，避免未来新增远程命令时重复凭据装配逻辑。
+   */
+  private runGitHubProcess(
+    task: AgentTask,
+    command: 'git' | 'gh',
+    args: string[],
+    cwd: string,
+  ): Promise<{ stdout: string; stderr: string }> {
+    return this.runProcess(task, command, args, cwd, undefined, false, this.githubEnvironment());
   }
 
   private ensureGitAskPass(): string {
@@ -579,6 +759,16 @@ export class AgentTaskManager {
         for (const line of lines) {
           if (!line.trim()) {
             continue;
+          }
+          if (captureAgentJson) {
+            const threadId = extractAgentThreadId(line);
+            if (threadId) task.threadId = threadId;
+            const response = extractAgentResponse(line);
+            if (response) {
+              const finalResponse = response.slice(0, 16_384);
+              task.lastAgentResponse = finalResponse;
+              this.currentTurn(task).response = finalResponse;
+            }
           }
           const message = captureAgentJson ? formatAgentEvent(line) : line;
           if (message) {
@@ -650,7 +840,42 @@ export class AgentTaskManager {
       ...task,
       logs: task.logs.map((entry) => ({ ...entry })),
       attempts: task.attempts.map((attempt) => ({ ...attempt })),
+      turns: task.turns.map((turn) => ({ ...turn })),
     };
+  }
+
+  private createTurn(prompt: string, createdAt: number): AgentTaskTurn {
+    return {
+      id: randomUUID(),
+      prompt,
+      status: 'queued',
+      createdAt,
+    };
+  }
+
+  private currentTurn(task: AgentTask): AgentTaskTurn {
+    const turn = task.turns[task.turns.length - 1];
+    if (!turn) throw new Error('任务轮次不存在');
+    return turn;
+  }
+
+  private async withRepositoryLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.repositoryLocks.get(key) ?? Promise.resolve();
+    let release: () => void = () => {};
+    const current = new Promise<void>((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.repositoryLocks.set(key, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.repositoryLocks.get(key) === tail) {
+        this.repositoryLocks.delete(key);
+      }
+    }
   }
 
   private notifyTerminal(task: AgentTask): void {
@@ -687,6 +912,28 @@ export function normalizeRepository(input: string): string {
   throw new Error('仅支持 owner/repo、GitHub HTTPS 或 GitHub SSH 仓库地址');
 }
 
+export function repositoryCoordinates(input: string): { owner: string; repository: string } {
+  const normalized = normalizeRepository(input);
+  const match = normalized.match(
+    /^(?:https:\/\/github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?$/,
+  );
+  if (!match) {
+    throw new Error('无法识别 GitHub 仓库目录');
+  }
+  return { owner: match[1], repository: match[2] };
+}
+
+function validatePrompt(input: string | undefined): string {
+  const prompt = input?.trim();
+  if (!prompt) {
+    throw new Error('任务指令不能为空');
+  }
+  if (prompt.length > 20_000) {
+    throw new Error('任务指令不能超过 20000 个字符');
+  }
+  return prompt;
+}
+
 function normalizeBranchName(input: string | undefined, label: string): string | undefined {
   const value = input?.trim() || undefined;
   if (!value) return undefined;
@@ -718,15 +965,30 @@ function buildCommitTitle(prompt: string): string {
   return `feat: ${summary || 'complete agent task'}`;
 }
 
-function buildPrompt(taskPrompt: string): string {
-  return [
+function buildPrompt(taskPrompt: string, hasPlatformTools = false): string {
+  const instructions = [
     '你正在由 cpx 开发控制台执行任务。',
     '请只在当前 Git 仓库中工作，先理解现有代码，再实现用户目标并运行相关验证。',
     '不要执行 git push、创建 PR 或修改仓库外文件；发布步骤由 cpx 在用户授权后处理。',
-    '完成后总结改动、验证结果和仍存在的风险。',
-    '',
-    `用户任务：${taskPrompt}`,
-  ].join('\n');
+  ];
+  if (hasPlatformTools) {
+    instructions.push(
+      '这个任务来自消息平台。任务建立后的自然语言要求都由你在当前会话中理解和执行。',
+      '你可以使用 cpx_platform MCP 工具读取当前平台上下文，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
+      'cpx 会自动回传你的最终回复，因此不要用平台工具重复发送最终总结。',
+    );
+  }
+  instructions.push('完成后总结改动、验证结果和仍存在的风险。', '', `用户任务：${taskPrompt}`);
+  return instructions.join('\n');
+}
+
+function platformMcpServerCommand(): { command: string; args: string[] } {
+  const compiled = join(__dirname, 'platformMcpServer.js');
+  if (existsSync(compiled)) {
+    return { command: process.execPath, args: [compiled] };
+  }
+  const source = join(__dirname, 'platformMcpServer.ts');
+  return { command: process.execPath, args: [require.resolve('tsx/cli'), source] };
 }
 
 function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfiguration[] {
@@ -788,9 +1050,7 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
   }));
 }
 
-function normalizeReasoningEffort(
-  value?: AgentReasoningEffort,
-): AgentReasoningEffort | undefined {
+function normalizeReasoningEffort(value?: AgentReasoningEffort): AgentReasoningEffort | undefined {
   if (!value) return undefined;
   const supported: AgentReasoningEffort[] = [
     'minimal',
@@ -905,5 +1165,41 @@ function formatAgentEvent(line: string): string {
     return `[${type}]`;
   } catch {
     return line;
+  }
+}
+
+function extractAgentThreadId(line: string): string | undefined {
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    const threadId = event.thread_id ?? event.threadId;
+    return typeof threadId === 'string' && threadId.trim() ? threadId.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractAgentResponse(line: string): string | undefined {
+  try {
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if (event.type === 'result' && typeof event.result === 'string') {
+      return event.result.trim() || undefined;
+    }
+    if (event.type === 'assistant') {
+      const message = event.message as
+        { content?: Array<{ type?: string; text?: string }> } | undefined;
+      const text = message?.content
+        ?.filter((item) => item.type === 'text' && item.text)
+        .map((item) => item.text)
+        .join('\n')
+        .trim();
+      return text || undefined;
+    }
+    const item = event.item as { type?: string; text?: string } | undefined;
+    if (item?.type === 'agent_message' && item.text?.trim()) {
+      return item.text.trim();
+    }
+    return undefined;
+  } catch {
+    return undefined;
   }
 }

@@ -68,6 +68,10 @@ describe('WebConsole', () => {
     expect(html).toContain('id="repository-picker"');
     expect(html).toContain('id="branch-picker"');
     expect(html).toContain('id="task-branch"');
+    expect(html).toContain('id="new-task-button"');
+    expect(html).toContain('class="thread-composer new-task-mode"');
+    expect(html).not.toContain('id="create-pr"');
+    expect(html).not.toContain('完成后创建 Pull Request');
     expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');
@@ -79,7 +83,20 @@ describe('WebConsole', () => {
     expect(script).toContain('/api/console/codex-config');
     expect(script).toContain('/api/console/agent-auth/api-key');
     expect(script).toContain('/api/console/codex-models');
+    expect(script).toContain('baseBranch: selectedTaskBaseBranch()');
+    expect(script).toContain('runDetailsOpenTaskIds: new Set()');
+    expect(script).toContain('runOutputScrollByTaskId: new Map()');
+    expect(script).toContain('rememberRunDetailsState()');
+    expect(script).toContain('restoreTaskOutputScroll(task.id, taskOutput)');
+    expect(script).toContain('followTail:');
+    expect(script).toContain('class="task-list-meta-text"');
     expect(script).not.toContain('/webhook/');
+
+    const stylesResponse = await server.handler('GET', '/styles.css')(Buffer.alloc(0), {}, {});
+    const styles = (stylesResponse.body as Buffer).toString('utf8');
+    expect(styles).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(styles).toContain('overflow-x: hidden');
+    expect(styles).toContain('-webkit-line-clamp: 2');
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
@@ -279,9 +296,7 @@ describe('WebConsole', () => {
       {},
     );
     expect(response).toMatchObject({ status: 200, body: { success: false } });
-    expect(tested).toEqual([
-      { provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' },
-    ]);
+    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' }]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
@@ -335,7 +350,9 @@ describe('WebConsole', () => {
         codexConfig: new CodexConfigManager(join(TMP_DIR, 'codex')),
         getMessagingConfiguration: () => publicConfiguration,
         saveMessagingConfiguration: async (platform, config) => {
-          savedPlatforms.push(`${platform}:${config.enabled}:${config.clientId}:${config.clientSecret}`);
+          savedPlatforms.push(
+            `${platform}:${config.enabled}:${config.clientId}:${config.clientSecret}`,
+          );
           return publicConfiguration;
         },
       },
@@ -386,6 +403,13 @@ describe('WebConsole', () => {
       {},
     );
     expect(cancel).toMatchObject({ status: 409 });
+
+    const continuation = await server.handler('POST', '/api/console/task/continue')(
+      Buffer.from(JSON.stringify({ id: 'missing', prompt: '继续修改' })),
+      {},
+      {},
+    );
+    expect(continuation).toMatchObject({ status: 400, body: { error: '任务不存在' } });
   });
 
   it('应拒绝未知 Agent、空配置列表和重复配置 ID', async () => {
