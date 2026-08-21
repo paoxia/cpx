@@ -98,7 +98,16 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
           configuration.baseUrl,
           configuration.reasoningEffort,
         );
-    args.splice(resume ? 2 : 1, 0, '--skip-git-repo-check', '--sandbox', 'read-only');
+    if (resume) {
+      // `--sandbox` belongs to `codex exec`, while `--skip-git-repo-check` is
+      // accepted by the `resume` subcommand. Keep each option before the
+      // command level that owns it so Clap does not reject the second turn.
+      args.splice(1, 0, '--sandbox', 'read-only');
+      const resumeIndex = args.indexOf('resume');
+      args.splice(resumeIndex + 1, 0, '--skip-git-repo-check');
+    } else {
+      args.splice(1, 0, '--skip-git-repo-check', '--sandbox', 'read-only');
+    }
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     adapter.configureEnvironment(env, configuration.apiKey, configuration.baseUrl);

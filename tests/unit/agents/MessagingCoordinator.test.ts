@@ -89,8 +89,40 @@ describe('MessagingCoordinator', () => {
       threadId: 'thread-existing',
     });
     const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
-    expect(args.slice(0, 4)).toEqual(['exec', 'resume', '--skip-git-repo-check', '--sandbox']);
+    expect(args.slice(0, 5)).toEqual([
+      'exec',
+      '--sandbox',
+      'read-only',
+      'resume',
+      '--skip-git-repo-check',
+    ]);
+    expect(args.indexOf('--sandbox')).toBeLessThan(args.indexOf('resume'));
     expect(args).toContain('thread-existing');
     expect(child.stdin.read()?.toString()).toBe('就用第一个仓库');
+  });
+
+  it('应向用户保留 Codex CLI 的真实错误而不是末尾帮助提示', async () => {
+    const child = fakeProcess();
+    const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
+    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock);
+
+    const resultPromise = coordinator.run({
+      scopeId: 'scope-error',
+      prompt: '继续',
+      threadId: 'thread-existing',
+      configurations: [{ id: 'default', provider: 'codex' }],
+      platformTools: {
+        endpoint: 'http://127.0.0.1:3000/internal',
+        token: 'scope-token',
+        taskId: 'scope-error',
+        platform: 'feishu',
+      },
+    });
+    child.stderr.write(
+      "error: unexpected argument '--sandbox' found\n\nUsage: codex exec resume\n\nFor more information, try '--help'.\n",
+    );
+    child.emit('close', 2);
+
+    await expect(resultPromise).rejects.toThrow("unexpected argument '--sandbox'");
   });
 });

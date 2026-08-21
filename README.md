@@ -293,7 +293,7 @@ Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录�
 | `POST /api/console/task/continue`            | 向已结束任务的原工作区追加 prompt              |
 | `POST /api/console/cancel`                   | 取消未结束任务                                 |
 
-仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。只有任务启用 `createPullRequest` 时，系统才会提交全部改动、推送任务分支并调用 `gh pr create`；后续轮次推送到同一分支和 PR。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
+仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。Coding Agent 可以提交并推送非主分支，cpx 通过受控认证和 pre-push hook 禁止直接推送基础分支以及 `main`、`master`、`production`；force push 仍然禁止。任务启用 `createPullRequest` 时，系统会提交尚未提交的改动、推送任务分支并调用 `gh pr create`；Agent 已自行提交或推送时也能正确创建或更新 PR。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
 
 ### POST /command
 

@@ -85,7 +85,7 @@ SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations
 - 新聊天平台：实现消息校验、解析和结果推送，然后在 `AgentSystem` 中注册路由。
 - 新 MCP 传输：实现 `Transport` 接口并在 `MCPManager` 中创建实例。
 - 新 Skill：提供带 `skill.permissions` 的 npm 包并导出 `execute(ctx)`。
-- 新 Coding Agent：在 `AgentTaskManager.runAgent` 中增加经过输入约束的非交互 CLI 适配，并保持发布步骤由管理器统一执行。
+- 新 Coding Agent：在 `AgentTaskManager.runAgent` 中增加经过输入约束的非交互 CLI 适配。Agent 可在受控 GitHub 认证和 pre-push 主分支保护下推送任务分支；Pull Request 仍由管理器统一创建或更新。
 
 ## 当前边界
 
