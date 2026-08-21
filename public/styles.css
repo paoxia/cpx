@@ -167,6 +167,8 @@ select:focus-visible {
 }
 
 .sidebar-section {
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   margin-top: 34px;
   overflow: hidden;
@@ -185,15 +187,23 @@ select:focus-visible {
 
 .task-list {
   display: grid;
+  width: 100%;
+  min-width: 0;
   max-height: calc(100vh - 410px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 5px;
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 
 .task-list-item {
+  display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
+  overflow: hidden;
   color: var(--soft);
   border: 1px solid transparent;
   border-radius: 11px;
@@ -208,22 +218,37 @@ select:focus-visible {
 }
 
 .task-list-item strong {
-  display: block;
+  display: -webkit-box;
   overflow: hidden;
   font-size: 12px;
   font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.task-list-item span {
+.task-list-meta {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   margin-top: 5px;
   color: var(--muted);
   font: 9px/1 var(--mono);
   text-transform: uppercase;
+}
+
+.task-list-meta .mini-dot {
+  flex: 0 0 auto;
+}
+
+.task-list-meta-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mini-dot {
@@ -2389,7 +2414,7 @@ select:focus-visible {
   border-color: rgba(215, 255, 95, 0.35);
 }
 
-.task-list-item span {
+.task-list-meta {
   text-transform: none;
 }
 

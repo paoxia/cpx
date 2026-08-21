@@ -84,7 +84,16 @@ describe('WebConsole', () => {
     expect(script).toContain('/api/console/agent-auth/api-key');
     expect(script).toContain('/api/console/codex-models');
     expect(script).toContain('baseBranch: selectedTaskBaseBranch()');
+    expect(script).toContain('runDetailsOpenTaskIds: new Set()');
+    expect(script).toContain('rememberRunDetailsState()');
+    expect(script).toContain('class="task-list-meta-text"');
     expect(script).not.toContain('/webhook/');
+
+    const stylesResponse = await server.handler('GET', '/styles.css')(Buffer.alloc(0), {}, {});
+    const styles = (stylesResponse.body as Buffer).toString('utf8');
+    expect(styles).toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(styles).toContain('overflow-x: hidden');
+    expect(styles).toContain('-webkit-line-clamp: 2');
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {

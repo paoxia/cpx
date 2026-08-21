@@ -4,6 +4,7 @@ const state = {
   selectedTaskId: null,
   creatingTask: false,
   polling: false,
+  runDetailsOpenTaskIds: new Set(),
   activeView: 'tasks',
   githubStatus: null,
   githubUser: null,
@@ -1098,8 +1099,11 @@ function renderTaskList() {
     .map(
       (task) => `
         <button class="task-list-item ${task.id === state.selectedTaskId ? 'active' : ''}" data-task-id="${task.id}" type="button">
-          <strong>${escapeHtml(task.prompt)}</strong>
-          <span><i class="mini-dot ${task.status}"></i>${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}</span>
+          <strong title="${escapeHtml(task.prompt)}">${escapeHtml(task.prompt)}</strong>
+          <span class="task-list-meta">
+            <i class="mini-dot ${task.status}"></i>
+            <span class="task-list-meta-text" title="${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}">${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}</span>
+          </span>
         </button>`,
     )
     .join('');
@@ -1116,9 +1120,11 @@ function renderTaskList() {
 }
 
 function renderTaskDetail() {
+  rememberRunDetailsState();
   const task = state.tasks.find((item) => item.id === state.selectedTaskId);
   if (state.creatingTask || !task) {
     state.creatingTask = true;
+    delete elements.taskDetail.dataset.taskId;
     elements.threadHeading.innerHTML = `
       <p class="eyebrow">NEW AGENT TASK</p>
       <h1>新建任务</h1>
@@ -1140,6 +1146,7 @@ function renderTaskDetail() {
 
   const active = ['queued', 'preparing', 'running', 'publishing'].includes(task.status);
   const canContinue = !active && task.workspace && task.agentBranch;
+  const runDetailsOpen = state.runDetailsOpenTaskIds.has(task.id);
   elements.threadHeading.innerHTML = `
     <div class="thread-title-row">
       <span class="status-badge"><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))}</span>
@@ -1148,11 +1155,12 @@ function renderTaskDetail() {
     <h1>${escapeHtml(task.prompt)}</h1>
     <p>${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(task.agentBranch || task.baseBranch || '准备分支中')} · ${escapeHtml(providerLabel(task.provider))}${task.model ? ` / ${escapeHtml(task.model)}` : ''}</p>`;
   elements.taskDetail.className = 'task-detail thread-conversation';
+  elements.taskDetail.dataset.taskId = task.id;
   elements.taskDetail.innerHTML = `
     <div class="conversation-stream">
       ${task.turns.map((turn, index) => renderConversationTurn(task, turn, index)).join('')}
     </div>
-    <details class="run-details">
+    <details class="run-details"${runDetailsOpen ? ' open' : ''}>
       <summary>运行详情 <span>${task.logs.length} 条日志 · ${task.attempts.length} 次执行</span></summary>
       ${renderAttempts(task.attempts)}
       <pre class="task-output" aria-label="任务输出">${escapeHtml(formatTaskLogs(task.logs))}</pre>
@@ -1160,7 +1168,16 @@ function renderTaskDetail() {
     <div class="workspace-strip">
       ${task.workspace ? `<span>WORKSPACE · ${escapeHtml(task.workspace)}</span>` : '<span>正在准备工作区…</span>'}
       <time>${escapeHtml(formatTime(task.updatedAt))}</time>
-    </div>`;
+      </div>`;
+
+  elements.taskDetail.querySelector('.run-details')?.addEventListener('toggle', (event) => {
+    const details = event.currentTarget;
+    if (details.open) {
+      state.runDetailsOpenTaskIds.add(task.id);
+    } else {
+      state.runDetailsOpenTaskIds.delete(task.id);
+    }
+  });
 
   elements.taskForm.classList.remove('new-task-mode');
   elements.newTaskContext.hidden = true;
@@ -1189,6 +1206,17 @@ function renderTaskDetail() {
   });
 
   elements.taskDetail.scrollTop = elements.taskDetail.scrollHeight;
+}
+
+function rememberRunDetailsState() {
+  const taskId = elements.taskDetail.dataset.taskId;
+  const details = elements.taskDetail.querySelector('.run-details');
+  if (!taskId || !details) return;
+  if (details.open) {
+    state.runDetailsOpenTaskIds.add(taskId);
+  } else {
+    state.runDetailsOpenTaskIds.delete(taskId);
+  }
 }
 
 function enableNewTaskFields() {
