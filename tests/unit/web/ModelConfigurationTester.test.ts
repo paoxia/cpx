@@ -45,6 +45,7 @@ describe('ModelConfigurationTester', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'codex',
       expect.arrayContaining([
+        '--skip-git-repo-check',
         '--model',
         'gpt-test',
         '--config',
@@ -113,5 +114,4 @@ describe('ModelConfigurationTester', () => {
       }),
     );
   });
-
 });

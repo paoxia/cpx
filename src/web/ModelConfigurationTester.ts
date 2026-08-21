@@ -34,6 +34,9 @@ const CUSTOM_PROMPT_PREFIX =
   'This is a model configuration conversation test. Do not use tools, inspect files, or modify anything. Reply directly to the user message below.';
 const MAX_OUTPUT_LENGTH = 32 * 1024;
 const MAX_RESPONSE_LENGTH = 16 * 1024;
+const MODEL_TEST_EXTRA_ARGS: Partial<Record<CodingAgentProvider, string[]>> = {
+  codex: ['--skip-git-repo-check'],
+};
 
 /** 通过与任务执行相同的官方 CLI、模型参数和密钥环境变量验证单条模型配置。 */
 export class ModelConfigurationTester implements ModelConfigurationTestRunner {
@@ -53,13 +56,17 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
     const adapter = AGENT_ADAPTERS[configuration.provider];
     const env: NodeJS.ProcessEnv = { ...process.env };
     adapter.configureEnvironment(env, configuration.apiKey, configuration.baseUrl);
+    const args = adapter.buildArgs(
+      configuration.model,
+      configuration.baseUrl,
+      configuration.reasoningEffort,
+    );
+    args.splice(1, 0, ...(MODEL_TEST_EXTRA_ARGS[configuration.provider] ?? []));
     const sensitiveValues = Array.from(
       new Set(
-        [
-          configuration.apiKey,
-          env[adapter.apiKeyEnvVar],
-          env.OPENAI_API_KEY,
-        ].filter((value): value is string => Boolean(value)),
+        [configuration.apiKey, env[adapter.apiKeyEnvVar], env.OPENAI_API_KEY].filter(
+          (value): value is string => Boolean(value),
+        ),
       ),
     );
 
@@ -89,20 +96,12 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
       };
 
       try {
-        child = this.spawnCommand(
-          adapter.command,
-          adapter.buildArgs(
-            configuration.model,
-            configuration.baseUrl,
-            configuration.reasoningEffort,
-          ),
-          {
-            cwd: this.workingDirectory,
-            env,
-            shell: adapter.useShellOnWindows && process.platform === 'win32',
-            windowsHide: true,
-          },
-        );
+        child = this.spawnCommand(adapter.command, args, {
+          cwd: this.workingDirectory,
+          env,
+          shell: adapter.useShellOnWindows && process.platform === 'win32',
+          windowsHide: true,
+        });
       } catch (error) {
         const durationMs = Date.now() - startedAt;
         this.logger.warn(`${adapter.displayName} 模型配置测试失败 (${durationMs}ms)`);

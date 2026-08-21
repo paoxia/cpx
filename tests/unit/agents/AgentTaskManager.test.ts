@@ -135,6 +135,8 @@ describe('AgentTaskManager', () => {
     expect(task.turns[0].response).toBe('done');
     expect(task.logs.some((entry) => entry.message === 'done')).toBe(true);
     expect(agentInput).toContain('用户任务：修复构建');
+    const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
+    expect(codexCall?.[1]).not.toContain('--skip-git-repo-check');
     expect(spawnMock).toHaveBeenCalledWith(
       'codex',
       expect.arrayContaining(['exec', '--json', '--color', 'never']),
