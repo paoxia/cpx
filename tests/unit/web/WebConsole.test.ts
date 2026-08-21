@@ -85,7 +85,10 @@ describe('WebConsole', () => {
     expect(script).toContain('/api/console/codex-models');
     expect(script).toContain('baseBranch: selectedTaskBaseBranch()');
     expect(script).toContain('runDetailsOpenTaskIds: new Set()');
+    expect(script).toContain('runOutputScrollByTaskId: new Map()');
     expect(script).toContain('rememberRunDetailsState()');
+    expect(script).toContain('restoreTaskOutputScroll(task.id, taskOutput)');
+    expect(script).toContain('followTail:');
     expect(script).toContain('class="task-list-meta-text"');
     expect(script).not.toContain('/webhook/');
 

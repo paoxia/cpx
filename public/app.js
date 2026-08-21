@@ -5,6 +5,7 @@ const state = {
   creatingTask: false,
   polling: false,
   runDetailsOpenTaskIds: new Set(),
+  runOutputScrollByTaskId: new Map(),
   activeView: 'tasks',
   githubStatus: null,
   githubUser: null,
@@ -1170,10 +1171,15 @@ function renderTaskDetail() {
       <time>${escapeHtml(formatTime(task.updatedAt))}</time>
       </div>`;
 
-  elements.taskDetail.querySelector('.run-details')?.addEventListener('toggle', (event) => {
+  const runDetails = elements.taskDetail.querySelector('.run-details');
+  const taskOutput = runDetails?.querySelector('.task-output');
+  restoreTaskOutputScroll(task.id, taskOutput);
+  taskOutput?.addEventListener('scroll', () => rememberTaskOutputScroll(task.id, taskOutput));
+  runDetails?.addEventListener('toggle', (event) => {
     const details = event.currentTarget;
     if (details.open) {
       state.runDetailsOpenTaskIds.add(task.id);
+      restoreTaskOutputScroll(task.id, taskOutput);
     } else {
       state.runDetailsOpenTaskIds.delete(task.id);
     }
@@ -1214,9 +1220,27 @@ function rememberRunDetailsState() {
   if (!taskId || !details) return;
   if (details.open) {
     state.runDetailsOpenTaskIds.add(taskId);
+    rememberTaskOutputScroll(taskId, details.querySelector('.task-output'));
   } else {
     state.runDetailsOpenTaskIds.delete(taskId);
   }
+}
+
+function rememberTaskOutputScroll(taskId, output) {
+  if (!output) return;
+  state.runOutputScrollByTaskId.set(taskId, {
+    scrollTop: output.scrollTop,
+    followTail: output.scrollHeight - output.clientHeight - output.scrollTop <= 12,
+  });
+}
+
+function restoreTaskOutputScroll(taskId, output) {
+  if (!output) return;
+  const saved = state.runOutputScrollByTaskId.get(taskId);
+  if (!saved) return;
+  output.scrollTop = saved.followTail
+    ? output.scrollHeight
+    : Math.min(saved.scrollTop, Math.max(0, output.scrollHeight - output.clientHeight));
 }
 
 function enableNewTaskFields() {
