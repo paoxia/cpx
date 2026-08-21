@@ -1,19 +1,23 @@
 {
-  "name": "agent-system",
-  "version": "1.0.0",
+  "name": "@paoxia/cpx",
+  "version": "0.1.0",
   "description": "智能代理系统：支持钉钉/飞书远程控制、Skill 插件扩展、MCP 连接、多 Agent 协作、GitHub 远程操作",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
+    "cpx": "dist/cli.js",
     "agent-cli": "dist/cli.js"
   },
   "files": [
     "dist",
-    "config",
+    "config/config.example.yaml",
+    "config/permissions.example.yaml",
+    "config/mihomo.example.yaml",
     "public"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js start",
     "test": "vitest run",
@@ -31,8 +35,19 @@
     "automation",
     "bot"
   ],
-  "author": "",
+  "author": "paoxia",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paoxia/cpx.git"
+  },
+  "homepage": "https://github.com/paoxia/cpx#readme",
+  "bugs": {
+    "url": "https://github.com/paoxia/cpx/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18.0.0"
   },

@@ -50,20 +50,31 @@ Feishu and DingTalk use their official WebSocket/Stream connections, so your NAS
 
 ## 快速开始
 
+正式发布到 npm 后，先安装 Codex CLI，再安装 cpx：
+
+```bash
+npm install -g @openai/codex @paoxia/cpx
+cpx config
+cpx doctor
+cpx start --daemon
+```
+
+浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
+
+从源码开发时使用：
+
 ```bash
 # 安装依赖
 npm install
 
 # 初始化配置文件
-npm run dev init
-# 或: npx tsx src/cli.ts init
+npm run dev -- init -d ./config
 
 # 编辑配置，填写钉钉/飞书应用凭据、GitHub Token 等；也可启动后在页面填写
 # 编辑 config/config.yaml 和 config/permissions.yaml
 
 # 启动系统
-npm run dev start
-# 或: npx tsx src/cli.ts start
+npm run dev -- start -d ./config
 ```
 
 启动后通过 HTTP 接口发送命令测试：
@@ -137,13 +148,24 @@ NAS 网络不能直接连接 Codex 或构建软件源时，在极空间 Compose 
 ## CLI 命令
 
 ```bash
-agent-cli version          # 显示版本
-agent-cli init [-d <dir>]  # 初始化配置文件到指定目录（默认 ./config）
-agent-cli start [-d <dir>] # 启动系统
-agent-cli stop             # 提示如何停止（通过 SIGTERM）
+cpx config                         # 交互配置
+cpx config init                    # 在 ~/.cpx 初始化模板
+cpx config show                    # 显示脱敏后的合并配置
+cpx config get server.port         # 读取配置
+cpx config set server.port 3001    # 写入并校验配置
+printf '%s' "$GITHUB_TOKEN" | cpx config set github.token --stdin
+cpx config validate                # 校验配置
+cpx doctor                         # 检查 Node.js、Git、Codex 与配置
+cpx start                          # 前台启动
+cpx start --daemon                 # 后台启动
+cpx status                         # 进程状态与 HTTP 健康检查
+cpx stop                           # 按 PID 优雅停止当前实例
+cpx update                         # 检查 npm 新版本
 ```
 
-开发模式下使用 `npm run dev <command>`，例如 `npm run dev start`。
+`agent-cli` 与 `cpx init -d <目录>` 作为旧版兼容入口继续保留。Docker 仍显式执行 `cpx start -d /app/config`，不会迁移已有 `/app/config` 和 `/app/data`。开发模式下使用 `npm run dev -- <command>`；要沿用仓库内配置，可传 `-d ./config`。
+
+敏感配置键（如 `token`、`secret`、`password`）拒绝直接写在命令参数中，必须经 `--stdin` 传递，避免进入 shell 历史。`cpx config show` 和 `get` 会自动隐藏敏感值。发布 npm 包时只包含示例 YAML，不包含本地 `config.yaml`、数据库或日志。
 
 ## 飞书与钉钉自然语言操作
 

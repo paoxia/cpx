@@ -4,7 +4,7 @@
 
 ## 系统概览
 
-cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台；聊天命令与控制台 API 复用一个 `AgentTaskManager`，把任务委托给本机 Codex CLI，并在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
+cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 `@paoxia/cpx` npm 包的全局 `cpx` 命令或 Docker 启动。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台；聊天命令与控制台 API 复用一个 `AgentTaskManager`，把任务委托给本机 Codex CLI，并在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
 
 ```text
 钉钉 / 飞书 / HTTP
@@ -75,7 +75,9 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 ## 配置与状态
 
-配置优先级从低到高为：代码默认值、`config.yaml`、`permissions.yaml`、`AGENT_` 环境变量。运行时会监听 YAML 文件；目前热更新会应用日志级别与权限配置，其他组件仍使用启动时配置。
+配置优先级从低到高为：代码默认值、`config.yaml`、`permissions.yaml`、`AGENT_` 环境变量。npm CLI 默认以 `CPX_HOME`（未设置时为 `~/.cpx`）为运行根目录，配置、数据、日志和 PID 分目录保存；配置中的相对存储、Skill 与日志路径以配置目录的父目录为基准解析。Docker 通过 `-d /app/config` 保持 `/app` 为运行根。运行时会监听 YAML 文件；目前热更新会应用日志级别与权限配置，其他组件仍使用启动时配置。
+
+CLI 的后台模式重新执行同一个已编译入口，并在 `CPX_HOME/run` 保存结构化 PID 记录。`status` 同时检查进程和 `/health`，`stop` 只向该记录对应的进程发送 `SIGTERM`，不使用进程名匹配。配置命令写入 YAML 后立即经过与服务启动相同的 Zod 校验，展示时递归脱敏密钥字段。
 
 SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations.ts` 为准，便于阅读的说明见 [docs/DATABASE.md](docs/DATABASE.md)。
 

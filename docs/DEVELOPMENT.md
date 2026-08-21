@@ -13,7 +13,9 @@ npm run lint           # 检查 src 下的 TypeScript
 npm run format         # 格式化 src 下的 TypeScript
 ```
 
-本地启动前先执行 `npm run dev init`，再编辑生成的 `config/config.yaml` 与 `config/permissions.yaml`。不要提交实际令牌、应用 Secret 或本地数据库。
+本地启动前先执行 `npm run dev -- init -d ./config`，再编辑生成的 `config/config.yaml` 与 `config/permissions.yaml`，然后通过 `npm run dev -- start -d ./config` 启动。省略 `-d` 时 CLI 会遵循 npm 安装模式，使用 `CPX_HOME` 或默认的 `~/.cpx`。不要提交实际令牌、应用 Secret 或本地数据库。
+
+发布前除常规验证外，还要执行 `npm pack --dry-run`，确认包中只有 `dist/`、`public/` 和 `config/*.example.yaml` 等公开文件；不得包含 `config/config.yaml`、`config/permissions.yaml`、`.env`、数据库或日志。再把 tarball 安装到临时 npm prefix，验证全局 `cpx --version`、配置初始化以及 start/status/stop 生命周期。发布 `@paoxia/cpx` 需要 npm 登录且账号拥有 `@paoxia` scope 权限；首发使用 public access。
 
 ## 代码组织
 

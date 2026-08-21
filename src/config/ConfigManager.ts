@@ -1,5 +1,5 @@
-import { readFileSync, existsSync, mkdirSync, watch, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { chmodSync, readFileSync, existsSync, mkdirSync, watch, writeFileSync } from 'fs';
+import { dirname, isAbsolute, join, resolve } from 'path';
 import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
 import { Logger } from '../utils/Logger';
@@ -72,7 +72,7 @@ export class ConfigManager {
       throw new ConfigError(`配置校验失败: ${issues}`);
     }
 
-    this.config = result.data as AppConfig;
+    this.config = resolveRuntimePaths(result.data as AppConfig, dirname(this.configDir));
     return this.config;
   }
 
@@ -118,8 +118,9 @@ export class ConfigManager {
       writeFileSync(
         configPath,
         yaml.dump(fileConfig, { noRefs: true, lineWidth: -1, sortKeys: false }),
-        'utf8',
+        { encoding: 'utf8', mode: 0o600 },
       );
+      if (process.platform !== 'win32') chmodSync(configPath, 0o600);
       this.config.github.token = normalizedToken;
     } catch (err) {
       throw new ConfigError(`无法保存 GitHub Token: ${(err as Error).message}`);
@@ -173,6 +174,7 @@ export class ConfigManager {
         yaml.dump(fileConfig, { noRefs: true, lineWidth: -1, sortKeys: false }),
         { encoding: 'utf8', mode: 0o600 },
       );
+      if (process.platform !== 'win32') chmodSync(join(this.configDir, 'config.yaml'), 0o600);
     } catch (err) {
       throw new ConfigError(`${message}: ${(err as Error).message}`);
     }
@@ -217,6 +219,21 @@ export class ConfigManager {
       this.watchTimer = undefined;
     }
   }
+}
+
+/** 配置中的相对运行路径以 config/ 的父目录为基准，不受启动目录影响。 */
+export function resolveRuntimePaths(config: AppConfig, runtimeRoot: string): AppConfig {
+  const resolved = structuredClone(config);
+  resolved.storage.path = resolveConfiguredPath(resolved.storage.path, runtimeRoot);
+  resolved.skills.installPath = resolveConfiguredPath(resolved.skills.installPath, runtimeRoot);
+  if (resolved.logging.file) {
+    resolved.logging.file = resolveConfiguredPath(resolved.logging.file, runtimeRoot);
+  }
+  return resolved;
+}
+
+function resolveConfiguredPath(value: string, runtimeRoot: string): string {
+  return isAbsolute(value) ? resolve(value) : resolve(runtimeRoot, value);
 }
 
 /**

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { AgentSystem } from '../../src/core/AgentSystem';
 import type { AgentTask } from '../../src/agents/AgentTaskManager';
 import type { MessagingCoordinatorRunner } from '../../src/agents/MessagingCoordinator';
+import packageMetadata from '../../package.json';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-pipeline');
 const MCP_TMP_DIR = join(process.cwd(), 'tmp-test-mcp-pipeline');
@@ -61,7 +62,7 @@ describe('命令管道集成测试', () => {
       source: 'cli',
     });
     expect(result.success).toBe(true);
-    expect(result.message).toContain('1.0.0');
+    expect(result.message).toContain(packageMetadata.version);
   });
 
   it('help 命令应返回帮助文本', async () => {
@@ -101,7 +102,7 @@ describe('命令管道集成测试', () => {
       source: 'dingtalk',
     });
     expect(result.success).toBe(true);
-    expect(result.message).toContain('1.0.0');
+    expect(result.message).toContain(packageMetadata.version);
   });
 
   it('/agent 前缀应被剥离（飞书）', async () => {
@@ -111,7 +112,7 @@ describe('命令管道集成测试', () => {
       source: 'feishu',
     });
     expect(result.success).toBe(true);
-    expect(result.message).toContain('1.0.0');
+    expect(result.message).toContain(packageMetadata.version);
   });
 
   it('执行未安装的 Skill 应返回错误', async () => {
