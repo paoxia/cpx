@@ -4,7 +4,7 @@
 
 ## 已交付基线
 
-- TypeScript CLI 与程序化 `AgentSystem` API。
+- 可发布的 `@paoxia/cpx` npm 包、全局 `cpx` 配置/诊断/生命周期 CLI 与程序化 `AgentSystem` API。
 - HTTP 健康检查、测试命令端点、钉钉 Stream 和飞书 WebSocket 文本消息。
 - 中英文命令解析和统一结果格式化。
 - GitHub 文件读取、创建/修改文件并创建 Pull Request。

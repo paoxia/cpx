@@ -23,8 +23,9 @@ import type { AgentTask } from '../agents/AgentTaskManager';
 import { MessagingCoordinator, MessagingCoordinatorRunner } from '../agents/MessagingCoordinator';
 import type { AppConfig, Command, CommandResult, CommandSource } from './types';
 import type { ParsedUserInfo } from './CommandParser';
+import packageMetadata from '../../package.json';
 
-const VERSION = '1.0.0';
+const VERSION = packageMetadata.version;
 
 interface MessagingTaskOrigin {
   source: CommandSource;

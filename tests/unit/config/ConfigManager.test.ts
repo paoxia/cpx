@@ -91,6 +91,18 @@ describe('ConfigManager', () => {
     expect(cm.getConfig().server.port).toBe(3000);
   });
 
+  it('相对运行路径应以配置目录的父目录为基准', () => {
+    writeFileSync(
+      join(TMP_DIR, 'config.yaml'),
+      'storage:\n  path: ./state/agent.db\nskills:\n  installPath: ./state/skills\nlogging:\n  file: ./logs/cpx.log\n',
+    );
+    const cfg = new ConfigManager(TMP_DIR).load();
+    const runtimeRoot = join(TMP_DIR, '..');
+    expect(cfg.storage.path).toBe(join(runtimeRoot, 'state/agent.db'));
+    expect(cfg.skills.installPath).toBe(join(runtimeRoot, 'state/skills'));
+    expect(cfg.logging.file).toBe(join(runtimeRoot, 'logs/cpx.log'));
+  });
+
   it('应将 GitHub Token 持久化到 config.yaml 并保留其他配置', () => {
     writeFileSync(
       join(TMP_DIR, 'config.yaml'),
