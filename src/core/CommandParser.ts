@@ -18,6 +18,7 @@ export interface ParsedUserInfo {
  * - @agent 查看GitHub                  -> github_overview
  * - @agent 查看分支 <owner/repo>       -> github_branches
  * - @agent 开发 <repo>[#base] [-> branch] <prompt> -> agent_develop
+ * - @agent 继续 <task-id> <prompt>      -> agent_task_continue
  * - @agent 任务 <id>                   -> agent_task_status
  * - @agent 执行 <skill> [json]          -> skill_execute
  * - @agent 确认 <id>                    -> confirm
@@ -36,7 +37,7 @@ export class CommandParser {
       throw new CommandError('空命令');
     }
 
-    const { name, args } = this.matchCommand(text);
+    const { name, args } = this.matchCommand(text, userInfo.source);
     return {
       id: randomUUID(),
       source: userInfo.source,
@@ -64,7 +65,10 @@ export class CommandParser {
     return t;
   }
 
-  private matchCommand(text: string): { name: string; args: Record<string, unknown> } {
+  private matchCommand(
+    text: string,
+    source: CommandSource,
+  ): { name: string; args: Record<string, unknown> } {
     const lower = text.toLowerCase();
 
     // version
@@ -111,6 +115,12 @@ export class CommandParser {
     m = text.match(/^(?:取消任务|cancel\s+task)\s+([a-f0-9-]{6,36})$/i);
     if (m) {
       return { name: 'agent_task_cancel', args: { id: m[1] } };
+    }
+
+    // 继续 <task-id> <prompt>
+    m = text.match(/^(?:继续任务|继续|continue(?:\s+task)?)\s+([a-f0-9-]{6,36})\s+([\s\S]+)$/i);
+    if (m) {
+      return { name: 'agent_task_continue', args: { id: m[1], prompt: m[2].trim() } };
     }
 
     // 最近任务 [数量]
@@ -214,6 +224,11 @@ export class CommandParser {
             ? 'mcp'
             : 'agents';
       return { name: `list_${normalized}`, args: {} };
+    }
+
+    // 飞书未命中固定命令的文本直接交给当前 Coding Agent 工作区。
+    if (source === 'feishu') {
+      return { name: 'agent_chat', args: { prompt: text } };
     }
 
     // Fallback: <cmd> [json]

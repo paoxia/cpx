@@ -88,6 +88,7 @@ cpx-*.tar.gz
 /data/codex/
 /data/claude/
 /data/mihomo/
+/data/repositories/
 /data/workspaces/
 data/*.db
 data/*.db-shm

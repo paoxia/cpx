@@ -797,6 +797,32 @@ select:focus-visible {
   scrollbar-width: thin;
 }
 
+.continue-task-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.continue-task-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--soft);
+  font-size: 10px;
+}
+
+.continue-task-form textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.continue-task-button {
+  width: 100%;
+}
+
 .pr-link {
   display: flex;
   align-items: center;
@@ -870,7 +896,8 @@ select:focus-visible {
   padding: clamp(24px, 3vw, 38px);
   border: 1px solid var(--line);
   border-radius: 20px;
-  background: radial-gradient(circle at 100% 0, rgba(215, 255, 95, 0.055), transparent 28rem), var(--panel);
+  background:
+    radial-gradient(circle at 100% 0, rgba(215, 255, 95, 0.055), transparent 28rem), var(--panel);
   box-shadow: 0 28px 90px rgba(0, 0, 0, 0.22);
 }
 

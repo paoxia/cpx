@@ -279,6 +279,45 @@ describe('命令管道集成测试', () => {
     });
     expect(otherUser.success).toBe(false);
     expect(otherUser.message).toContain('不是你在当前平台创建');
+
+    const continuedQueued = {
+      ...completedTask,
+      status: 'queued' as const,
+      prompt: '把按钮颜色改成蓝色',
+      completedAt: undefined,
+      turns: [
+        ...completedTask.turns,
+        {
+          id: 'turn-2',
+          prompt: '把按钮颜色改成蓝色',
+          status: 'queued' as const,
+          createdAt: Date.now(),
+        },
+      ],
+    };
+    const continuedCompleted = {
+      ...continuedQueued,
+      status: 'completed' as const,
+      completedAt: Date.now(),
+      lastAgentResponse: '按钮颜色已经修改为蓝色。',
+      turns: continuedQueued.turns.map((turn) => ({ ...turn, status: 'completed' as const })),
+    };
+    vi.spyOn(webConsole, 'listCodingTasks').mockReturnValue([completedTask]);
+    const continueSpy = vi.spyOn(webConsole, 'continueCodingTask').mockReturnValue(continuedQueued);
+    vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(continuedCompleted);
+
+    const pushedBeforeNaturalLanguage = pushed.length;
+    const naturalLanguage = await system.processCommand('/agent 把按钮颜色改成蓝色', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-123:feishu-user-1',
+    });
+    expect(naturalLanguage.success).toBe(true);
+    expect(naturalLanguage.message).toContain('追加第 2 轮指令');
+    expect(continueSpy).toHaveBeenCalledWith(taskId, '把按钮颜色改成蓝色', true);
+    await vi.waitFor(() => expect(pushed).toHaveLength(pushedBeforeNaturalLanguage + 2));
+    expect(JSON.stringify(pushed)).toContain('按钮颜色已经修改为蓝色');
   });
 });
 
@@ -370,5 +409,20 @@ function fakeAgentTask(id: string, status: AgentTask['status']): AgentTask {
     updatedAt: now,
     logs: [],
     attempts: [{ provider: 'codex', startedAt: now, status: 'success' }],
+    turns: [
+      {
+        id: 'turn-1',
+        prompt: '修复登录页面',
+        status:
+          status === 'failed'
+            ? 'failed'
+            : status === 'cancelled'
+              ? 'cancelled'
+              : status === 'completed'
+                ? 'completed'
+                : 'queued',
+        createdAt: now,
+      },
+    ],
   };
 }

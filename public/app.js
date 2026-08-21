@@ -377,7 +377,9 @@ async function loadTaskBranches(repository, defaultBranch) {
     elements.branchPicker.disabled = false;
     elements.branchPicker.required = true;
     const selectedBranch =
-      branches.find((branch) => branch.name === defaultBranch)?.name || branches[0]?.name || '__new__';
+      branches.find((branch) => branch.name === defaultBranch)?.name ||
+      branches[0]?.name ||
+      '__new__';
     elements.branchPicker.value = selectedBranch;
     elements.branchHint.textContent = branches.length
       ? `已读取 ${branches.length} 个分支；选择现有分支作为基线，或新建任务分支`
@@ -515,10 +517,7 @@ function renderRepositories() {
 
   elements.repositoryList.querySelectorAll('[data-use-repository]').forEach((button) => {
     button.addEventListener('click', () => {
-      selectTaskRepository(
-        button.dataset.useRepository,
-        button.dataset.defaultBranch || '',
-      );
+      selectTaskRepository(button.dataset.useRepository, button.dataset.defaultBranch || '');
       switchView('tasks');
       elements.prompt.focus();
       showToast(`已选择 ${button.dataset.useRepository}`);
@@ -554,7 +553,11 @@ async function testCodex() {
   elements.codexTestTerminal.innerHTML = '';
   const profile = activeAgentProfile();
   if (!profile) return;
-  appendModelTestLine(elements.codexTestTerminal, `> ${profile.name} / ${providerLabel(profile.provider)}`, 'command');
+  appendModelTestLine(
+    elements.codexTestTerminal,
+    `> ${profile.name} / ${providerLabel(profile.provider)}`,
+    'command',
+  );
   appendModelTestLine(elements.codexTestTerminal, `你：${prompt}`, 'command');
   appendModelTestLine(elements.codexTestTerminal, '正在等待 Codex 回复…', 'muted');
   try {
@@ -563,11 +566,23 @@ async function testCodex() {
       body: JSON.stringify({ ...profile, prompt }),
     });
     elements.codexTestTerminal.className = `model-test-terminal ${result.success ? 'success' : 'error'}`;
-    appendModelTestLine(elements.codexTestTerminal, result.message, result.success ? 'success' : 'error');
+    appendModelTestLine(
+      elements.codexTestTerminal,
+      result.message,
+      result.success ? 'success' : 'error',
+    );
     if (result.response) {
-      appendModelTestLine(elements.codexTestTerminal, `${providerLabel(profile.provider)} 回复：\n${result.response}`, 'response');
+      appendModelTestLine(
+        elements.codexTestTerminal,
+        `${providerLabel(profile.provider)} 回复：\n${result.response}`,
+        'response',
+      );
     }
-    appendModelTestLine(elements.codexTestTerminal, `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`, 'muted');
+    appendModelTestLine(
+      elements.codexTestTerminal,
+      `耗时 ${(result.durationMs / 1000).toFixed(1)} 秒`,
+      'muted',
+    );
     showToast(result.message, !result.success);
   } catch (error) {
     elements.codexTestTerminal.className = 'model-test-terminal error';
@@ -634,7 +649,12 @@ async function saveIntegration(event, platform) {
     elements.dingtalkClientSecret.value = '';
     renderIntegrations();
     const status = state.integrations[platform];
-    showToast(status.state === 'connected' || status.state === 'disabled' ? status.message : `配置已保存：${status.message}`, status.state === 'error');
+    showToast(
+      status.state === 'connected' || status.state === 'disabled'
+        ? status.message
+        : `配置已保存：${status.message}`,
+      status.state === 'error',
+    );
   } catch (error) {
     showToast(error.message, true);
   } finally {
@@ -674,13 +694,18 @@ async function loadCodexModels(notify = false) {
 function renderModelCatalog(errorMessage) {
   const savedModel = elements.profileModel.value || activeAgentProfile()?.model || '';
   const options = state.codexModels.map(
-    (model) => `<option value="${escapeHtml(model.id)}">${escapeHtml(model.displayName)} · ${escapeHtml(model.id)}</option>`,
+    (model) =>
+      `<option value="${escapeHtml(model.id)}">${escapeHtml(model.displayName)} · ${escapeHtml(model.id)}</option>`,
   );
   if (savedModel && !state.codexModels.some((model) => model.id === savedModel)) {
-    options.unshift(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel)}（已保存，当前目录不可用）</option>`);
+    options.unshift(
+      `<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel)}（已保存，当前目录不可用）</option>`,
+    );
   }
   if (!options.length) {
-    options.push(`<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel || '登录 Codex 后刷新模型列表')}</option>`);
+    options.push(
+      `<option value="${escapeHtml(savedModel)}">${escapeHtml(savedModel || '登录 Codex 后刷新模型列表')}</option>`,
+    );
   }
   elements.profileModel.innerHTML = options.join('');
   elements.profileModel.value = savedModel || state.codexModels[0]?.id || '';
@@ -737,8 +762,18 @@ async function refreshCodexAuth() {
 function renderCodexAuth() {
   const auth = state.codexAuth;
   if (!auth) return;
-  const tone = auth.authenticated ? 'connected' : auth.state === 'waiting' ? 'pending' : auth.state === 'failed' ? 'error' : '';
-  elements.codexAuthStatus.textContent = auth.authenticated ? '已登录' : auth.state === 'waiting' ? '等待授权' : '未登录';
+  const tone = auth.authenticated
+    ? 'connected'
+    : auth.state === 'waiting'
+      ? 'pending'
+      : auth.state === 'failed'
+        ? 'error'
+        : '';
+  elements.codexAuthStatus.textContent = auth.authenticated
+    ? '已登录'
+    : auth.state === 'waiting'
+      ? '等待授权'
+      : '未登录';
   elements.codexAuthStatus.className = `connection-badge ${tone}`;
   elements.codexCliStatus.textContent = auth.cliAvailable ? 'CLI 可用' : 'CLI 缺失';
   elements.codexCliStatus.className = `connection-badge ${auth.cliAvailable ? 'connected' : 'error'}`;
@@ -849,8 +884,14 @@ function editAgentProfile(id) {
   elements.profileId.value = profile?.id || '';
   elements.profileName.value = profile?.name || '';
   const modelId = profile?.model || state.codexModels[0]?.id || '';
-  if (modelId && !Array.from(elements.profileModel.options).some((option) => option.value === modelId)) {
-    elements.profileModel.add(new Option(`${modelId}（已保存，当前目录不可用）`, modelId, true, true), 0);
+  if (
+    modelId &&
+    !Array.from(elements.profileModel.options).some((option) => option.value === modelId)
+  ) {
+    elements.profileModel.add(
+      new Option(`${modelId}（已保存，当前目录不可用）`, modelId, true, true),
+      0,
+    );
   }
   elements.profileModel.value = modelId;
   elements.profileReasoning.dataset.savedValue = profile?.reasoningEffort || '';
@@ -893,13 +934,19 @@ async function deleteAgentProfile() {
   const id = elements.profileId.value;
   if (!id || state.settings.modelConfigs.length <= 1) return;
   const profiles = state.settings.modelConfigs.filter((item) => item.id !== id);
-  const activeId = state.settings.activeConfigurationId === id ? profiles[0].id : state.settings.activeConfigurationId;
+  const activeId =
+    state.settings.activeConfigurationId === id
+      ? profiles[0].id
+      : state.settings.activeConfigurationId;
   await persistAgentProfiles(activeId, profiles);
   editAgentProfile(activeId);
   showToast('Agent 配置已删除。');
 }
 
-async function persistAgentProfiles(activeConfigurationId, modelConfigs = state.settings.modelConfigs) {
+async function persistAgentProfiles(
+  activeConfigurationId,
+  modelConfigs = state.settings.modelConfigs,
+) {
   state.settings = await api('/api/console/settings', {
     method: 'POST',
     body: JSON.stringify({ activeConfigurationId, modelConfigs }),
@@ -915,7 +962,11 @@ function renderExecutionOrderPreview() {
 }
 
 function connectionStateLabel(stateValue) {
-  return { disabled: '未启用', connecting: '连接中', connected: '已连接', error: '连接失败' }[stateValue] || stateValue;
+  return (
+    { disabled: '未启用', connecting: '连接中', connected: '已连接', error: '连接失败' }[
+      stateValue
+    ] || stateValue
+  );
 }
 
 async function refreshTasks() {
@@ -1001,6 +1052,7 @@ function renderTaskDetail() {
   }
 
   const active = ['queued', 'preparing', 'running', 'publishing'].includes(task.status);
+  const canContinue = !active && task.workspace && task.agentBranch;
   elements.taskDetail.className = 'task-detail';
   elements.taskDetail.innerHTML = `
     <div class="detail-summary">
@@ -1013,7 +1065,20 @@ function renderTaskDetail() {
     </div>
     ${renderAttempts(task.attempts)}
     <pre class="task-output" aria-label="任务输出"></pre>
+    ${
+      canContinue
+        ? `
+      <form class="continue-task-form">
+        <label>
+          <span>继续修改这个工作区</span>
+          <textarea rows="4" name="prompt" required placeholder="输入下一轮要求，Codex 会继续当前会话和代码现场。"></textarea>
+        </label>
+        <button class="launch-button continue-task-button" type="submit"><span>继续任务</span></button>
+      </form>`
+        : ''
+    }
     ${task.pullRequestUrl ? `<a class="pr-link" href="${escapeHtml(task.pullRequestUrl)}" target="_blank" rel="noreferrer"><span>打开 Pull Request</span><b>↗</b></a>` : ''}
+    ${task.repositoryPath ? `<div class="workspace-path">REPOSITORY · ${escapeHtml(task.repositoryPath)}</div>` : ''}
     ${task.workspace ? `<div class="workspace-path">WORKSPACE · ${escapeHtml(task.workspace)}</div>` : ''}`;
 
   const output = elements.taskDetail.querySelector('.task-output');
@@ -1037,6 +1102,30 @@ function renderTaskDetail() {
       showToast(error.message, true);
     }
   });
+
+  elements.taskDetail
+    .querySelector('.continue-task-form')
+    ?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const button = form.querySelector('button');
+      const prompt = form.querySelector('textarea').value;
+      button.disabled = true;
+      try {
+        const continued = await api('/api/console/task/continue', {
+          method: 'POST',
+          body: JSON.stringify({ id: task.id, prompt, useFallback: false }),
+        });
+        const index = state.tasks.findIndex((item) => item.id === continued.id);
+        if (index >= 0) state.tasks[index] = continued;
+        renderTaskList();
+        renderTaskDetail();
+        showToast('已追加指令，继续使用原工作区。');
+      } catch (error) {
+        button.disabled = false;
+        showToast(error.message, true);
+      }
+    });
 }
 
 async function switchView(view) {

@@ -11,10 +11,7 @@ import {
 import { HttpServer } from '../core/HttpServer';
 import { GitHubClient } from '../github/GitHubClient';
 import { Logger } from '../utils/Logger';
-import {
-  AgentAuthManager,
-  AgentAuthService,
-} from './AgentAuthManager';
+import { AgentAuthManager, AgentAuthService } from './AgentAuthManager';
 import { CodexConfigManager, CodexRuntimeConfiguration } from './CodexConfigManager';
 import { CodexModelCatalog, CodexModelCatalogReader } from './CodexModelCatalog';
 import {
@@ -205,6 +202,21 @@ export class WebConsole {
     return task ? this.taskManager.cancel(task.id) : false;
   }
 
+  continueCodingTask(
+    reference: string,
+    prompt: string,
+    useFallback = true,
+    createPullRequest?: boolean,
+  ): AgentTask {
+    const task = this.getCodingTask(reference);
+    if (!task) throw new Error('任务不存在');
+    return this.taskManager.continueTask(task.id, {
+      prompt,
+      configurations: this.executionConfigurations(useFallback),
+      createPullRequest,
+    });
+  }
+
   waitForCodingTask(id: string): Promise<AgentTask> {
     return this.taskManager.waitForTerminal(id);
   }
@@ -340,7 +352,11 @@ export class WebConsole {
       try {
         const auth = await this.agentAuth.getStatus();
         if (!auth.authenticated) {
-          return { status: 409, body: { error: '请先登录 Codex，再刷新模型列表' }, headers: API_HEADERS };
+          return {
+            status: 409,
+            body: { error: '请先登录 Codex，再刷新模型列表' },
+            headers: API_HEADERS,
+          };
         }
         return { status: 200, body: await this.codexModels.list(), headers: API_HEADERS };
       } catch (error) {
@@ -519,6 +535,27 @@ export class WebConsole {
       }
     });
 
+    httpServer.register('POST', '/api/console/task/continue', async (body) => {
+      try {
+        const payload = parseJson<{
+          id?: string;
+          prompt?: string;
+          useFallback?: boolean;
+          createPullRequest?: boolean;
+        }>(body);
+        if (!payload.id) throw new Error('id is required');
+        const task = this.continueCodingTask(
+          payload.id,
+          payload.prompt ?? '',
+          payload.useFallback !== false,
+          payload.createPullRequest,
+        );
+        return { status: 202, body: task, headers: API_HEADERS };
+      } catch (error) {
+        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
+      }
+    });
+
     httpServer.register('POST', '/api/console/cancel', async (body) => {
       try {
         const payload = parseJson<{ id?: string }>(body);
@@ -547,10 +584,7 @@ export class WebConsole {
             ? stored.activeConfigurationId
             : undefined,
         );
-        if (
-          stored.version !== 5 ||
-          validated.modelConfigs.length !== stored.modelConfigs.length
-        ) {
+        if (stored.version !== 5 || validated.modelConfigs.length !== stored.modelConfigs.length) {
           this.persistSettings(validated);
         }
         return validated;
@@ -802,7 +836,9 @@ function normalizeMessagingPayload(
   if (platform === 'dingtalk') {
     return {
       enabled,
-      ...(normalizeCredential(payload.clientId, 'Client ID') ? { clientId: payload.clientId!.trim() } : {}),
+      ...(normalizeCredential(payload.clientId, 'Client ID')
+        ? { clientId: payload.clientId!.trim() }
+        : {}),
       ...(normalizeCredential(payload.clientSecret, 'Client Secret')
         ? { clientSecret: payload.clientSecret!.trim() }
         : {}),

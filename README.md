@@ -82,7 +82,7 @@ curl -X POST http://localhost:3000/command \
 
 控制台的 GitHub 页签在没有 Token 时提供“创建 GitHub Token”入口，打开 GitHub 的 fine-grained PAT 页面并预填 90 天有效期及 Contents、Pull requests、Workflows 写权限；用户仍需在 GitHub 选择资源所有者和仓库，生成后复制回控制台验证。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。页面会区分本地文件与环境变量来源，受限 Token 只显示明确授权的仓库。
 
-验证成功的 Token 同时供 GitHub API、HTTPS `git clone/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。任务控制台会直接列出该 Token 授权的未归档项目；选定项目后可读取并选择现有分支作为任务基线，也可输入名称新建任务分支。还可从仓库列表点击“用于新任务”，或手动输入仓库地址和基础分支。
+验证成功的 Token 同时供 GitHub API、HTTPS `git clone/fetch/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。任务控制台会直接列出该 Token 授权的未归档项目；选定项目后可读取并选择现有分支作为任务基线，也可输入名称新建任务分支。还可从仓库列表点击“用于新任务”，或手动输入仓库地址和基础分支。
 
 “Agent 设置”页管理 Codex 登录并保存多套执行方案。每套方案包含名称、模型和推理强度；模型来自当前登录账号在 Codex `/model` 中使用的同一目录，推理强度只显示该模型支持的值。设为“当前”的方案供 Web 任务使用，聊天任务在额度或鉴权失败时会按列表顺序尝试其余方案。Codex 的审批策略、沙箱模式和网页搜索写入 `CODEX_HOME/config.toml`。登录密钥不写入模型方案；页面还可用当前方案发送最多 4000 字的内容进行真实连通性测试。
 
@@ -98,15 +98,15 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 三端均可运行，但 cpx 服务必须与完成登录的 CLI 使用同一系统用户：
 
-| 平台    | 支持方式                | 注意事项                                                                                                                                                            |
-| ------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Linux   | 原生 Node.js / Docker   | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex`。 |
-| macOS   | 原生 Node.js            | Codex 可使用系统钥匙串或 `~/.codex`；后台服务必须以完成授权的用户运行。 |
+| 平台    | 支持方式                | 注意事项                                                                             |
+| ------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| Linux   | 原生 Node.js / Docker   | CLI 必须在 `PATH`；服务用户的 HOME 可写。Docker 已持久化 `/root/.codex`。            |
+| macOS   | 原生 Node.js            | Codex 可使用系统钥匙串或 `~/.codex`；后台服务必须以完成授权的用户运行。              |
 | Windows | 原生 PowerShell，或 WSL | cpx 会通过 shell 解析 npm 的 `.cmd` 包装脚本；不要混用 Windows 与 WSL 的 HOME/凭据。 |
 
 不要在一个系统用户下授权、再让另一个服务账户运行 cpx，否则状态检查会显示未登录。
 
-每个任务会克隆到数据库所在目录下的 `workspaces/<task-id>`，Agent 只在该克隆中执行。任务状态和日志保存在内存中，重启服务后不会恢复；工作区文件仍保留在磁盘。
+首次使用仓库时，cpx 会把完整 Git 历史克隆到数据库所在目录下的 `repositories/<owner>/<repo>`；后续任务先 fetch 更新缓存，再通过 `git worktree` 创建 `workspaces/<task-id>`。任务结束后工作区和 Codex 会话仍可继续接收 prompt；同一任务后续轮次复用原分支、worktree 和 `thread_id`。任务状态和日志保存在内存中，重启服务后不会恢复，但仓库缓存和工作区文件仍保留在磁盘。
 
 > 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
 
@@ -117,7 +117,7 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 源码部署快速步骤：
 
 1. 在电脑获取仓库源码，把完整 `cpx` 文件夹上传到 NAS 持久化目录
-2. 在极空间文件管理器中创建 `data/codex`、`data/workspaces` 和 `logs` 子目录
+2. 在极空间文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces` 和 `logs` 子目录
 3. 打开“Docker → Compose → 新建项目”，项目存储位置选择上传后的 `cpx` 目录
 4. 导入或粘贴根目录 `docker-compose.yml`，确认后由极空间自动构建并启动
 5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub、Codex 和所需消息平台
@@ -147,7 +147,7 @@ agent-cli stop             # 提示如何停止（通过 SIGTERM）
 
 ## 聊天命令
 
-通过钉钉群 @机器人、飞书群 /agent、或 HTTP `/command` 端点发送。支持中英双语。
+通过钉钉或飞书群 @机器人、机器人私聊、或 HTTP `/command` 端点发送。支持中英双语；飞书私聊也可使用 `/agent` 前缀。
 
 ### 基础命令
 
@@ -172,14 +172,17 @@ agent-cli stop             # 提示如何停止（通过 SIGTERM）
 
 ### Coding Agent 开发
 
-| 命令                                              | 说明                                     |
-| ------------------------------------------------- | ---------------------------------------- |
-| `开发 <owner/repo>[#基础分支] [-> 新分支] <需求>` | 使用 Codex 开发并默认创建 PR |
-| `最近任务 [数量]`                                 | 查看当前用户从当前平台创建的最近任务     |
-| `任务 <ID>`                                       | 查看任务状态；可使用返回 ID 的前 8 位    |
-| `取消任务 <ID>`                                   | 取消尚未结束的任务                       |
+| 命令                                              | 说明                                  |
+| ------------------------------------------------- | ------------------------------------- |
+| `开发 <owner/repo>[#基础分支] [-> 新分支] <需求>` | 使用 Codex 开发并默认创建 PR          |
+| `最近任务 [数量]`                                 | 查看当前用户从当前平台创建的最近任务  |
+| `任务 <ID>`                                       | 查看任务状态；可使用返回 ID 的前 8 位 |
+| `继续 <ID> <需求>`                                | 在原 worktree 和 Codex 会话中继续任务 |
+| `取消任务 <ID>`                                   | 取消尚未结束的任务                    |
 
-基础分支省略时使用仓库默认分支；新分支省略时自动生成 `cpx/task-*`。开发命令会先确认当前 GitHub Token 能访问仓库、基础分支存在且指定的新分支尚不存在，然后使用当前 Agent 配置；额度或鉴权失败时按配置列表回退。任务完成、失败或取消后，系统会通过发起命令的同一长连接会话推送最终状态；有 PR 时同时返回链接。
+基础分支省略时使用仓库默认分支；新分支省略时自动生成 `cpx/task-*`。开发命令会先确认当前 GitHub Token 能访问仓库、基础分支存在且指定的新分支尚不存在，然后使用当前 Agent 配置；额度或鉴权失败时按配置列表回退。任务完成后可通过“继续”命令或 Web 控制台追加 prompt，已创建的 PR 会由后续提交直接更新。
+
+飞书中，固定命令以外的普通文本会交给当前会话最近的 Coding Agent 任务。例如先创建任务，再直接发送“把按钮改成蓝色并补充截图测试”。任务结束后飞书会收到 Agent 的最终文本回答以及状态、PR 链接。如果当前会话还没有任务，系统会使用 `github.defaultRepo` 自动创建；没有配置默认仓库时会提示先发送“开发 owner/repo 需求”。同一任务正在执行时不会并行接受下一轮，请等待终态通知后再发送。
 
 钉钉示例：
 
@@ -190,10 +193,10 @@ agent-cli stop             # 提示如何停止（通过 SIGTERM）
 飞书示例：
 
 ```text
-/agent 开发 paoxia/cpx#dev 修复登录页面并补充测试
+@机器人 开发 paoxia/cpx#dev 修复登录页面并补充测试
 ```
 
-聊天任务只能由创建它的同一平台、同一用户查询或取消。任务归属、状态和日志均保存在进程内，服务重启后不会恢复。
+聊天任务只能由创建它的同一平台、同一用户查询、继续或取消；飞书自然语言续写还会优先限定在原会话。任务归属、状态和日志均保存在进程内，服务重启后不会恢复。
 
 ### Skill 执行
 
@@ -315,26 +318,27 @@ Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录�
 
 返回 AI 开发控制台。控制台使用以下 API：
 
-| 端点                                       | 说明                                           |
-| ------------------------------------------ | ---------------------------------------------- |
-| `POST /api/console/model-test`             | 向 Codex 发送内容并返回文本回复                 |
-| `GET/POST /api/console/settings`           | 读取或保存多套 Codex 配置和当前配置              |
+| 端点                                         | 说明                                           |
+| -------------------------------------------- | ---------------------------------------------- |
+| `POST /api/console/model-test`               | 向 Codex 发送内容并返回文本回复                |
+| `GET/POST /api/console/settings`             | 读取或保存多套 Codex 配置和当前配置            |
 | `GET /api/console/agent-auth?provider=codex` | 检查 Codex CLI 登录状态                        |
-| `POST /api/console/agent-auth/login`       | 启动 Codex 设备码登录                            |
-| `POST /api/console/agent-auth/api-key`     | 通过标准输入将 API Key 交给 Codex CLI           |
-| `POST /api/console/agent-auth/cancel`      | 取消进行中的 Codex 登录                         |
-| `GET /api/console/codex-models`            | 读取当前账号在 Codex `/model` 使用的模型目录     |
-| `GET/POST /api/console/codex-config`       | 读取或保存 `CODEX_HOME/config.toml` 的页面设置   |
-| `GET/POST /api/console/integrations`       | 读取状态或保存飞书/钉钉长连接配置               |
-| `GET /api/console/github`                  | 读取 Token 来源、连接状态和 PAT 创建引导       |
-| `POST /api/console/github/connect`         | 验证 GitHub Token，成功后写入配置并读取仓库    |
-| `GET /api/console/github/repositories`     | 使用已配置 Token 刷新全部可访问仓库            |
-| `GET /api/console/github/branches`         | 读取指定 `owner/repo` 的全部分支               |
-| `GET/POST /api/console/tasks`              | 列出任务或创建任务                             |
-| `GET /api/console/task?id=<id>`            | 读取单个任务及日志                             |
-| `POST /api/console/cancel`                 | 取消未结束任务                                 |
+| `POST /api/console/agent-auth/login`         | 启动 Codex 设备码登录                          |
+| `POST /api/console/agent-auth/api-key`       | 通过标准输入将 API Key 交给 Codex CLI          |
+| `POST /api/console/agent-auth/cancel`        | 取消进行中的 Codex 登录                        |
+| `GET /api/console/codex-models`              | 读取当前账号在 Codex `/model` 使用的模型目录   |
+| `GET/POST /api/console/codex-config`         | 读取或保存 `CODEX_HOME/config.toml` 的页面设置 |
+| `GET/POST /api/console/integrations`         | 读取状态或保存飞书/钉钉长连接配置              |
+| `GET /api/console/github`                    | 读取 Token 来源、连接状态和 PAT 创建引导       |
+| `POST /api/console/github/connect`           | 验证 GitHub Token，成功后写入配置并读取仓库    |
+| `GET /api/console/github/repositories`       | 使用已配置 Token 刷新全部可访问仓库            |
+| `GET /api/console/github/branches`           | 读取指定 `owner/repo` 的全部分支               |
+| `GET/POST /api/console/tasks`                | 列出任务或创建任务                             |
+| `GET /api/console/task?id=<id>`              | 读取单个任务及日志                             |
+| `POST /api/console/task/continue`            | 向已结束任务的原工作区追加 prompt              |
+| `POST /api/console/cancel`                   | 取消未结束任务                                 |
 
-仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。选择现有分支时，系统以它为浅克隆和 Pull Request 的基础分支，再创建隔离的 `cpx/task-*` 工作分支；选择新建分支时使用用户提供的合法分支名。只有创建任务时显式选择 `createPullRequest`，系统才会提交全部改动、推送任务分支并调用 `gh pr create`。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
+仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。只有任务启用 `createPullRequest` 时，系统才会提交全部改动、推送任务分支并调用 `gh pr create`；后续轮次推送到同一分支和 PR。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
 
 ### POST /command
 

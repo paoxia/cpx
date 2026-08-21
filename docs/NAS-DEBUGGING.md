@@ -29,10 +29,10 @@
 
 在极空间系统信息或设备规格页面确认处理器架构：
 
-| NAS 架构 | Docker 平台参数 |
-|---|---|
-| x86_64 / amd64 | `linux/amd64` |
-| aarch64 / arm64 | `linux/arm64` |
+| NAS 架构        | Docker 平台参数 |
+| --------------- | --------------- |
+| x86_64 / amd64  | `linux/amd64`   |
+| aarch64 / arm64 | `linux/arm64`   |
 
 后文默认使用 `linux/amd64`。ARM64 NAS 必须把构建和拉取命令中的平台改成 `linux/arm64`。
 
@@ -184,7 +184,7 @@ NPM_REGISTRY=https://registry.npmmirror.com \
 5. 在容器详情中确认 cpx 使用的镜像标识已经变化；
 6. 检查 `/health`、页面功能和本轮改动对应的行为。
 
-重新创建容器或项目不会删除目录挂载中的 `data/mihomo`、`data/codex`、`data/workspaces`、`config` 和数据库。不要在调试更新时删除这些目录，也不要选择带“删除数据卷”含义的操作。
+重新创建容器或项目不会删除目录挂载中的 `data/mihomo`、`data/codex`、`data/repositories`、`data/workspaces`、`config` 和数据库。不要在调试更新时删除这些目录，也不要选择带“删除数据卷”含义的操作。
 
 ## 五、同名镜像未更新时
 
@@ -204,17 +204,17 @@ CPX_IMAGE=cpx:dev-20260820-1
 
 ## 六、常见问题
 
-| 现象 | 图形界面检查与处理 |
-|---|---|
-| `cpx-mihomo` 持续重启 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 能被 Mihomo 解析且 `mixed-port` 为 7890 |
-| Mihomo 正常但 Codex 超时 | 检查代理组选择、最终 `MATCH` 规则和节点状态，确认 cpx 代理地址仍为 `http://mihomo:7890` |
-| Compose 尝试拉取 `cpx:dev` | `cpx-dev.tar` 尚未成功导入，或导入后的镜像标签与 `CPX_IMAGE` 不一致 |
-| 页面仍是旧版本 | 重新导入镜像并重新创建容器，检查新旧镜像标识；必要时使用唯一开发标签 |
-| 端口 3000 被占用 | 在 Compose 中只修改端口映射左侧，例如 `13000:3000`，然后访问 `http://<NAS-IP>:13000` |
-| Codex 登录后重建又丢失 | 检查 `./data/codex:/root/.codex` 是否仍挂载到原来的持久化目录 |
-| 架构错误或 `exec format error` | 按 NAS 实际架构重新构建并导入 cpx 与 Mihomo 镜像 |
+| 现象                                                  | 图形界面检查与处理                                                                                                                        |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `cpx-mihomo` 持续重启                                 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 能被 Mihomo 解析且 `mixed-port` 为 7890                                                |
+| Mihomo 正常但 Codex 超时                              | 检查代理组选择、最终 `MATCH` 规则和节点状态，确认 cpx 代理地址仍为 `http://mihomo:7890`                                                   |
+| Compose 尝试拉取 `cpx:dev`                            | `cpx-dev.tar` 尚未成功导入，或导入后的镜像标签与 `CPX_IMAGE` 不一致                                                                       |
+| 页面仍是旧版本                                        | 重新导入镜像并重新创建容器，检查新旧镜像标识；必要时使用唯一开发标签                                                                      |
+| 端口 3000 被占用                                      | 在 Compose 中只修改端口映射左侧，例如 `13000:3000`，然后访问 `http://<NAS-IP>:13000`                                                      |
+| Codex 登录后重建又丢失                                | 检查 `./data/codex:/root/.codex` 是否仍挂载到原来的持久化目录                                                                             |
+| 架构错误或 `exec format error`                        | 按 NAS 实际架构重新构建并导入 cpx 与 Mihomo 镜像                                                                                          |
 | `resolve image config` 或 `registry-1.docker.io` 超时 | Docker daemon 无法拉取 Dockerfile frontend 或基础镜像；在开发机为 Docker Engine/BuildKit 配置出站代理，不能只设置当前 shell 或 build args |
-| 构建长时间停在 `apt-get` | 终止当前构建，设置 `APT_MIRROR=http://mirrors.aliyun.com` 后重新执行构建脚本 |
-| 构建长时间停在 `npm install` | 终止当前构建，设置 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新执行构建脚本；确认两个 CLI 包在该镜像中存在 |
+| 构建长时间停在 `apt-get`                              | 终止当前构建，设置 `APT_MIRROR=http://mirrors.aliyun.com` 后重新执行构建脚本                                                              |
+| 构建长时间停在 `npm install`                          | 终止当前构建，设置 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新执行构建脚本；确认两个 CLI 包在该镜像中存在                        |
 
 需要反馈问题时，从极空间界面复制 Compose 状态、两个容器的镜像标识、健康状态和最近日志。分享前删除订阅地址、节点凭据、Token、设备码和仓库敏感内容。

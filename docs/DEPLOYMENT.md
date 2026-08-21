@@ -58,7 +58,7 @@ git archive --format=zip --output=cpx-source.zip dev
 1. 创建持久化目录 `<CPX_DIR>`；
 2. 上传源码 ZIP 并解压到该目录；
 3. 确认 `Dockerfile`、`docker-compose.yml`、`package.json`、`src/` 和 `public/` 位于同一层；
-4. 创建 `data/codex`、`data/workspaces`、`config` 和 `logs` 子目录；
+4. 创建 `data/codex`、`data/repositories`、`data/workspaces`、`config` 和 `logs` 子目录；
 5. 将该目录访问权限限制为管理员或可信用户。
 
 源码包本身已经包含 `config/config.example.yaml` 和 `config/permissions.example.yaml`。不要删除整个 `config` 目录。
@@ -187,14 +187,14 @@ Mihomo 镜像和配置只准备一次、每轮仅替换 cpx 开发镜像的完�
 
 ```yaml
 ports:
-  - "3000:3000"
+  - '3000:3000'
 ```
 
 如果 3000 已被占用，在 Compose 编辑器中只修改左侧，例如：
 
 ```yaml
 ports:
-  - "13000:3000"
+  - '13000:3000'
 ```
 
 此时访问地址变为 `http://<NAS-IP>:13000`，容器内部端口仍保持 3000。
@@ -205,10 +205,10 @@ ports:
 
 先在极空间系统信息或设备规格页面确认处理器架构：
 
-| NAS 架构 | Docker 构建平台 |
-|---|---|
-| x86_64 / amd64 | `linux/amd64` |
-| aarch64 / arm64 | `linux/arm64` |
+| NAS 架构        | Docker 构建平台 |
+| --------------- | --------------- |
+| x86_64 / amd64  | `linux/amd64`   |
+| aarch64 / arm64 | `linux/arm64`   |
 
 在开发机仓库根目录执行：
 
@@ -229,7 +229,7 @@ scripts/docker-build.sh latest linux/arm64
 1. 通过文件管理器把 `cpx-latest.tar` 和 `docker-compose.image.yml` 上传到持久化目录；
 2. 打开“Docker → 镜像”，选择本地镜像导入，导入 `cpx-latest.tar`；
 3. 确认镜像列表中出现 `cpx:latest`；
-4. 在文件管理器中创建 `data/codex`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
+4. 在文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
 5. 打开“Docker → Compose → 新建项目”；
 6. 项目存储位置选择该持久化目录；
 7. 导入或粘贴 `docker-compose.image.yml` 的内容并创建项目。
@@ -311,7 +311,7 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 6. 观察任务日志直到成功；
 7. 再测试修改文件和创建 Pull Request。
 
-任务状态和实时日志保存在进程内存中，重启容器后不会恢复。任务 Git 工作区保存在 `<CPX_DIR>/data/workspaces/<task-id>`。
+任务状态、轮次和实时日志保存在进程内存中，重启容器后不会恢复。完整 Git 仓库缓存保存在 `<CPX_DIR>/data/repositories/<owner>/<repo>`，任务 worktree 保存在 `<CPX_DIR>/data/workspaces/<task-id>`。
 
 ## 九、日常管理
 
@@ -363,7 +363,8 @@ NAS 部署推荐使用 GitHub HTTPS 仓库地址和页面中验证的 Token，�
 其中：
 
 - `data/agent.db` 是 SQLite 数据库；
-- `data/workspaces/` 保存任务克隆和未提交改动；
+- `data/repositories/` 保存按 GitHub owner/repository 分层的完整仓库缓存；
+- `data/workspaces/` 保存任务 worktree 和未提交改动；
 - `data/console-settings.json` 保存 Codex 配置和当前选择；
 - `data/codex/` 保存 Codex CLI 登录资料；
 - `data/mihomo/` 在启用可选 Mihomo Compose 时保存代理配置与运行数据；
@@ -390,25 +391,25 @@ Web 控制台在内网部署后即可使用，不需要公网入口。进入“�
 
 ## 十三、常见故障
 
-| 现象 | 图形界面检查与处理 |
-|---|---|
-| 找不到 Compose 功能 | 更新极空间 Docker 应用和系统版本，确认当前机型支持 Compose 项目 |
-| 源码构建无法下载依赖 | 查看项目构建日志，检查 NAS DNS、默认网关以及 Docker Hub、Debian、npm 和 GitHub 连通性；网络受限时改用离线镜像 |
-| 构建停在 `apt-get` | 设置构建变量 `APT_MIRROR=http://mirrors.aliyun.com` 后重新构建 |
-| 构建停在 `npm install` | 设置构建变量 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新构建；这只处理 npm 包 |
-| `exec format error` | 离线镜像架构与 NAS 不一致；在开发机按正确平台重新构建并导入 |
-| `better-sqlite3` 加载失败 | 检查镜像架构；源码方案应在 NAS 本机重新构建，离线方案应重新生成对应架构镜像 |
-| 容器不断重启 | 打开 `cpx` 容器日志，检查配置、目录挂载、目录权限和数据库错误 |
-| 健康状态为 `unhealthy` | 查看容器日志，并在浏览器访问 `http://<NAS-IP>:<端口>/health` |
-| NAS 页面可见但手机打不开 | 检查端口映射、防火墙、访客 Wi-Fi、AP 隔离、VLAN 和实际 NAS IP |
-| 端口已被占用 | 在 Compose 编辑器中修改映射左侧，例如 `13000:3000`，再重新创建项目 |
-| GitHub 页面验证失败 | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限 |
-| 私有仓库返回 403 | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址 |
-| Agent 显示未连接 | 在 Agent 设置中重新登录并测试，检查 `data/codex` 挂载是否存在 |
-| Agent 返回 401 | 检查 Compose 环境变量中是否存在无效占位值，并重新完成官方登录 |
-| `cpx-mihomo` 不断重启 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 可被 Mihomo 解析且 `mixed-port` 为 7890 |
-| Mihomo 正常但 Agent 请求超时 | 检查代理组选择、最终匹配规则、节点状态，以及 cpx 使用的代理地址是否为 `http://mihomo:7890` |
-| 更新后仍运行旧版本 | 在 Compose 项目详情确认执行了重新构建或重新创建，并检查当前容器镜像标识 |
-| 重建后登录丢失 | 检查 `data/codex` 是否仍挂载到原来的项目存储目录 |
+| 现象                         | 图形界面检查与处理                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 找不到 Compose 功能          | 更新极空间 Docker 应用和系统版本，确认当前机型支持 Compose 项目                                               |
+| 源码构建无法下载依赖         | 查看项目构建日志，检查 NAS DNS、默认网关以及 Docker Hub、Debian、npm 和 GitHub 连通性；网络受限时改用离线镜像 |
+| 构建停在 `apt-get`           | 设置构建变量 `APT_MIRROR=http://mirrors.aliyun.com` 后重新构建                                                |
+| 构建停在 `npm install`       | 设置构建变量 `NPM_REGISTRY=https://registry.npmmirror.com` 后重新构建；这只处理 npm 包                        |
+| `exec format error`          | 离线镜像架构与 NAS 不一致；在开发机按正确平台重新构建并导入                                                   |
+| `better-sqlite3` 加载失败    | 检查镜像架构；源码方案应在 NAS 本机重新构建，离线方案应重新生成对应架构镜像                                   |
+| 容器不断重启                 | 打开 `cpx` 容器日志，检查配置、目录挂载、目录权限和数据库错误                                                 |
+| 健康状态为 `unhealthy`       | 查看容器日志，并在浏览器访问 `http://<NAS-IP>:<端口>/health`                                                  |
+| NAS 页面可见但手机打不开     | 检查端口映射、防火墙、访客 Wi-Fi、AP 隔离、VLAN 和实际 NAS IP                                                 |
+| 端口已被占用                 | 在 Compose 编辑器中修改映射左侧，例如 `13000:3000`，再重新创建项目                                            |
+| GitHub 页面验证失败          | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限                                                   |
+| 私有仓库返回 403             | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址                                        |
+| Agent 显示未连接             | 在 Agent 设置中重新登录并测试，检查 `data/codex` 挂载是否存在                                                 |
+| Agent 返回 401               | 检查 Compose 环境变量中是否存在无效占位值，并重新完成官方登录                                                 |
+| `cpx-mihomo` 不断重启        | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 可被 Mihomo 解析且 `mixed-port` 为 7890                    |
+| Mihomo 正常但 Agent 请求超时 | 检查代理组选择、最终匹配规则、节点状态，以及 cpx 使用的代理地址是否为 `http://mihomo:7890`                    |
+| 更新后仍运行旧版本           | 在 Compose 项目详情确认执行了重新构建或重新创建，并检查当前容器镜像标识                                       |
+| 重建后登录丢失               | 检查 `data/codex` 是否仍挂载到原来的项目存储目录                                                              |
 
 需要反馈问题时，从极空间界面导出或复制 Compose 项目状态、容器健康状态和最近日志。分享前删除 Token、应用 Secret、仓库敏感内容和其他凭据。

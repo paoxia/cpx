@@ -279,9 +279,7 @@ describe('WebConsole', () => {
       {},
     );
     expect(response).toMatchObject({ status: 200, body: { success: false } });
-    expect(tested).toEqual([
-      { provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' },
-    ]);
+    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' }]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
@@ -335,7 +333,9 @@ describe('WebConsole', () => {
         codexConfig: new CodexConfigManager(join(TMP_DIR, 'codex')),
         getMessagingConfiguration: () => publicConfiguration,
         saveMessagingConfiguration: async (platform, config) => {
-          savedPlatforms.push(`${platform}:${config.enabled}:${config.clientId}:${config.clientSecret}`);
+          savedPlatforms.push(
+            `${platform}:${config.enabled}:${config.clientId}:${config.clientSecret}`,
+          );
           return publicConfiguration;
         },
       },
@@ -386,6 +386,13 @@ describe('WebConsole', () => {
       {},
     );
     expect(cancel).toMatchObject({ status: 409 });
+
+    const continuation = await server.handler('POST', '/api/console/task/continue')(
+      Buffer.from(JSON.stringify({ id: 'missing', prompt: '继续修改' })),
+      {},
+      {},
+    );
+    expect(continuation).toMatchObject({ status: 400, body: { error: '任务不存在' } });
   });
 
   it('应拒绝未知 Agent、空配置列表和重复配置 ID', async () => {
