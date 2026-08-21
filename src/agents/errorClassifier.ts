@@ -48,8 +48,8 @@ export class AgentProcessError extends Error {
     public readonly stderr: string,
     public readonly stdout: string,
   ) {
-    const tail = lastLine(stderr);
-    super(`${command} 退出码 ${exitCode ?? 'null'}${tail ? `: ${tail}` : ''}`);
+    const detail = diagnosticLine(stderr);
+    super(`${command} 退出码 ${exitCode ?? 'null'}${detail ? `: ${detail}` : ''}`);
     this.name = 'AgentProcessError';
   }
 }
@@ -74,6 +74,25 @@ export function classifyAgentError(error: Error): AgentErrorKind {
 
 export function lastLine(value: string): string {
   return value.trim().split(/\r?\n/).pop() ?? value.trim();
+}
+
+/** 优先展示 CLI 的真实错误，避免只把末尾的 `try --help` 提示暴露给用户。 */
+export function diagnosticLine(value: string): string {
+  const lines = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return '';
+  return (
+    lines.find((line) => /^error(?:\s|:|\[)/i.test(line)) ??
+    lines.find(
+      (line) =>
+        !/^for more information, try/i.test(line) &&
+        !/^usage:/i.test(line) &&
+        !/^tip:/i.test(line),
+    ) ??
+    lines[lines.length - 1]
+  );
 }
 
 /** 错误种类中文标签,用于日志输出。 */

@@ -17,7 +17,7 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过�
                                               │
                  ┌──────────────────┬─────────┼───────────┬──────────────┐
                  ▼                  ▼         ▼           ▼
-          GitHubService      AgentTaskManager SkillManager MCPManager
+          GitHubService      MessagingCoordinator   AgentTaskManager   Skill / MCP
                  │                  │         │           │
                  └──────────────────┴─────────┴───────────┘
                                               │
@@ -30,10 +30,12 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过�
 ```text
 浏览器 → WebConsole API ─────────────┐
                                     ├→ AgentTaskManager → 完整仓库缓存 → Git worktree → Codex / resume
-聊天 → CommandRouter → WebConsole ──┘                                      └→ Git + gh
-                                                                        │ cpx_platform MCP
-                                                                        ▼
-原会话 ← MessagingIntegration ← 任务专属 Token 校验的 HTTP 路由
+聊天 → CommandRouter → 协调 Codex ──cpx_platform MCP──┐
+                         │                            │
+                         └→ WebConsole ──────────────┴→ AgentTaskManager → worktree Codex → Git + gh
+                                                       │ cpx_platform MCP
+                                                       ▼
+原会话 ← MessagingIntegration ← 会话/任务专属 Token 校验的 HTTP 路由
 
 浏览器 → WebConsole API → AgentAuthManager → Codex 官方 CLI 登录与状态检查
 浏览器 → WebConsole API → CodexModelCatalog → `codex debug models` → `/model` 同源目录
@@ -43,29 +45,29 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用。它通过�
 
 ## 核心组件
 
-| 目录                  | 职责                                                                       |
-| --------------------- | -------------------------------------------------------------------------- |
-| `src/core/`           | 生命周期、HTTP 服务、命令解析和路由、结果格式化、事件分发                  |
-| `src/config/`         | 合并默认值、YAML 与环境变量，并用 Zod 校验；监听 YAML 热更新               |
-| `src/integrations/`   | 钉钉 Stream 与飞书 WebSocket 长连接、会话路由和结果推送                    |
-| `src/github/`         | GitHub REST API、文件读写、功能分支和 Pull Request 流程                    |
-| `src/skills/`         | Skill 安装记录、动态加载、执行超时和受限上下文注入                         |
-| `src/mcp/`            | JSON-RPC 2.0 与 stdio、WebSocket、HTTP 三种 MCP 传输                       |
-| `src/agents/`         | 同步 GitHub 仓库缓存、创建 worktree、持续运行 Coding Agent 并按授权更新 PR |
-| `src/web/`、`public/` | 控制台静态资源、模型设置和任务 HTTP API                                    |
-| `src/permissions/`    | 命令黑名单、Git 分支规则、危险操作确认和审计记录                           |
-| `src/storage/`        | SQLite 连接与幂等建表迁移                                                  |
-| `src/utils/`          | 日志、HTTP、重试和错误类型                                                 |
+| 目录                  | 职责                                                                                |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `src/core/`           | 生命周期、HTTP 服务、命令解析和路由、结果格式化、事件分发                           |
+| `src/config/`         | 合并默认值、YAML 与环境变量，并用 Zod 校验；监听 YAML 热更新                        |
+| `src/integrations/`   | 钉钉 Stream 与飞书 WebSocket 长连接、会话路由和结果推送                             |
+| `src/github/`         | GitHub REST API、文件读写、功能分支和 Pull Request 流程                             |
+| `src/skills/`         | Skill 安装记录、动态加载、执行超时和受限上下文注入                                  |
+| `src/mcp/`            | JSON-RPC 2.0 与 stdio、WebSocket、HTTP 三种 MCP 传输                                |
+| `src/agents/`         | 运行消息协调 Codex；同步仓库缓存、创建 worktree、持续运行任务 Codex 并按授权更新 PR |
+| `src/web/`、`public/` | 控制台静态资源、模型设置和任务 HTTP API                                             |
+| `src/permissions/`    | 命令黑名单、Git 分支规则、危险操作确认和审计记录                                    |
+| `src/storage/`        | SQLite 连接与幂等建表迁移                                                           |
+| `src/utils/`          | 日志、HTTP、重试和错误类型                                                          |
 
 ## 请求流程
 
 1. `MessagingIntegrationManager` 主动建立钉钉 Stream 和飞书 WebSocket 连接；`HttpServer` 的 `/command` 仅用于本地测试与集成调试。
-2. `CommandParser` 去除平台前缀，将中英文文本转换为统一的 `Command`。飞书和钉钉未命中固定命令的文本转为 `agent_chat`；当会话已有任务时，`AgentSystem` 还会把除任务生命周期与确认命令外的已识别文本改为 `agent_chat`，避免固定命令抢走 Codex 上下文。
+2. `CommandParser` 去除平台前缀，将飞书和钉钉普通文本转换为 `agent_chat`；仅 `/new`、`/tasks`、`/status`、`/stop`、`/help` 和确认流程保留确定性入口。旧文本命令继续兼容；当会话已有任务时，`AgentSystem` 会把非生命周期文本改回 `agent_chat`，避免旧命令抢走 Codex 上下文。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
-4. 对应处理器调用 GitHub、Coding Agent、Skill 或 MCP 服务。聊天开发命令先通过 GitHub API 验证仓库、基础分支和新分支，再创建异步任务。
-5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。Coding Agent 进入完成、失败或取消状态后，会通过同一平台的结果推送器再次发送终态和 PR 链接。消息平台任务还会向 Codex 注入一个 stdio `cpx_platform` MCP 服务；它使用任务专属 Bearer Token 访问 cpx 内部 HTTP 路由，只能读取当前任务范围或向已绑定的原会话发送文本。
+4. 当前会话没有任务时，`MessagingCoordinator` 在独立非 Git 目录中用只读沙箱启动或恢复 Codex。协调 Codex 只能通过 `cpx_platform` 查询仓库/分支和管理当前用户任务；仓库明确后由工具创建异步开发任务。已有任务时，文本直接恢复 worktree 中的任务 Codex。
+5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
-控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。创建任务时，控制台或聊天命令可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录 Codex JSONL 的 `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发命令默认创建 PR，后续轮次向同一分支和 PR 推送。聊天任务按来源会话与用户记录，飞书与钉钉任务内的非控制文本继续最近任务。任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
+控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，但强制使用 `--skip-git-repo-check` 与只读沙箱。创建任务时，控制台或协调工具可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
 
 GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新；任务页通过分页 `/repos/{owner}/{repo}/branches` 读取分支。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
 
@@ -83,7 +85,7 @@ SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations
 - 新聊天平台：实现消息校验、解析和结果推送，然后在 `AgentSystem` 中注册路由。
 - 新 MCP 传输：实现 `Transport` 接口并在 `MCPManager` 中创建实例。
 - 新 Skill：提供带 `skill.permissions` 的 npm 包并导出 `execute(ctx)`。
-- 新 Coding Agent：在 `AgentTaskManager.runAgent` 中增加经过输入约束的非交互 CLI 适配，并保持发布步骤由管理器统一执行。
+- 新 Coding Agent：在 `AgentTaskManager.runAgent` 中增加经过输入约束的非交互 CLI 适配。Agent 可在受控 GitHub 认证和 pre-push 主分支保护下推送任务分支；Pull Request 仍由管理器统一创建或更新。
 
 ## 当前边界
 

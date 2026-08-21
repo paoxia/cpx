@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { mkdirSync, rmSync } from 'fs';
+import { mkdirSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,6 +25,7 @@ interface FakeProcess extends EventEmitter {
 }
 
 let gitStatusOutput = '';
+let gitAheadCount = '0\n';
 let holdAgent = false;
 let agentInput = '';
 
@@ -66,6 +67,7 @@ describe('AgentTaskManager', () => {
   beforeEach(() => {
     mkdirSync(TMP_DIR, { recursive: true });
     gitStatusOutput = '';
+    gitAheadCount = '0\n';
     holdAgent = false;
     agentInput = '';
     spawnMock.mockReset();
@@ -80,6 +82,9 @@ describe('AgentTaskManager', () => {
       }
       if (command === 'git' && args[0] === 'status') {
         return fakeProcess(gitStatusOutput);
+      }
+      if (command === 'git' && args[0] === 'rev-list') {
+        return fakeProcess(gitAheadCount);
       }
       if (command === 'gh') {
         return fakeProcess('https://github.com/acme/repo/pull/42\n');
@@ -135,6 +140,7 @@ describe('AgentTaskManager', () => {
     expect(task.turns[0].response).toBe('done');
     expect(task.logs.some((entry) => entry.message === 'done')).toBe(true);
     expect(agentInput).toContain('用户任务：修复构建');
+    expect(agentInput).toContain('允许提交并推送非主分支');
     const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
     expect(codexCall?.[1]).not.toContain('--skip-git-repo-check');
     expect(spawnMock).toHaveBeenCalledWith(
@@ -169,9 +175,11 @@ describe('AgentTaskManager', () => {
         '--config',
         expect.stringContaining('mcp_servers.cpx_platform.command='),
         '--config',
-        'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+        expect.stringContaining('mcp_servers.cpx_platform.enabled_tools='),
       ]),
     );
+    expect(JSON.stringify(codexCall?.[1])).toContain('github_list_repositories');
+    expect(JSON.stringify(codexCall?.[1])).toContain('task_create');
     expect(JSON.stringify(codexCall?.[1])).not.toContain('task-scoped-platform-token');
     expect(codexCall?.[2]).toEqual(
       expect.objectContaining({
@@ -183,6 +191,41 @@ describe('AgentTaskManager', () => {
       }),
     );
     expect(agentInput).toContain('cpx_platform MCP 工具');
+    await manager.stop();
+  });
+
+  it('应允许 Agent 认证推送任务分支并通过 hook 拦截主分支', async () => {
+    const manager = createManager();
+    manager.setSecrets({ githubToken: 'github_pat_agent-push' });
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      baseBranch: 'main',
+      taskBranch: 'fromfeishu',
+      prompt: '提交并推送当前修改',
+    });
+
+    await manager.waitForTerminal(created.id);
+    const codexCall = spawnMock.mock.calls.find(([command]) => command === 'codex');
+    expect(codexCall?.[2]).toEqual(
+      expect.objectContaining({
+        env: expect.objectContaining({
+          CPX_GITHUB_TOKEN: 'github_pat_agent-push',
+          GIT_ASKPASS: expect.stringContaining('.github-askpass'),
+          GIT_CONFIG_COUNT: '2',
+          GIT_CONFIG_KEY_1: 'core.hooksPath',
+          GIT_CONFIG_VALUE_1: expect.stringContaining('.git-hooks'),
+        }),
+      }),
+    );
+    expect(codexCall?.[2].env.GH_TOKEN).toBeUndefined();
+    const hook = readFileSync(
+      join(TMP_DIR, 'workspaces', '.git-hooks', created.id, 'pre-push'),
+      'utf8',
+    );
+    expect(hook).toContain('refs/heads/main');
+    expect(hook).not.toContain('refs/heads/fromfeishu)');
+    expect(agentInput).toContain('当前任务分支为 fromfeishu');
     await manager.stop();
   });
 
@@ -292,6 +335,7 @@ describe('AgentTaskManager', () => {
 
   it('有改动且获授权时应提交、推送并创建 Pull Request', async () => {
     gitStatusOutput = ' M README.md\n';
+    gitAheadCount = '1\n';
     const manager = createManager();
     manager.setSecrets({ githubToken: 'github_pat_task-secret' });
     const created = manager.create({
@@ -369,6 +413,38 @@ describe('AgentTaskManager', () => {
     );
     expect(JSON.stringify(manager.get(created.id)?.logs)).not.toContain('github_pat_task-secret');
     expect(manager.get(created.id)?.agentBranch).toBe('feature/update-docs');
+    await manager.stop();
+  });
+
+  it('Agent 已自行提交并保持工作区干净时仍应推送并创建 Pull Request', async () => {
+    gitStatusOutput = '';
+    gitAheadCount = '1\n';
+    const manager = createManager();
+    manager.setSecrets({ githubToken: 'github_pat_agent-commit' });
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      baseBranch: 'main',
+      taskBranch: 'fromfeishu',
+      prompt: '提交任务分支',
+      createPullRequest: true,
+    });
+
+    await manager.waitForTerminal(created.id);
+    expect(manager.get(created.id)?.pullRequestUrl).toBe('https://github.com/acme/repo/pull/42');
+    expect(spawnMock).not.toHaveBeenCalledWith('git', ['add', '-A'], expect.anything());
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      ['push', '-u', 'origin', 'fromfeishu'],
+      expect.objectContaining({
+        env: expect.objectContaining({ CPX_GITHUB_TOKEN: 'github_pat_agent-commit' }),
+      }),
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'create', '--fill', '--head', 'fromfeishu', '--base', 'main'],
+      expect.anything(),
+    );
     await manager.stop();
   });
 

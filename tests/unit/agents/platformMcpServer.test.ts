@@ -9,7 +9,7 @@ const ENV = {
 };
 
 describe('cpx platform MCP server', () => {
-  it('应公布任务范围内的平台工具', async () => {
+  it('应公布平台、GitHub 与任务协调工具', async () => {
     const initialized = await handlePlatformMcpRequest({
       jsonrpc: '2.0',
       id: 1,
@@ -28,9 +28,22 @@ describe('cpx platform MCP server', () => {
       id: 2,
       method: 'tools/list',
     });
-    expect(listed?.result).toMatchObject({
-      tools: [{ name: 'platform_get_context' }, { name: 'platform_send_message' }],
-    });
+    const names = (listed?.result as { tools: Array<{ name: string }> }).tools.map(
+      (tool) => tool.name,
+    );
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'platform_get_context',
+        'platform_send_message',
+        'github_list_repositories',
+        'github_list_branches',
+        'task_create',
+        'task_list',
+        'task_status',
+        'task_continue',
+        'task_cancel',
+      ]),
+    );
   });
 
   it('应使用任务 Token 调用 cpx 内部端点', async () => {
@@ -98,6 +111,25 @@ describe('cpx platform MCP server', () => {
       fetchMock,
     );
     expect(unbound?.result).toMatchObject({ isError: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('应校验 Codex 提交的仓库和任务参数', async () => {
+    const fetchMock = vi.fn();
+    const invalidRepository = await handlePlatformMcpRequest(
+      {
+        jsonrpc: '2.0',
+        id: 6,
+        method: 'tools/call',
+        params: {
+          name: 'task_create',
+          arguments: { repository: '../secret', prompt: '修复问题' },
+        },
+      },
+      ENV,
+      fetchMock,
+    );
+    expect(invalidRepository?.error?.code).toBe(-32602);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

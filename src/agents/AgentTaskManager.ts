@@ -134,6 +134,7 @@ export interface AgentPlatformToolContext {
 const MAX_LOG_ENTRIES = 800;
 const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
+const DEFAULT_PROTECTED_BRANCHES = ['main', 'master', 'production'] as const;
 
 /**
  * 为 Codex 准备隔离工作区并管理非交互任务生命周期。
@@ -547,7 +548,7 @@ export class AgentTaskManager {
   ): Promise<void> {
     const provider = configuration.provider;
     const adapter = AGENT_ADAPTERS[provider];
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env = this.agentGitHubEnvironment(task);
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
     const legacyApiKey = this.secrets.openaiApiKey;
     adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
@@ -572,7 +573,7 @@ export class AgentTaskManager {
       adapter.command,
       args,
       workspace,
-      buildPrompt(task.prompt, Boolean(platformTools)),
+      buildPrompt(task, Boolean(platformTools)),
       true,
       env,
       adapter.useShellOnWindows,
@@ -595,7 +596,7 @@ export class AgentTaskManager {
       `mcp_servers.cpx_platform.command=${JSON.stringify(server.command)}`,
       `mcp_servers.cpx_platform.args=${JSON.stringify(server.args)}`,
       'mcp_servers.cpx_platform.env_vars=["CPX_PLATFORM_TOOL_URL","CPX_PLATFORM_TOOL_TOKEN","CPX_PLATFORM_TOOL_TASK_ID","CPX_PLATFORM_NAME"]',
-      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message","github_list_repositories","github_list_branches","task_create","task_list","task_status","task_continue","task_cancel"]',
       'mcp_servers.cpx_platform.default_tools_approval_mode="approve"',
       'mcp_servers.cpx_platform.required=true',
     ];
@@ -613,27 +614,40 @@ export class AgentTaskManager {
       undefined,
       false,
     );
-    if (!status.stdout.trim()) {
+    if (status.stdout.trim()) {
+      await this.runProcess(task, 'git', ['add', '-A'], workspace);
+      const title = buildCommitTitle(task.prompt);
+      await this.runProcess(
+        task,
+        'git',
+        [
+          '-c',
+          'user.name=cpx-agent',
+          '-c',
+          'user.email=cpx-agent@users.noreply.github.com',
+          'commit',
+          '-m',
+          title,
+        ],
+        workspace,
+      );
+    }
+
+    const baseRef = task.baseBranch
+      ? `refs/remotes/origin/${task.baseBranch}`
+      : 'refs/remotes/origin/HEAD';
+    const ahead = await this.runProcess(
+      task,
+      'git',
+      ['rev-list', '--count', `${baseRef}..HEAD`],
+      workspace,
+    );
+    if (Number.parseInt(ahead.stdout.trim(), 10) <= 0) {
       this.addLog(task, 'system', 'Agent 没有产生文件改动，无需创建 Pull Request。');
       return;
     }
 
-    await this.runProcess(task, 'git', ['add', '-A'], workspace);
-    const title = buildCommitTitle(task.prompt);
-    await this.runProcess(
-      task,
-      'git',
-      [
-        '-c',
-        'user.name=cpx-agent',
-        '-c',
-        'user.email=cpx-agent@users.noreply.github.com',
-        'commit',
-        '-m',
-        title,
-      ],
-      workspace,
-    );
+    this.assertPushBranchAllowed(task, task.agentBranch!);
     await this.runGitHubProcess(
       task,
       'git',
@@ -678,6 +692,50 @@ export class AgentTaskManager {
       GIT_CONFIG_VALUE_0: '',
       GIT_TERMINAL_PROMPT: '0',
     };
+  }
+
+  /** 给 Coding Agent 提供 Git push 认证，同时用 pre-push hook 拦截主分支。 */
+  private agentGitHubEnvironment(task: AgentTask): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.githubEnvironment() };
+    // Coding Agent 只需要 Git 的 askpass 认证，不直接开放 gh 的隐式认证入口。
+    delete env.GH_TOKEN;
+    appendGitConfig(env, 'core.hooksPath', this.ensurePushGuard(task));
+    return env;
+  }
+
+  private ensurePushGuard(task: AgentTask): string {
+    const hooksPath = join(this.workspaceRoot, '.git-hooks', task.id);
+    const hookPath = join(hooksPath, 'pre-push');
+    mkdirSync(hooksPath, { recursive: true, mode: 0o700 });
+    const protectedRefs = this.protectedBranches(task)
+      .map((branch) => `refs/heads/${branch}`)
+      .join('|');
+    const content = [
+      '#!/bin/sh',
+      'while read local_ref local_oid remote_ref remote_oid; do',
+      '  case "$remote_ref" in',
+      `    ${protectedRefs})`,
+      '      echo "cpx: 禁止直接推送到主分支 $remote_ref" >&2',
+      '      exit 1',
+      '      ;;',
+      '  esac',
+      'done',
+      'exit 0',
+      '',
+    ].join('\n');
+    writeFileSync(hookPath, content, { encoding: 'utf8', mode: 0o700 });
+    if (process.platform !== 'win32') chmodSync(hookPath, 0o700);
+    return hooksPath;
+  }
+
+  private protectedBranches(task: AgentTask): string[] {
+    return [...new Set([...DEFAULT_PROTECTED_BRANCHES, task.baseBranch].filter(Boolean))] as string[];
+  }
+
+  private assertPushBranchAllowed(task: AgentTask, branch: string): void {
+    if (this.protectedBranches(task).includes(branch)) {
+      throw new Error(`禁止直接推送到主分支 ${branch}`);
+    }
   }
 
   /**
@@ -965,21 +1023,37 @@ function buildCommitTitle(prompt: string): string {
   return `feat: ${summary || 'complete agent task'}`;
 }
 
-function buildPrompt(taskPrompt: string, hasPlatformTools = false): string {
+function buildPrompt(task: AgentTask, hasPlatformTools = false): string {
+  const protectedBranches = [
+    ...new Set([...DEFAULT_PROTECTED_BRANCHES, task.baseBranch].filter(Boolean)),
+  ].join('、');
   const instructions = [
     '你正在由 cpx 开发控制台执行任务。',
     '请只在当前 Git 仓库中工作，先理解现有代码，再实现用户目标并运行相关验证。',
-    '不要执行 git push、创建 PR 或修改仓库外文件；发布步骤由 cpx 在用户授权后处理。',
+    `允许提交并推送非主分支，当前任务分支为 ${task.agentBranch}；严禁向 ${protectedBranches} 直接 push、force push，严禁绕过 pre-push hook。`,
+    '不要自行创建 PR 或修改仓库外文件；需要 PR 时由 cpx 在任务完成后创建或更新。',
   ];
   if (hasPlatformTools) {
     instructions.push(
       '这个任务来自消息平台。任务建立后的自然语言要求都由你在当前会话中理解和执行。',
-      '你可以使用 cpx_platform MCP 工具读取当前平台上下文，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
+      '你可以使用 cpx_platform MCP 工具读取平台上下文、查询 GitHub 或管理当前用户的 cpx 任务，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
       'cpx 会自动回传你的最终回复，因此不要用平台工具重复发送最终总结。',
     );
   }
-  instructions.push('完成后总结改动、验证结果和仍存在的风险。', '', `用户任务：${taskPrompt}`);
+  instructions.push(
+    '完成后总结改动、验证结果和仍存在的风险。',
+    '',
+    `用户任务：${task.prompt}`,
+  );
   return instructions.join('\n');
+}
+
+function appendGitConfig(env: NodeJS.ProcessEnv, key: string, value: string): void {
+  const parsed = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10);
+  const index = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  env[`GIT_CONFIG_KEY_${index}`] = key;
+  env[`GIT_CONFIG_VALUE_${index}`] = value;
+  env.GIT_CONFIG_COUNT = String(index + 1);
 }
 
 function platformMcpServerCommand(): { command: string; args: string[] } {

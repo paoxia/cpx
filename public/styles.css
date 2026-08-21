@@ -915,15 +915,15 @@ select:focus-visible {
 
 .agent-profile-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) minmax(360px, 1.15fr);
-  gap: 24px;
-  padding: 0 28px 28px;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: clamp(24px, 3vw, 42px);
 }
 
 .agent-profile-list {
   display: grid;
   align-content: start;
   gap: 10px;
+  min-width: 0;
 }
 
 .agent-profile-item {
@@ -932,7 +932,8 @@ select:focus-visible {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px;
+  min-height: 82px;
+  padding: 18px;
   border: 1px solid var(--border);
   border-radius: 14px;
   color: var(--text);
@@ -950,6 +951,14 @@ select:focus-visible {
 .agent-profile-item span {
   display: grid;
   gap: 5px;
+  min-width: 0;
+}
+
+.agent-profile-item strong,
+.agent-profile-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-profile-item small {
@@ -966,6 +975,62 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+#profile-form {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: start;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 100% 0, rgba(215, 255, 95, 0.045), transparent 20rem),
+    rgba(255, 255, 255, 0.018);
+}
+
+#profile-form .field {
+  min-width: 0;
+}
+
+.profile-editor-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.profile-editor-actions .save-button {
+  width: auto;
+  min-width: 180px;
+}
+
+.profile-editor-actions .profile-delete-button {
+  margin-right: auto;
+  color: var(--danger);
+  white-space: nowrap;
+}
+
+.profile-editor-actions .profile-delete-button:hover:not(:disabled) {
+  color: #ff9d91;
+  border-color: rgba(255, 128, 111, 0.35);
+}
+
+.profile-editor-actions .profile-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.model-config-toolbar .profile-form-actions .secondary-button {
+  white-space: nowrap;
+}
+
+@media (max-width: 1320px) {
+  .agent-profile-layout {
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  }
+
+  #profile-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 900px) {
@@ -2233,6 +2298,21 @@ select:focus-visible {
 
   .codex-config-grid {
     grid-template-columns: 1fr;
+  }
+
+  #profile-form {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-editor-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .profile-editor-actions .save-button,
+  .profile-editor-actions .profile-delete-button {
+    width: 100%;
+    margin-right: 0;
   }
 }
 
