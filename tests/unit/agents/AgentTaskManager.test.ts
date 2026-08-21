@@ -132,6 +132,7 @@ describe('AgentTaskManager', () => {
     const task = manager.get(created.id)!;
     expect(task.agentBranch).toMatch(/^cpx\/task-/);
     expect(task.lastAgentResponse).toBe('done');
+    expect(task.turns[0].response).toBe('done');
     expect(task.logs.some((entry) => entry.message === 'done')).toBe(true);
     expect(agentInput).toContain('用户任务：修复构建');
     expect(spawnMock).toHaveBeenCalledWith(
@@ -236,6 +237,7 @@ describe('AgentTaskManager', () => {
     expect(second.status).toBe('completed');
     expect(second.workspace).toBe(first.workspace);
     expect(second.turns.map((turn) => turn.prompt)).toEqual(['先完成第一轮', '继续补充测试']);
+    expect(second.turns.map((turn) => turn.response)).toEqual(['done', 'done']);
     expect(
       spawnMock.mock.calls.filter(([command, args]) => command === 'git' && args[0] === 'clone'),
     ).toHaveLength(cloneCalls);

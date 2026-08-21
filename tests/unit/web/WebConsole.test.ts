@@ -68,6 +68,10 @@ describe('WebConsole', () => {
     expect(html).toContain('id="repository-picker"');
     expect(html).toContain('id="branch-picker"');
     expect(html).toContain('id="task-branch"');
+    expect(html).toContain('id="new-task-button"');
+    expect(html).toContain('class="thread-composer new-task-mode"');
+    expect(html).not.toContain('id="create-pr"');
+    expect(html).not.toContain('完成后创建 Pull Request');
     expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');

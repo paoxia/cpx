@@ -28,7 +28,7 @@ cpx（Agent System）是面向开发者和小型技术团队的自托管自动�
 
 ### 委托开发任务
 
-用户可在本地 Web 控制台或钉钉、飞书中指定 GitHub 仓库、分支和任务说明。系统从按 owner/repository 分层的完整仓库缓存创建独立 worktree，并允许在同一 Codex 会话中追加多轮 prompt；控制台仅在用户显式选择后创建 Pull Request，聊天开发任务则默认创建 Pull Request 并异步回推结果。
+用户可在本地 Web 控制台或钉钉、飞书中指定 GitHub 仓库、分支和任务说明。系统从按 owner/repository 分层的完整仓库缓存创建独立 worktree，并允许在同一 Codex 会话中追加多轮 prompt。Web 控制台采用任务列表与连续会话工作台，不提供 Pull Request 发布入口；聊天开发任务默认创建 Pull Request 并异步回推结果。
 
 ## 产品原则
 

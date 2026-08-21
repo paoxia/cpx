@@ -75,6 +75,8 @@ export interface AgentAttempt {
 export interface AgentTaskTurn {
   id: string;
   prompt: string;
+  /** 当前轮次 Coding Agent 的最终回复，用于会话式界面回放。 */
+  response?: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   createdAt: number;
   startedAt?: number;
@@ -715,7 +717,11 @@ export class AgentTaskManager {
             const threadId = extractAgentThreadId(line);
             if (threadId) task.threadId = threadId;
             const response = extractAgentResponse(line);
-            if (response) task.lastAgentResponse = response.slice(0, 16_384);
+            if (response) {
+              const finalResponse = response.slice(0, 16_384);
+              task.lastAgentResponse = finalResponse;
+              this.currentTurn(task).response = finalResponse;
+            }
           }
           const message = captureAgentJson ? formatAgentEvent(line) : line;
           if (message) {

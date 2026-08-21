@@ -2,6 +2,7 @@ const state = {
   settings: null,
   tasks: [],
   selectedTaskId: null,
+  creatingTask: false,
   polling: false,
   activeView: 'tasks',
   githubStatus: null,
@@ -30,8 +31,12 @@ const elements = {
   branchHint: document.querySelector('#branch-hint'),
   prompt: document.querySelector('#prompt'),
   promptCount: document.querySelector('#prompt-count'),
-  createPr: document.querySelector('#create-pr'),
   launchButton: document.querySelector('#launch-button'),
+  newTaskButton: document.querySelector('#new-task-button'),
+  newTaskToolbar: document.querySelector('#new-task-toolbar'),
+  newTaskContext: document.querySelector('#new-task-context'),
+  taskSuggestions: document.querySelector('#task-suggestions'),
+  threadHeading: document.querySelector('#thread-heading'),
   taskList: document.querySelector('#task-list'),
   taskCount: document.querySelector('#task-count'),
   taskDetail: document.querySelector('#task-detail'),
@@ -115,7 +120,9 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 elements.prompt.addEventListener('input', updatePromptCount);
 elements.repositoryPicker.addEventListener('change', handleTaskRepositorySelection);
 elements.branchPicker.addEventListener('change', handleTaskBranchSelection);
-elements.taskForm.addEventListener('submit', createTask);
+elements.taskForm.addEventListener('submit', submitTask);
+elements.newTaskButton.addEventListener('click', startNewTask);
+elements.newTaskToolbar.addEventListener('click', startNewTask);
 elements.feishuForm.addEventListener('submit', (event) => saveIntegration(event, 'feishu'));
 elements.dingtalkForm.addEventListener('submit', (event) => saveIntegration(event, 'dingtalk'));
 elements.codexDeviceLogin.addEventListener('click', startCodexDeviceLogin);
@@ -303,9 +310,16 @@ function handleTaskRepositorySelection() {
 }
 
 function selectTaskRepository(fullName, defaultBranch = '') {
+  state.creatingTask = true;
+  state.selectedTaskId = null;
   elements.repository.value = fullName;
   state.branchDefault = defaultBranch;
-  renderTaskRepositoryPicker();
+  elements.prompt.value = '';
+  elements.taskBranch.value = '';
+  enableNewTaskFields();
+  updatePromptCount();
+  renderTaskList();
+  renderTaskDetail();
 }
 
 function resetTaskBranchPicker() {
@@ -983,8 +997,9 @@ async function refreshTasks() {
   try {
     const result = await api('/api/console/tasks');
     state.tasks = result.tasks || [];
-    if (!state.selectedTaskId && state.tasks.length) {
+    if (!state.selectedTaskId && !state.creatingTask && state.tasks.length) {
       state.selectedTaskId = state.tasks[0].id;
+      state.creatingTask = false;
     }
     renderTaskList();
     renderTaskDetail();
@@ -995,8 +1010,17 @@ async function refreshTasks() {
   }
 }
 
-async function createTask(event) {
+async function submitTask(event) {
   event.preventDefault();
+  const task = state.tasks.find((item) => item.id === state.selectedTaskId);
+  if (!state.creatingTask && task) {
+    await continueSelectedTask(task);
+    return;
+  }
+  await createTask();
+}
+
+async function createTask() {
   elements.launchButton.disabled = true;
   elements.launchButton.querySelector('span').textContent = '正在启动…';
   try {
@@ -1008,20 +1032,60 @@ async function createTask(event) {
         baseBranch: selectedTaskBaseBranch(),
         taskBranch: elements.taskBranch.value || undefined,
         prompt: elements.prompt.value,
-        createPullRequest: elements.createPr.checked,
       }),
     });
     state.selectedTaskId = task.id;
+    state.creatingTask = false;
     state.tasks.unshift(task);
+    elements.prompt.value = '';
+    updatePromptCount();
     renderTaskList();
     renderTaskDetail();
     showToast('任务已启动，Agent 正在准备工作区。');
   } catch (error) {
     showToast(error.message, true);
   } finally {
-    elements.launchButton.disabled = false;
-    elements.launchButton.querySelector('span').textContent = '启动任务';
+    if (state.creatingTask) {
+      elements.launchButton.disabled = false;
+      elements.launchButton.querySelector('span').textContent = '创建任务';
+    }
   }
+}
+
+async function continueSelectedTask(task) {
+  const prompt = elements.prompt.value.trim();
+  if (!prompt) return;
+  elements.launchButton.disabled = true;
+  elements.launchButton.querySelector('span').textContent = '发送中…';
+  try {
+    const continued = await api('/api/console/task/continue', {
+      method: 'POST',
+      body: JSON.stringify({ id: task.id, prompt, useFallback: false }),
+    });
+    const index = state.tasks.findIndex((item) => item.id === continued.id);
+    if (index >= 0) state.tasks[index] = continued;
+    elements.prompt.value = '';
+    updatePromptCount();
+    renderTaskList();
+    renderTaskDetail();
+    showToast('已发送，Agent 将继续使用当前工作区。');
+  } catch (error) {
+    elements.launchButton.disabled = false;
+    elements.launchButton.querySelector('span').textContent = '发送';
+    showToast(error.message, true);
+  }
+}
+
+function startNewTask() {
+  state.creatingTask = true;
+  state.selectedTaskId = null;
+  elements.prompt.value = '';
+  elements.taskBranch.value = '';
+  enableNewTaskFields();
+  updatePromptCount();
+  renderTaskList();
+  renderTaskDetail();
+  window.requestAnimationFrame(() => elements.prompt.focus());
 }
 
 function renderTaskList() {
@@ -1034,14 +1098,17 @@ function renderTaskList() {
     .map(
       (task) => `
         <button class="task-list-item ${task.id === state.selectedTaskId ? 'active' : ''}" data-task-id="${task.id}" type="button">
-          <strong>${escapeHtml(shortRepository(task.repository))}</strong>
-          <span><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))} · ${escapeHtml(task.provider)}</span>
+          <strong>${escapeHtml(task.prompt)}</strong>
+          <span><i class="mini-dot ${task.status}"></i>${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(statusLabel(task.status))}</span>
         </button>`,
     )
     .join('');
   elements.taskList.querySelectorAll('[data-task-id]').forEach((button) => {
     button.addEventListener('click', () => {
       state.selectedTaskId = button.dataset.taskId;
+      state.creatingTask = false;
+      elements.prompt.value = '';
+      updatePromptCount();
       renderTaskList();
       renderTaskDetail();
     });
@@ -1050,55 +1117,65 @@ function renderTaskList() {
 
 function renderTaskDetail() {
   const task = state.tasks.find((item) => item.id === state.selectedTaskId);
-  if (!task) {
-    elements.taskDetail.className = 'task-detail empty-detail';
+  if (state.creatingTask || !task) {
+    state.creatingTask = true;
+    elements.threadHeading.innerHTML = `
+      <p class="eyebrow">NEW AGENT TASK</p>
+      <h1>新建任务</h1>
+      <p>选择仓库并描述你想完成的工作</p>`;
+    elements.taskDetail.className = 'task-detail thread-empty';
     elements.taskDetail.innerHTML = `
-      <div class="orb" aria-hidden="true"><i></i></div>
-      <h3>等待第一个任务</h3>
-      <p>提交任务后，这里会实时展示 Agent 的执行阶段、日志和 Pull Request。</p>`;
+      <div class="thread-empty-mark" aria-hidden="true">⌁</div>
+      <h2>从一个开发任务开始</h2>
+      <p>每个任务拥有独立的 Git worktree。完成第一轮后，可以在这里持续追加要求和调整代码。</p>`;
+    elements.taskForm.classList.add('new-task-mode');
+    elements.newTaskContext.hidden = false;
+    elements.taskSuggestions.hidden = false;
+    elements.prompt.disabled = false;
+    elements.prompt.placeholder = '描述要完成的工作…';
+    elements.launchButton.disabled = false;
+    elements.launchButton.querySelector('span').textContent = '创建任务';
     return;
   }
 
   const active = ['queued', 'preparing', 'running', 'publishing'].includes(task.status);
   const canContinue = !active && task.workspace && task.agentBranch;
-  elements.taskDetail.className = 'task-detail';
-  elements.taskDetail.innerHTML = `
-    <div class="detail-summary">
-      <div class="detail-status">
-        <span class="status-badge"><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))}</span>
-        ${active ? '<button class="cancel-button" type="button">取消任务</button>' : ''}
-      </div>
-      <h3>${escapeHtml(task.prompt)}</h3>
-      <div class="detail-meta">${escapeHtml(task.provider.toUpperCase())}${task.model ? ` / ${escapeHtml(task.model)}` : ''}<br />${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(formatTime(task.createdAt))}</div>
+  elements.threadHeading.innerHTML = `
+    <div class="thread-title-row">
+      <span class="status-badge"><i class="mini-dot ${task.status}"></i>${escapeHtml(statusLabel(task.status))}</span>
+      ${active ? '<button class="cancel-button" type="button">停止</button>' : ''}
     </div>
-    ${renderAttempts(task.attempts)}
-    <pre class="task-output" aria-label="任务输出"></pre>
-    ${
-      canContinue
-        ? `
-      <form class="continue-task-form">
-        <label>
-          <span>继续修改这个工作区</span>
-          <textarea rows="4" name="prompt" required placeholder="输入下一轮要求，Codex 会继续当前会话和代码现场。"></textarea>
-        </label>
-        <button class="launch-button continue-task-button" type="submit"><span>继续任务</span></button>
-      </form>`
-        : ''
-    }
-    ${task.pullRequestUrl ? `<a class="pr-link" href="${escapeHtml(task.pullRequestUrl)}" target="_blank" rel="noreferrer"><span>打开 Pull Request</span><b>↗</b></a>` : ''}
-    ${task.repositoryPath ? `<div class="workspace-path">REPOSITORY · ${escapeHtml(task.repositoryPath)}</div>` : ''}
-    ${task.workspace ? `<div class="workspace-path">WORKSPACE · ${escapeHtml(task.workspace)}</div>` : ''}`;
+    <h1>${escapeHtml(task.prompt)}</h1>
+    <p>${escapeHtml(shortRepository(task.repository))} · ${escapeHtml(task.agentBranch || task.baseBranch || '准备分支中')} · ${escapeHtml(providerLabel(task.provider))}${task.model ? ` / ${escapeHtml(task.model)}` : ''}</p>`;
+  elements.taskDetail.className = 'task-detail thread-conversation';
+  elements.taskDetail.innerHTML = `
+    <div class="conversation-stream">
+      ${task.turns.map((turn, index) => renderConversationTurn(task, turn, index)).join('')}
+    </div>
+    <details class="run-details">
+      <summary>运行详情 <span>${task.logs.length} 条日志 · ${task.attempts.length} 次执行</span></summary>
+      ${renderAttempts(task.attempts)}
+      <pre class="task-output" aria-label="任务输出">${escapeHtml(formatTaskLogs(task.logs))}</pre>
+    </details>
+    <div class="workspace-strip">
+      ${task.workspace ? `<span>WORKSPACE · ${escapeHtml(task.workspace)}</span>` : '<span>正在准备工作区…</span>'}
+      <time>${escapeHtml(formatTime(task.updatedAt))}</time>
+    </div>`;
 
-  const output = elements.taskDetail.querySelector('.task-output');
-  output.textContent = task.logs
-    .map(
-      (log) =>
-        `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`,
-    )
-    .join('\n');
-  output.scrollTop = output.scrollHeight;
+  elements.taskForm.classList.remove('new-task-mode');
+  elements.newTaskContext.hidden = true;
+  disableNewTaskFields();
+  elements.taskSuggestions.hidden = true;
+  elements.prompt.disabled = !canContinue;
+  elements.prompt.placeholder = active
+    ? 'Agent 正在工作，完成后可继续输入…'
+    : canContinue
+      ? '继续要求 Agent 调整这个任务…'
+      : '工作区未创建，无法继续此任务';
+  elements.launchButton.disabled = !canContinue;
+  elements.launchButton.querySelector('span').textContent = active ? '执行中' : '发送';
 
-  elements.taskDetail.querySelector('.cancel-button')?.addEventListener('click', async () => {
+  elements.threadHeading.querySelector('.cancel-button')?.addEventListener('click', async () => {
     try {
       await api('/api/console/cancel', {
         method: 'POST',
@@ -1111,29 +1188,74 @@ function renderTaskDetail() {
     }
   });
 
-  elements.taskDetail
-    .querySelector('.continue-task-form')
-    ?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const button = form.querySelector('button');
-      const prompt = form.querySelector('textarea').value;
-      button.disabled = true;
-      try {
-        const continued = await api('/api/console/task/continue', {
-          method: 'POST',
-          body: JSON.stringify({ id: task.id, prompt, useFallback: false }),
-        });
-        const index = state.tasks.findIndex((item) => item.id === continued.id);
-        if (index >= 0) state.tasks[index] = continued;
-        renderTaskList();
-        renderTaskDetail();
-        showToast('已追加指令，继续使用原工作区。');
-      } catch (error) {
-        button.disabled = false;
-        showToast(error.message, true);
-      }
-    });
+  elements.taskDetail.scrollTop = elements.taskDetail.scrollHeight;
+}
+
+function enableNewTaskFields() {
+  elements.repositoryPicker.disabled = false;
+  elements.repository.disabled = false;
+  elements.branchPicker.disabled = false;
+  elements.baseBranch.disabled = false;
+  elements.taskBranch.disabled = false;
+  renderTaskRepositoryPicker();
+}
+
+function disableNewTaskFields() {
+  elements.repositoryPicker.disabled = true;
+  elements.repository.disabled = true;
+  elements.branchPicker.disabled = true;
+  elements.baseBranch.disabled = true;
+  elements.taskBranch.disabled = true;
+}
+
+function renderConversationTurn(task, turn, index) {
+  const response = turn.response || (index === task.turns.length - 1 ? task.lastAgentResponse : '');
+  const isCurrent = index === task.turns.length - 1;
+  const waiting = isCurrent && ['queued', 'running'].includes(turn.status) && !response;
+  return `
+    <section class="conversation-turn">
+      <article class="chat-message user-message">
+        <div class="message-avatar">你</div>
+        <div class="message-content">
+          <div class="message-label">你 <time>${escapeHtml(formatTime(turn.createdAt))}</time></div>
+          <div class="message-body">${escapeHtml(turn.prompt)}</div>
+        </div>
+      </article>
+      <article class="chat-message agent-message ${waiting ? 'waiting' : ''}">
+        <div class="message-avatar">⌁</div>
+        <div class="message-content">
+          <div class="message-label">Codex <span>${escapeHtml(turnStatusLabel(turn.status))}</span></div>
+          <div class="message-body">${
+            response
+              ? escapeHtml(response)
+              : waiting
+                ? '<span class="thinking"><i></i><i></i><i></i></span> 正在分析并修改代码…'
+                : escapeHtml(turn.error || '这一轮没有返回文本结果。')
+          }</div>
+        </div>
+      </article>
+    </section>`;
+}
+
+function formatTaskLogs(logs) {
+  return logs
+    .map(
+      (log) =>
+        `${new Date(log.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}  ${log.stream === 'stderr' ? '!' : log.stream === 'system' ? '›' : ' '} ${log.message}`,
+    )
+    .join('\n');
+}
+
+function turnStatusLabel(status) {
+  return (
+    {
+      queued: '等待中',
+      running: '工作中',
+      completed: '已完成',
+      failed: '失败',
+      cancelled: '已停止',
+    }[status] || status
+  );
 }
 
 async function switchView(view) {

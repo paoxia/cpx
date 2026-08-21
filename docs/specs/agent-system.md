@@ -31,9 +31,10 @@
 - 仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 仓库地址。首次使用时必须完整克隆到 `repositories/<owner>/<repo>`，后续任务先 fetch 再从该缓存创建独立 worktree 和自动 `cpx/task-<id>` 分支；新建分支时使用用户提供的名称。创建 Pull Request 时必须以所选基础分支为 base。
 - 验证成功的 Token 必须立即用于 GitHub API、HTTPS clone/push 和 `gh pr create`。Token 只能通过受控子进程环境和不含密钥的凭据 helper 传递，不得出现在 Git URL、命令参数、任务对象或日志中；SSH 地址继续使用 SSH 凭据。
 - Codex 以非交互方式执行。任务可取消，状态包括排队、准备、执行、发布、完成、失败和取消。
-- 已创建工作区的终态任务可追加 prompt；后续轮次复用原 worktree、任务分支和 Codex `thread_id`，并在已有 Pull Request 存在时通过推送新提交更新该 PR。
-- 默认不提交或推送 Agent 改动。只有用户在创建任务时显式选择创建 Pull Request，系统才提交全部工作区改动、推送任务分支并调用 `gh` 创建 PR。
-- 任务、状态、轮次和最多 800 条日志仅保存在内存中；服务重启后不恢复。完整仓库缓存与 worktree 保留在磁盘。
+- 控制台必须采用任务列表、单任务会话流和统一底部输入框布局；用户可随时新建任务，或在终态任务中从同一输入框追加 prompt。执行中的任务禁用输入并提供停止操作。
+- 后续轮次复用原 worktree、任务分支和 Codex `thread_id`；每轮必须保存用户 prompt、状态和 Agent 最终回复，以便在会话流中回放。运行日志应作为次级详情折叠展示，不得取代主要对话。
+- Web 控制台不展示 Pull Request 开关或链接，默认只把改动保留在任务 worktree。后端受控发布流程仍可供聊天开发命令和兼容 API 使用；已有 Pull Request 存在时，发布轮次通过推送新提交更新该 PR。
+- 任务、状态、轮次、Agent 回复和最多 800 条日志仅保存在内存中；服务重启后不恢复。完整仓库缓存与 worktree 保留在磁盘。
 - 控制台 API 当前没有认证，不得直接暴露到公网；具体边界见 [安全说明](../SECURITY.md)。
 
 ## 命令能力
