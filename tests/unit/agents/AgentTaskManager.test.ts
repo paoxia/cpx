@@ -145,7 +145,7 @@ describe('AgentTaskManager', () => {
     await manager.stop();
   });
 
-  it('未指定基础分支时更新远端 HEAD 也必须注入 GitHub 凭据', async () => {
+  it('未指定基础分支时应使用克隆生成的本地 origin/HEAD，且不再次查询远端', async () => {
     const manager = createManager();
     manager.setSecrets({ githubToken: 'github_pat_head-secret' });
     const created = manager.create({
@@ -155,18 +155,20 @@ describe('AgentTaskManager', () => {
     });
     await manager.waitForTerminal(created.id);
 
-    expect(spawnMock).toHaveBeenCalledWith(
+    expect(spawnMock).not.toHaveBeenCalledWith(
       'git',
       ['remote', 'set-head', 'origin', '--auto'],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          GH_TOKEN: 'github_pat_head-secret',
-          CPX_GITHUB_TOKEN: 'github_pat_head-secret',
-          GIT_ASKPASS: expect.stringContaining('.github-askpass'),
-          GIT_TERMINAL_PROMPT: '0',
-        }),
-      }),
+      expect.anything(),
     );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'git',
+      expect.arrayContaining(['worktree', 'add', '-b']),
+      expect.objectContaining({ cwd: join(TMP_DIR, 'repositories', 'acme', 'repo') }),
+    );
+    const worktreeCall = spawnMock.mock.calls.find(
+      ([command, args]) => command === 'git' && args[0] === 'worktree' && args[1] === 'add',
+    );
+    expect(worktreeCall?.[1].at(-1)).toBe('refs/remotes/origin/HEAD');
     await manager.stop();
   });
 

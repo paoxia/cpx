@@ -413,6 +413,14 @@ function handleTaskBranchSelection() {
   elements.taskBranch.value = '';
 }
 
+function selectedTaskBaseBranch() {
+  const selectedBranch = elements.branchPicker.value;
+  if (!elements.branchPicker.hidden && !elements.branchPicker.disabled && selectedBranch) {
+    return selectedBranch === '__new__' ? state.branchDefault || undefined : selectedBranch;
+  }
+  return elements.baseBranch.value || undefined;
+}
+
 function renderGitHubConnection() {
   const connected = Boolean(state.githubStatus?.connected && state.githubUser);
   const configured = Boolean(state.githubStatus?.hasToken);
@@ -997,7 +1005,7 @@ async function createTask(event) {
       body: JSON.stringify({
         useFallback: false,
         repository: elements.repository.value,
-        baseBranch: elements.baseBranch.value || undefined,
+        baseBranch: selectedTaskBaseBranch(),
         taskBranch: elements.taskBranch.value || undefined,
         prompt: elements.prompt.value,
         createPullRequest: elements.createPr.checked,

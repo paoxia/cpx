@@ -79,6 +79,7 @@ describe('WebConsole', () => {
     expect(script).toContain('/api/console/codex-config');
     expect(script).toContain('/api/console/agent-auth/api-key');
     expect(script).toContain('/api/console/codex-models');
+    expect(script).toContain('baseBranch: selectedTaskBaseBranch()');
     expect(script).not.toContain('/webhook/');
   });
 

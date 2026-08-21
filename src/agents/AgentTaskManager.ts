@@ -419,14 +419,6 @@ export class AgentTaskManager {
         ['fetch', '--prune', 'origin', '+refs/heads/*:refs/remotes/origin/*'],
         repositoryPath,
       );
-      if (!task.baseBranch) {
-        await this.runGitHubProcess(
-          task,
-          'git',
-          ['remote', 'set-head', 'origin', '--auto'],
-          repositoryPath,
-        );
-      }
       await this.runProcess(task, 'git', ['worktree', 'prune'], repositoryPath);
 
       const branch = task.taskBranch || `cpx/task-${task.id.slice(0, 8)}`;
