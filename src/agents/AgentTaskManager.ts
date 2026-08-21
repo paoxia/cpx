@@ -595,7 +595,7 @@ export class AgentTaskManager {
       `mcp_servers.cpx_platform.command=${JSON.stringify(server.command)}`,
       `mcp_servers.cpx_platform.args=${JSON.stringify(server.args)}`,
       'mcp_servers.cpx_platform.env_vars=["CPX_PLATFORM_TOOL_URL","CPX_PLATFORM_TOOL_TOKEN","CPX_PLATFORM_TOOL_TASK_ID","CPX_PLATFORM_NAME"]',
-      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message","github_list_repositories","github_list_branches","task_create","task_list","task_status","task_continue","task_cancel"]',
       'mcp_servers.cpx_platform.default_tools_approval_mode="approve"',
       'mcp_servers.cpx_platform.required=true',
     ];
@@ -974,7 +974,7 @@ function buildPrompt(taskPrompt: string, hasPlatformTools = false): string {
   if (hasPlatformTools) {
     instructions.push(
       '这个任务来自消息平台。任务建立后的自然语言要求都由你在当前会话中理解和执行。',
-      '你可以使用 cpx_platform MCP 工具读取当前平台上下文，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
+      '你可以使用 cpx_platform MCP 工具读取平台上下文、查询 GitHub 或管理当前用户的 cpx 任务，并在确有必要时向原会话主动发送阶段性消息；不得尝试改变目标会话或用户。',
       'cpx 会自动回传你的最终回复，因此不要用平台工具重复发送最终总结。',
     );
   }

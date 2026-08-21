@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { AgentSystem } from '../../src/core/AgentSystem';
 import type { AgentTask } from '../../src/agents/AgentTaskManager';
+import type { MessagingCoordinatorRunner } from '../../src/agents/MessagingCoordinator';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-pipeline');
 const MCP_TMP_DIR = join(process.cwd(), 'tmp-test-mcp-pipeline');
@@ -29,6 +30,7 @@ function safeRm(dir: string): void {
 
 describe('命令管道集成测试', () => {
   let system: AgentSystem;
+  let coordinator: MessagingCoordinatorRunner;
 
   beforeEach(() => {
     safeRm(TMP_DIR);
@@ -39,7 +41,11 @@ describe('命令管道集成测试', () => {
         join(TMP_DIR, 'agent.db').replace(/\\/g, '/') +
         '\n',
     );
-    system = new AgentSystem(TMP_DIR);
+    coordinator = {
+      run: vi.fn(async () => ({ response: '我已经理解你的自然语言请求。', threadId: 'thread-1' })),
+      stop: vi.fn(async () => undefined),
+    };
+    system = new AgentSystem(TMP_DIR, { messagingCoordinator: coordinator });
   });
 
   afterEach(async () => {
@@ -315,10 +321,47 @@ describe('命令管道集成测试', () => {
     expect(await contextResponse.json()).toMatchObject({
       result: {
         platform: 'feishu',
-        taskId,
+        scope: 'task',
+        scopeId: taskId,
         conversationBound: true,
-        capabilities: ['platform_send_message'],
+        capabilities: expect.arrayContaining([
+          'platform_send_message',
+          'github_list_repositories',
+          'task_create',
+        ]),
       },
+    });
+
+    const repositoriesResponse = await fetch(platformToolContext!.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${platformToolContext!.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        tool: 'github_list_repositories',
+        args: {},
+      }),
+    });
+    expect(await repositoriesResponse.json()).toMatchObject({
+      result: { user: 'paoxia', repositories: [{ name: 'paoxia/cpx', defaultBranch: 'dev' }] },
+    });
+
+    const taskStatusResponse = await fetch(platformToolContext!.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${platformToolContext!.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        taskId,
+        tool: 'task_status',
+        args: { taskId },
+      }),
+    });
+    expect(await taskStatusResponse.json()).toMatchObject({
+      result: { shortId: 'abcdef12', status: 'completed', repository: 'paoxia/cpx' },
     });
 
     const pushedBeforePlatformTool = pushed.length;
@@ -402,6 +445,61 @@ describe('命令管道集成测试', () => {
       .map((item) => item.replyRouteId);
     expect(crossConversationRoutes).toContain('chat-other:feishu-user-1');
     expect(crossConversationRoutes).toContain('chat-123:feishu-user-1');
+
+    const continueCallsBeforeNew = continueSpy.mock.calls.length;
+    const newConversation = await system.processCommand('/new', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-123:feishu-user-1',
+    });
+    expect(newConversation.message).toContain('新的对话');
+    await system.processCommand('/agent 帮我处理另一个仓库', {
+      userId: 'feishu-user-1',
+      userName: 'Tester',
+      source: 'feishu',
+      replyRouteId: 'chat-123:feishu-user-1',
+    });
+    await vi.waitFor(() => expect(coordinator.run).toHaveBeenCalledTimes(1));
+    expect(coordinator.run).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: '帮我处理另一个仓库' }),
+    );
+    expect(continueSpy).toHaveBeenCalledTimes(continueCallsBeforeNew);
+  });
+
+  it('飞书无任务时应把自然语言交给可持续的协调 Codex 会话', async () => {
+    const pushed: unknown[] = [];
+    system.setResultPusher(async (_source, _userId, message) => {
+      pushed.push(message);
+    });
+
+    const first = await system.processCommand('/agent 帮我看看 GitHub 里有哪些项目', {
+      userId: 'feishu-natural-user',
+      userName: 'Natural User',
+      source: 'feishu',
+      replyRouteId: 'chat-natural:feishu-natural-user',
+    });
+    expect(first.success).toBe(true);
+    expect(first.message).toContain('Codex 已收到');
+    await vi.waitFor(() => expect(pushed).toHaveLength(2));
+    expect(coordinator.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: '帮我看看 GitHub 里有哪些项目',
+        platformTools: expect.objectContaining({ platform: 'feishu' }),
+      }),
+    );
+    expect(JSON.stringify(pushed)).toContain('我已经理解你的自然语言请求');
+
+    await system.processCommand('/agent 就看第一个项目', {
+      userId: 'feishu-natural-user',
+      userName: 'Natural User',
+      source: 'feishu',
+      replyRouteId: 'chat-natural:feishu-natural-user',
+    });
+    await vi.waitFor(() => expect(coordinator.run).toHaveBeenCalledTimes(2));
+    expect(coordinator.run).toHaveBeenLastCalledWith(
+      expect.objectContaining({ prompt: '就看第一个项目', threadId: 'thread-1' }),
+    );
   });
 });
 

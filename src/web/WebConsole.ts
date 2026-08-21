@@ -185,6 +185,11 @@ export class WebConsole {
     });
   }
 
+  /** 供消息平台协调 Agent 复用与 Web 任务一致的当前及回退模型顺序。 */
+  getAgentExecutionConfigurations(useFallback = true): AgentModelConfiguration[] {
+    return this.executionConfigurations(useFallback);
+  }
+
   listCodingTasks(): AgentTask[] {
     return this.taskManager.list();
   }

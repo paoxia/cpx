@@ -75,6 +75,27 @@ describe('CommandParser Coding Agent 命令', () => {
     expect(parse('帮我分析一下登录流程').name).toBe('帮我分析一下登录流程');
   });
 
+  it('消息平台应只为少量斜杠入口保留确定性控制', () => {
+    const user = { userId: 'user-1', userName: 'Tester', source: 'feishu' as const };
+    expect(parser.parse('/new', user).name).toBe('agent_new');
+    expect(parser.parse('/tasks 3', user)).toMatchObject({
+      name: 'agent_task_list',
+      args: { limit: 3 },
+    });
+    expect(parser.parse('/status', user)).toMatchObject({
+      name: 'agent_task_status',
+      args: { id: undefined },
+    });
+    expect(parser.parse('/stop abcdef12', user)).toMatchObject({
+      name: 'agent_task_cancel',
+      args: { id: 'abcdef12' },
+    });
+    expect(parser.parse('帮我看看有哪些仓库', user)).toMatchObject({
+      name: 'agent_chat',
+      args: { prompt: '帮我看看有哪些仓库' },
+    });
+  });
+
   it('应保留消息来源会话路由但不改变用户身份', () => {
     const command = parser.parse('/agent 版本', {
       userId: 'user-1',

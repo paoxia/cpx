@@ -84,6 +84,26 @@ export class CommandParser {
       return { name: 'help', args: {} };
     }
 
+    if (source === 'feishu' || source === 'dingtalk') {
+      if (/^\/(?:new|新建)$/i.test(text)) return { name: 'agent_new', args: {} };
+      let control = text.match(/^\/(?:tasks?|任务)(?:\s+(\d+))?$/i);
+      if (control) {
+        return {
+          name: 'agent_task_list',
+          args: { limit: control[1] ? Number(control[1]) : undefined },
+        };
+      }
+      control = text.match(/^\/(?:status|状态)(?:\s+([a-f0-9-]{6,36}))?$/i);
+      if (control) return { name: 'agent_task_status', args: { id: control[1] } };
+      control = text.match(/^\/(?:stop|停止)(?:\s+([a-f0-9-]{6,36}))?$/i);
+      if (control) return { name: 'agent_task_cancel', args: { id: control[1] } };
+      control = text.match(/^\/(?:confirm|确认)\s+(cf_[a-f0-9]+)$/i);
+      if (control) return { name: 'confirm', args: { id: control[1] } };
+      control = text.match(/^\/(?:cancel|取消)\s+(cf_[a-f0-9]+)$/i);
+      if (control) return { name: 'cancel', args: { id: control[1] } };
+      if (/^\/(?:help|帮助)$/i.test(text)) return { name: 'help', args: {} };
+    }
+
     // 查看 GitHub 账号和最近仓库
     if (
       /^(?:查看\s*github(?:\s*(?:情况|状态))?|github(?:\s*(?:status|情况|状态))?|仓库|列出仓库)$/i.test(

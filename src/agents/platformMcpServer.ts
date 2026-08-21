@@ -18,14 +18,14 @@ const TOOLS = [
   {
     name: 'platform_get_context',
     description:
-      '读取当前 cpx 任务绑定的消息平台上下文。只返回当前平台和任务范围，不提供切换目标会话的能力。',
+      '读取当前 cpx 协调会话或开发任务绑定的平台上下文，不提供切换目标会话的能力。',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'platform_send_message',
     description:
-      '向创建当前任务的飞书或钉钉原会话发送一条阶段性文本消息。目标会话由 cpx 锁定，不能由参数指定。最终回复会由 cpx 自动回传，不要重复发送。',
+      '向当前范围绑定的飞书或钉钉原会话发送一条阶段性文本消息。目标会话由 cpx 锁定，不能由参数指定。最终回复会由 cpx 自动回传，不要重复发送。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -40,6 +40,93 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'github_list_repositories',
+    description:
+      '列出当前 cpx GitHub Token 可访问的仓库。用户没有明确仓库，或仓库名称可能有歧义时先调用此工具。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'github_list_branches',
+    description: '列出指定 GitHub 仓库的分支，用于选择开发任务的基础分支。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repository: { type: 'string', description: 'owner/repository 格式的仓库全名。' },
+      },
+      required: ['repository'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'task_create',
+    description:
+      '为当前用户创建隔离 Coding Agent 开发任务。只有仓库已明确且用户确实要求修改、检查或开发代码时才调用。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        repository: { type: 'string', description: 'owner/repository 格式的仓库全名。' },
+        prompt: { type: 'string', minLength: 1, maxLength: 20_000 },
+        baseBranch: { type: 'string', description: '可选基础分支；省略时使用默认分支。' },
+        taskBranch: { type: 'string', description: '可选新分支；省略时由 cpx 自动生成。' },
+        createPullRequest: {
+          type: 'boolean',
+          description: '完成后是否提交、推送并创建 Pull Request；默认 true。',
+        },
+      },
+      required: ['repository', 'prompt'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'task_list',
+    description: '列出当前用户通过当前消息平台创建的最近开发任务。',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'integer', minimum: 1, maximum: 10 } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'task_status',
+    description: '查询当前用户拥有的开发任务状态。任务 ID 可以使用唯一前缀。',
+    inputSchema: {
+      type: 'object',
+      properties: { taskId: { type: 'string' } },
+      required: ['taskId'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'task_continue',
+    description: '向当前用户拥有的已结束任务追加一轮自然语言要求，复用原工作区和 Codex 会话。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string' },
+        prompt: { type: 'string', minLength: 1, maxLength: 20_000 },
+      },
+      required: ['taskId', 'prompt'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'task_cancel',
+    description: '停止当前用户拥有且正在执行的开发任务。',
+    inputSchema: {
+      type: 'object',
+      properties: { taskId: { type: 'string' } },
+      required: ['taskId'],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
 ];
 
@@ -60,7 +147,7 @@ export async function handlePlatformMcpRequest(
       capabilities: { tools: { listChanged: false } },
       serverInfo: { name: 'cpx-platform', version: '1.0.0' },
       instructions:
-        'These tools are scoped to the platform conversation that created the current cpx task. Use platform_send_message only for useful progress updates. The final answer is delivered automatically. Never claim that you can change the target conversation or user.',
+        'These tools are scoped to one cpx platform conversation or coding task. Use GitHub and task tools instead of guessing platform state. Use platform_send_message only for useful progress updates. The final answer is delivered automatically. Never claim that you can change the target conversation or user.',
     });
   }
   if (request.method === 'ping') {
@@ -85,12 +172,36 @@ export async function handlePlatformMcpRequest(
       return failure(id, -32602, 'text 必须是 1 到 6000 字符的非空字符串');
     }
   }
+  if (name === 'github_list_branches' || name === 'task_create') {
+    const repository = params?.arguments?.repository;
+    if (typeof repository !== 'string' || !validRepository(repository)) {
+      return failure(id, -32602, 'repository 必须使用 owner/repository 格式');
+    }
+  }
+  if (name === 'task_create' || name === 'task_continue') {
+    const prompt = params?.arguments?.prompt;
+    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 20_000) {
+      return failure(id, -32602, 'prompt 必须是 1 到 20000 字符的非空字符串');
+    }
+  }
+  if (name === 'task_status' || name === 'task_continue' || name === 'task_cancel') {
+    const taskId = params?.arguments?.taskId;
+    if (typeof taskId !== 'string' || !/^[a-f0-9-]{6,36}$/i.test(taskId)) {
+      return failure(id, -32602, 'taskId 格式无效');
+    }
+  }
+  if (name === 'task_list' && params?.arguments?.limit !== undefined) {
+    const limit = params.arguments.limit;
+    if (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 10) {
+      return failure(id, -32602, 'limit 必须是 1 到 10 的整数');
+    }
+  }
 
   const endpoint = env.CPX_PLATFORM_TOOL_URL?.trim();
   const token = env.CPX_PLATFORM_TOOL_TOKEN?.trim();
   const taskId = env.CPX_PLATFORM_TOOL_TASK_ID?.trim();
   if (!endpoint || !token || !taskId) {
-    return toolResult(id, '平台工具未绑定到 cpx 任务。', true);
+    return toolResult(id, '平台工具未绑定到 cpx 会话或任务。', true);
   }
 
   try {
@@ -114,6 +225,13 @@ export async function handlePlatformMcpRequest(
   } catch (error) {
     return toolResult(id, `平台工具调用失败：${errorMessage(error)}`, true);
   }
+}
+
+function validRepository(value: string): boolean {
+  const normalized = value.trim();
+  if (!/^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/.test(normalized)) return false;
+  const [owner, repository] = normalized.split('/');
+  return /[a-zA-Z0-9]/.test(owner) && /[a-zA-Z0-9]/.test(repository);
 }
 
 function success(id: string | number | null, result: unknown): JsonRpcResponse {

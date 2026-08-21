@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { dirname, join, resolve } from 'path';
 import { ConfigManager } from '../config/ConfigManager';
 import { Logger } from '../utils/Logger';
 import { EventBus } from './EventBus';
@@ -19,6 +20,7 @@ import { SkillManager } from '../skills/SkillManager';
 import { MCPManager } from '../mcp/MCPManager';
 import { WebConsole } from '../web/WebConsole';
 import type { AgentTask } from '../agents/AgentTaskManager';
+import { MessagingCoordinator, MessagingCoordinatorRunner } from '../agents/MessagingCoordinator';
 import type { AppConfig, Command, CommandResult, CommandSource } from './types';
 import type { ParsedUserInfo } from './CommandParser';
 
@@ -27,13 +29,42 @@ const VERSION = '1.0.0';
 interface MessagingTaskOrigin {
   source: CommandSource;
   userId: string;
+  userName: string;
   commandId: string;
   replyRouteId?: string;
   platformToolToken?: string;
 }
 
+interface MessagingCoordinatorConversation {
+  id: string;
+  key: string;
+  source: 'dingtalk' | 'feishu';
+  userId: string;
+  userName: string;
+  replyRouteId?: string;
+  token: string;
+  threadId?: string;
+  activeCommand?: Command;
+  queue: Promise<void>;
+}
+
+interface PlatformToolOrigin {
+  source: 'dingtalk' | 'feishu';
+  userId: string;
+  userName: string;
+  commandId: string;
+  replyRouteId?: string;
+  token: string;
+  scope: 'task' | 'conversation';
+}
+
+export interface AgentSystemOptions {
+  messagingCoordinator?: MessagingCoordinatorRunner;
+}
+
 const MESSAGING_TASK_CONTROL_COMMANDS = new Set([
   'agent_develop',
+  'agent_new',
   'agent_task_continue',
   'agent_task_list',
   'agent_task_status',
@@ -67,7 +98,11 @@ export class AgentSystem {
   private skillManager: SkillManager;
   private mcpManager: MCPManager;
   private webConsole: WebConsole;
+  private messagingCoordinator: MessagingCoordinatorRunner;
   private messagingTaskOrigins = new Map<string, MessagingTaskOrigin>();
+  private messagingCoordinatorConversations = new Map<string, MessagingCoordinatorConversation>();
+  private messagingCoordinatorScopes = new Map<string, MessagingCoordinatorConversation>();
+  private detachedMessagingConversations = new Set<string>();
   private running = false;
   private resultPusher?: (
     source: CommandSource,
@@ -76,10 +111,14 @@ export class AgentSystem {
     replyRouteId?: string,
   ) => Promise<void>;
 
-  constructor(configDir: string = './config') {
+  constructor(configDir: string = './config', options: AgentSystemOptions = {}) {
     this.configManager = new ConfigManager(configDir);
     this.config = this.configManager.load();
     this.logger = new Logger(this.config.logging.level, this.config.logging.file);
+    const dataDir = resolve(dirname(this.config.storage.path));
+    this.messagingCoordinator =
+      options.messagingCoordinator ??
+      new MessagingCoordinator(join(dataDir, 'messaging-coordinator'), this.logger);
     this.eventBus = new EventBus();
     this.httpServer = new HttpServer(this.config.server.port, this.config.server.host, this.logger);
     this.parser = new CommandParser();
@@ -316,6 +355,7 @@ export class AgentSystem {
     this.confirmationStore.stopExpiryCleanup();
     this.configManager.stopWatching();
     await this.webConsole.stop();
+    await this.messagingCoordinator.stop();
     await this.messagingIntegrations.stop();
     await this.mcpManager.stop();
     await this.httpServer.stop();
@@ -338,10 +378,10 @@ export class AgentSystem {
       message: `Agent System v${VERSION}`,
     }));
 
-    this.router.register('help', async () => ({
-      commandId: '',
+    this.router.register('help', async (command) => ({
+      commandId: command.id,
       success: true,
-      message: this.getHelpText(),
+      message: this.getHelpText(command.source),
     }));
   }
 
@@ -726,6 +766,23 @@ export class AgentSystem {
       );
     });
 
+    this.router.register('agent_new', async (command) => {
+      if (command.source !== 'dingtalk' && command.source !== 'feishu') {
+        return { commandId: command.id, success: false, message: '该入口仅供消息平台使用。' };
+      }
+      const key = messagingConversationKey(command);
+      this.detachedMessagingConversations.add(key);
+      const previous = this.messagingCoordinatorConversations.get(key);
+      if (previous) {
+        this.messagingCoordinatorConversations.delete(key);
+      }
+      return {
+        commandId: command.id,
+        success: true,
+        message: '已开始新的对话。直接描述你想完成的事情，Codex 会选择仓库并创建任务。',
+      };
+    });
+
     this.router.register('agent_task_continue', async (command) => {
       const task = this.ownedMessagingTask(command.args.id as string, command);
       if (!task) {
@@ -741,24 +798,10 @@ export class AgentSystem {
     this.router.register('agent_chat', async (command) => {
       const prompt = command.args.prompt as string;
       const task = this.latestMessagingTask(command);
-      if (task) {
+      if (task && isTerminalCodingTask(task)) {
         return this.continueMessagingTask(command, task, prompt);
       }
-      if (!this.config.github.defaultRepo) {
-        return {
-          commandId: command.id,
-          success: false,
-          message:
-            '当前会话还没有 Coding Agent 工作区。请先发送“开发 owner/repo 需求”，或在配置中设置 github.defaultRepo。',
-        };
-      }
-      return this.createMessagingDevelopmentTask(
-        command,
-        this.config.github.defaultRepo,
-        undefined,
-        undefined,
-        prompt,
-      );
+      return this.enqueueMessagingCoordinator(command, prompt);
     });
 
     this.router.register('agent_task_list', async (command) => {
@@ -790,7 +833,10 @@ export class AgentSystem {
     });
 
     this.router.register('agent_task_status', async (command) => {
-      const task = this.ownedMessagingTask(command.args.id as string, command);
+      const reference = command.args.id as string | undefined;
+      const task = reference
+        ? this.ownedMessagingTask(reference, command)
+        : this.mostRecentOwnedMessagingTask(command);
       if (!task) {
         return {
           commandId: command.id,
@@ -807,8 +853,10 @@ export class AgentSystem {
     });
 
     this.router.register('agent_task_cancel', async (command) => {
-      const reference = command.args.id as string;
-      const task = this.ownedMessagingTask(reference, command);
+      const reference = command.args.id as string | undefined;
+      const task = reference
+        ? this.ownedMessagingTask(reference, command)
+        : this.mostRecentOwnedMessagingTask(command);
       if (!task) {
         return {
           commandId: command.id,
@@ -837,6 +885,7 @@ export class AgentSystem {
     requestedBaseBranch: string | undefined,
     taskBranch: string | undefined,
     prompt: string,
+    createPullRequest = true,
   ): Promise<CommandResult> {
     try {
       const connection = await this.webConsole.inspectGitHub();
@@ -864,7 +913,7 @@ export class AgentSystem {
         baseBranch,
         taskBranch,
         prompt,
-        createPullRequest: true,
+        createPullRequest,
         useFallback: true,
       });
       this.bindMessagingTask(task, command);
@@ -937,6 +986,110 @@ export class AgentSystem {
     }
   }
 
+  private enqueueMessagingCoordinator(command: Command, prompt: string): CommandResult {
+    if (command.source !== 'dingtalk' && command.source !== 'feishu') {
+      return {
+        commandId: command.id,
+        success: false,
+        message: '自然语言协调会话仅支持飞书和钉钉。',
+      };
+    }
+    const key = messagingConversationKey(command);
+    let conversation = this.messagingCoordinatorConversations.get(key);
+    if (!conversation) {
+      conversation = {
+        id: randomUUID(),
+        key,
+        source: command.source,
+        userId: command.userId,
+        userName: command.userName,
+        ...(command.replyRouteId ? { replyRouteId: command.replyRouteId } : {}),
+        token: randomUUID(),
+        queue: Promise.resolve(),
+      };
+      this.messagingCoordinatorConversations.set(key, conversation);
+      this.messagingCoordinatorScopes.set(conversation.id, conversation);
+    }
+    const queuedConversation = conversation;
+    queuedConversation.queue = queuedConversation.queue
+      .then(() => this.runMessagingCoordinatorTurn(queuedConversation, command, prompt))
+      .catch((error) => {
+        this.logger.error(`消息平台协调会话失败: ${errorMessage(error)}`);
+      });
+
+    return {
+      commandId: command.id,
+      success: true,
+      message: 'Codex 已收到你的消息，正在理解需求并调用所需的平台能力。',
+      data: { coordinatorId: conversation.id },
+    };
+  }
+
+  private async runMessagingCoordinatorTurn(
+    conversation: MessagingCoordinatorConversation,
+    command: Command,
+    prompt: string,
+  ): Promise<void> {
+    conversation.activeCommand = command;
+    let result: CommandResult;
+    try {
+      const response = await this.messagingCoordinator.run({
+        scopeId: conversation.id,
+        prompt,
+        ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
+        configurations: this.webConsole.getAgentExecutionConfigurations(true),
+        platformTools: {
+          endpoint: this.platformToolEndpoint(),
+          token: conversation.token,
+          taskId: conversation.id,
+          platform: conversation.source,
+        },
+      });
+      conversation.threadId = response.threadId ?? conversation.threadId;
+      result = { commandId: command.id, success: true, message: response.response };
+      this.auditLogger.record({
+        action: 'agent_delegate',
+        userId: command.userId,
+        source: command.source,
+        commandId: command.id,
+        operation: `coordinate ${conversation.id}`,
+        result: 'success',
+      });
+    } catch (error) {
+      result = {
+        commandId: command.id,
+        success: false,
+        message: `Codex 协调会话失败：${errorMessage(error)}`,
+      };
+      this.auditLogger.record({
+        action: 'agent_delegate',
+        userId: command.userId,
+        source: command.source,
+        commandId: command.id,
+        operation: `coordinate ${conversation.id}`,
+        result: 'failure',
+        details: errorMessage(error),
+      });
+    } finally {
+      conversation.activeCommand = undefined;
+      if (this.messagingCoordinatorConversations.get(conversation.key)?.id !== conversation.id) {
+        this.messagingCoordinatorScopes.delete(conversation.id);
+      }
+    }
+
+    if (!this.resultPusher) return;
+    try {
+      await this.resultPusher(
+        conversation.source,
+        conversation.userId,
+        this.formatter.format(result, conversation.source),
+        conversation.replyRouteId,
+      );
+    } catch (error) {
+      this.logger.error(`Codex 协调回复推送失败: ${errorMessage(error)}`);
+    }
+  }
+
   private bindMessagingTask(task: AgentTask, command: Command): void {
     const existing = this.messagingTaskOrigins.get(task.id);
     const platformToolToken =
@@ -946,6 +1099,7 @@ export class AgentSystem {
     const origin: MessagingTaskOrigin = {
       source: existing?.source ?? command.source,
       userId: existing?.userId ?? command.userId,
+      userName: existing?.userName ?? command.userName,
       commandId: command.id,
       ...(existing?.replyRouteId || command.replyRouteId
         ? { replyRouteId: existing?.replyRouteId ?? command.replyRouteId }
@@ -953,6 +1107,7 @@ export class AgentSystem {
       ...(platformToolToken ? { platformToolToken } : {}),
     };
     this.messagingTaskOrigins.set(task.id, origin);
+    this.detachedMessagingConversations.delete(messagingConversationKey(command));
     if (platformToolToken && (command.source === 'dingtalk' || command.source === 'feishu')) {
       this.webConsole.setCodingTaskPlatformTools(task.id, {
         endpoint: this.platformToolEndpoint(),
@@ -1000,75 +1155,182 @@ export class AgentSystem {
       } catch {
         return { status: 400, body: { error: 'Invalid JSON' } };
       }
-      const origin = payload.taskId ? this.messagingTaskOrigins.get(payload.taskId) : undefined;
+      const origin = payload.taskId ? this.platformToolOrigin(payload.taskId) : undefined;
       const authorization = Array.isArray(headers.authorization)
         ? headers.authorization[0]
         : headers.authorization;
-      if (
-        !origin?.platformToolToken ||
-        authorization !== `Bearer ${origin.platformToolToken}` ||
-        (origin.source !== 'dingtalk' && origin.source !== 'feishu')
-      ) {
+      if (!origin?.token || authorization !== `Bearer ${origin.token}`) {
         return { status: 401, body: { error: 'Unauthorized' } };
       }
 
-      if (payload.tool === 'platform_get_context') {
-        return {
-          status: 200,
-          body: {
-            result: {
-              platform: origin.source,
-              taskId: payload.taskId,
-              conversationBound: true,
-              capabilities: ['platform_send_message'],
-            },
-          },
-        };
-      }
-      if (payload.tool !== 'platform_send_message') {
-        return { status: 400, body: { error: 'Unsupported platform tool' } };
-      }
-      const text = payload.args?.text;
-      if (typeof text !== 'string' || !text.trim() || text.length > 6000) {
-        return { status: 400, body: { error: 'text must contain 1 to 6000 characters' } };
-      }
-      if (!this.resultPusher) {
-        return { status: 503, body: { error: 'Platform result pusher is unavailable' } };
-      }
-
       try {
-        await this.resultPusher(
-          origin.source,
-          origin.userId,
-          platformTextMessage(origin.source, text.trim()),
-          origin.replyRouteId,
+        const result = await this.executePlatformTool(
+          payload.taskId!,
+          payload.tool ?? '',
+          payload.args ?? {},
+          origin,
         );
         this.auditLogger.record({
           action: 'agent_platform_tool',
           userId: origin.userId,
           source: origin.source,
           commandId: origin.commandId,
-          operation: 'platform_send_message',
+          operation: payload.tool ?? 'unknown',
           result: 'success',
-          details: `task ${payload.taskId}`,
+          details: `${origin.scope} ${payload.taskId}`,
         });
-        return { status: 200, body: { result: '消息已发送到当前任务绑定的原会话。' } };
+        return { status: 200, body: { result } };
       } catch (error) {
         this.auditLogger.record({
           action: 'agent_platform_tool',
           userId: origin.userId,
           source: origin.source,
           commandId: origin.commandId,
-          operation: 'platform_send_message',
+          operation: payload.tool ?? 'unknown',
           result: 'failure',
           details: errorMessage(error),
         });
-        return { status: 502, body: { error: errorMessage(error) } };
+        return { status: 400, body: { error: errorMessage(error) } };
       }
     });
   }
 
+  private platformToolOrigin(scopeId: string): PlatformToolOrigin | undefined {
+    const task = this.messagingTaskOrigins.get(scopeId);
+    if (task?.platformToolToken && (task.source === 'dingtalk' || task.source === 'feishu')) {
+      return {
+        source: task.source,
+        userId: task.userId,
+        userName: task.userName,
+        commandId: task.commandId,
+        ...(task.replyRouteId ? { replyRouteId: task.replyRouteId } : {}),
+        token: task.platformToolToken,
+        scope: 'task',
+      };
+    }
+    const conversation = this.messagingCoordinatorScopes.get(scopeId);
+    if (!conversation?.activeCommand) return undefined;
+    return {
+      source: conversation.source,
+      userId: conversation.userId,
+      userName: conversation.userName,
+      commandId: conversation.activeCommand.id,
+      ...(conversation.replyRouteId ? { replyRouteId: conversation.replyRouteId } : {}),
+      token: conversation.token,
+      scope: 'conversation',
+    };
+  }
+
+  private async executePlatformTool(
+    scopeId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    origin: PlatformToolOrigin,
+  ): Promise<unknown> {
+    const command = platformToolCommand(origin, tool, args);
+    if (tool === 'platform_get_context') {
+      return {
+        platform: origin.source,
+        scope: origin.scope,
+        scopeId,
+        conversationBound: true,
+        defaultRepository: this.config.github.defaultRepo || null,
+        capabilities: [
+          'platform_send_message',
+          'github_list_repositories',
+          'github_list_branches',
+          'task_create',
+          'task_list',
+          'task_status',
+          'task_continue',
+          'task_cancel',
+        ],
+      };
+    }
+    if (tool === 'platform_send_message') {
+      const text = args.text;
+      if (typeof text !== 'string' || !text.trim() || text.length > 6000) {
+        throw new Error('text must contain 1 to 6000 characters');
+      }
+      if (!this.resultPusher) throw new Error('Platform result pusher is unavailable');
+      await this.resultPusher(
+        origin.source,
+        origin.userId,
+        platformTextMessage(origin.source, text.trim()),
+        origin.replyRouteId,
+      );
+      return '消息已发送到当前绑定的原会话。';
+    }
+    if (tool === 'github_list_repositories') {
+      const connection = await this.webConsole.inspectGitHub();
+      return {
+        user: connection.user.login,
+        defaultRepository: this.config.github.defaultRepo || null,
+        repositories: connection.repositories.slice(0, 100).map((repository) => ({
+          name: repository.fullName,
+          private: repository.private,
+          archived: repository.archived,
+          defaultBranch: repository.defaultBranch,
+          description: repository.description,
+        })),
+      };
+    }
+    if (tool === 'github_list_branches') {
+      const repository = requiredString(args.repository, 'repository');
+      return {
+        repository,
+        branches: (await this.webConsole.getGitHubBranches(repository)).slice(0, 200),
+      };
+    }
+    if (tool === 'task_create') {
+      const result = await this.createMessagingDevelopmentTask(
+        command,
+        requiredString(args.repository, 'repository'),
+        optionalString(args.baseBranch),
+        optionalString(args.taskBranch),
+        requiredString(args.prompt, 'prompt'),
+        args.createPullRequest === undefined ? true : Boolean(args.createPullRequest),
+      );
+      if (!result.success) throw new Error(result.message);
+      return { message: result.message, data: result.data };
+    }
+    if (tool === 'task_list') {
+      const requested = typeof args.limit === 'number' ? args.limit : 5;
+      const limit = Math.max(1, Math.min(10, Math.floor(requested)));
+      return this.webConsole
+        .listCodingTasks()
+        .filter((task) => this.isMessagingTaskOwner(task.id, command))
+        .slice(0, limit)
+        .map(platformTaskSummary);
+    }
+    const taskId = requiredString(args.taskId, 'taskId');
+    const task = this.ownedMessagingTask(taskId, command);
+    if (!task) throw new Error('任务不存在，或不属于当前平台用户');
+    if (tool === 'task_status') return platformTaskSummary(task);
+    if (tool === 'task_continue') {
+      const result = this.continueMessagingTask(
+        command,
+        task,
+        requiredString(args.prompt, 'prompt'),
+      );
+      if (!result.success) throw new Error(result.message);
+      return { message: result.message, data: result.data };
+    }
+    if (tool === 'task_cancel') {
+      if (!this.webConsole.cancelCodingTask(task.id)) throw new Error('任务已结束，无法停止');
+      return `已停止任务 ${shortTaskId(task.id)}。`;
+    }
+    throw new Error(`Unsupported platform tool: ${tool}`);
+  }
+
   private latestMessagingTask(command: Command): AgentTask | undefined {
+    if (this.detachedMessagingConversations.has(messagingConversationKey(command))) {
+      return undefined;
+    }
+    return this.mostRecentOwnedMessagingTask(command);
+  }
+
+  private mostRecentOwnedMessagingTask(command: Command): AgentTask | undefined {
     return this.webConsole.listCodingTasks().find((task) => {
       const origin = this.messagingTaskOrigins.get(task.id);
       if (!origin || origin.source !== command.source || origin.userId !== command.userId) {
@@ -1148,7 +1410,21 @@ export class AgentSystem {
     });
   }
 
-  private getHelpText(): string {
+  private getHelpText(source: CommandSource): string {
+    if (source === 'feishu' || source === 'dingtalk') {
+      return [
+        '直接用自然语言告诉 Codex 你想完成什么，例如：',
+        '“在 cpx 项目修复飞书重复回复的问题，补充测试并创建 PR。”',
+        '',
+        '可选控制入口：',
+        '• /new - 开始新的协调对话',
+        '• /tasks [数量] - 查看最近任务',
+        '• /status [任务ID] - 查看任务状态',
+        '• /stop [任务ID] - 停止任务',
+        '• /help - 显示帮助',
+        '• /confirm <ID> / /cancel <ID> - 处理待确认操作',
+      ].join('\n');
+    }
     return [
       'Agent System 可用命令：',
       '',
@@ -1178,6 +1454,57 @@ export class AgentSystem {
 
 function shortTaskId(id: string): string {
   return id.slice(0, 8);
+}
+
+function messagingConversationKey(
+  command: Pick<Command, 'source' | 'userId' | 'replyRouteId'>,
+): string {
+  return `${command.source}:${command.userId}:${command.replyRouteId ?? 'direct'}`;
+}
+
+function platformToolCommand(
+  origin: PlatformToolOrigin,
+  name: string,
+  args: Record<string, unknown>,
+): Command {
+  return {
+    id: randomUUID(),
+    source: origin.source,
+    userId: origin.userId,
+    userName: origin.userName,
+    ...(origin.replyRouteId ? { replyRouteId: origin.replyRouteId } : {}),
+    rawText: `[Codex platform tool] ${name}`,
+    name,
+    args,
+    timestamp: Date.now(),
+  };
+}
+
+function requiredString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} 不能为空`);
+  return value.trim();
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function platformTaskSummary(task: AgentTask): Record<string, unknown> {
+  return {
+    id: task.id,
+    shortId: shortTaskId(task.id),
+    status: task.status,
+    repository: displayRepository(task.repository),
+    baseBranch: task.baseBranch ?? null,
+    taskBranch: task.agentBranch ?? task.taskBranch ?? null,
+    turns: task.turns.length,
+    pullRequestUrl: task.pullRequestUrl ?? null,
+    error: task.error ?? null,
+  };
+}
+
+function isTerminalCodingTask(task: AgentTask): boolean {
+  return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
 }
 
 function codingTaskStatusLabel(status: AgentTask['status']): string {

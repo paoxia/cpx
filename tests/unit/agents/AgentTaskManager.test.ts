@@ -169,9 +169,11 @@ describe('AgentTaskManager', () => {
         '--config',
         expect.stringContaining('mcp_servers.cpx_platform.command='),
         '--config',
-        'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message"]',
+        expect.stringContaining('mcp_servers.cpx_platform.enabled_tools='),
       ]),
     );
+    expect(JSON.stringify(codexCall?.[1])).toContain('github_list_repositories');
+    expect(JSON.stringify(codexCall?.[1])).toContain('task_create');
     expect(JSON.stringify(codexCall?.[1])).not.toContain('task-scoped-platform-token');
     expect(codexCall?.[2]).toEqual(
       expect.objectContaining({
