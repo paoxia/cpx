@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
+import { CliExtensionRegistry } from '../extensions/CliExtensionRegistry';
+import { executeCliTool } from '../extensions/tools';
 import { ConfigManager } from '../config/ConfigManager';
 import { Logger } from '../utils/Logger';
 import { EventBus } from './EventBus';
@@ -105,6 +107,7 @@ export class AgentSystem {
   private messagingCoordinatorScopes = new Map<string, MessagingCoordinatorConversation>();
   private detachedMessagingConversations = new Set<string>();
   private running = false;
+  private cliExtensions: CliExtensionRegistry;
   private resultPusher?: (
     source: CommandSource,
     userId: string,
@@ -113,6 +116,7 @@ export class AgentSystem {
   ) => Promise<void>;
 
   constructor(configDir: string = './config', options: AgentSystemOptions = {}) {
+    this.cliExtensions = new CliExtensionRegistry(join(resolve(configDir), 'extensions'));
     this.configManager = new ConfigManager(configDir);
     this.config = this.configManager.load();
     this.logger = new Logger(this.config.logging.level, this.config.logging.file);
@@ -164,6 +168,7 @@ export class AgentSystem {
 
     // Web 开发控制台：模型配置、GitHub 工作区和 Coding Agent 任务
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
+      cliExtensionsDirectory: this.cliExtensions.directory,
       githubToken: this.config.github.token,
       githubTokenSource: process.env.AGENT_GITHUB_TOKEN?.trim()
         ? 'environment'
@@ -357,6 +362,7 @@ export class AgentSystem {
     this.configManager.stopWatching();
     await this.webConsole.stop();
     await this.messagingCoordinator.stop();
+    this.cliExtensions.stop();
     await this.messagingIntegrations.stop();
     await this.mcpManager.stop();
     await this.httpServer.stop();
@@ -1177,7 +1183,9 @@ export class AgentSystem {
           source: origin.source,
           commandId: origin.commandId,
           operation: payload.tool ?? 'unknown',
-          result: 'success',
+          result:
+            payload.tool === 'cli_run' && result && typeof result === 'object' &&
+            'success' in result && !result.success ? 'failure' : 'success',
           details: `${origin.scope} ${payload.taskId}`,
         });
         return { status: 200, body: { result } };
@@ -1245,6 +1253,8 @@ export class AgentSystem {
           'task_status',
           'task_continue',
           'task_cancel',
+          'cli_list',
+          'cli_run',
         ],
       };
     }
@@ -1261,6 +1271,12 @@ export class AgentSystem {
         origin.replyRouteId,
       );
       return '消息已发送到当前绑定的原会话。';
+    }
+    if (tool === 'cli_list' || tool === 'cli_run') {
+      if (this.config.permissions.operations.blacklist.includes(tool)) {
+        throw new Error(`命令 ${tool} 已被加入黑名单，禁止执行`);
+      }
+      return executeCliTool(this.cliExtensions, tool, args);
     }
     if (tool === 'github_list_repositories') {
       const connection = await this.webConsole.inspectGitHub();

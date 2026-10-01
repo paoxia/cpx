@@ -27,6 +27,7 @@ import {
 } from './cliSupport';
 import { ConfigManager } from './config/ConfigManager';
 import { AgentSystem } from './core/AgentSystem';
+import { registerCliExtensionCommands } from './extensions/cliCommands';
 
 const PACKAGE_ROOT = resolve(__dirname, '..');
 const PACKAGE_NAME = packageMetadata.name;
@@ -255,6 +256,7 @@ export function createProgram(): Command {
   const program = new Command();
   program
     .name('cpx')
+    .enablePositionalOptions()
     .description('CPX AI 开发控制台：连接 Codex、GitHub、飞书与钉钉')
     .version(packageMetadata.version)
     .option('--home <dir>', 'CPX 数据目录（默认 ~/.cpx，也可设置 CPX_HOME）');
@@ -424,6 +426,8 @@ export function createProgram(): Command {
         console.log(`当前已是最新版本: ${packageMetadata.version}`);
       }
     });
+
+  registerCliExtensionCommands(program);
 
   program.showHelpAfterError();
   program.showSuggestionAfterError();

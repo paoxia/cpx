@@ -194,6 +194,22 @@ describe('AgentTaskManager', () => {
     await manager.stop();
   });
 
+  it('Web 任务及续写注入 CLI MCP，注册目录通过环境传递', async () => {
+    const directory = join(TMP_DIR, 'config', 'extensions');
+    const manager = new AgentTaskManager(join(TMP_DIR, 'workspaces'), new Logger('error'), join(TMP_DIR, 'repositories'), directory);
+    const created = manager.create({ provider: 'codex', repository: 'acme/repo', prompt: '检查仓库' });
+    await manager.waitForTerminal(created.id);
+    manager.continueTask(created.id, { prompt: '再次检查' });
+    await manager.waitForTerminal(created.id);
+    const calls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+    expect(calls).toHaveLength(2);
+    for (const call of calls) {
+      expect(call[1]).toEqual(expect.arrayContaining([expect.stringContaining('mcp_servers.cpx_cli.command=')]));
+      expect(call[2].env.CPX_CLI_EXTENSIONS_DIR).toBe(directory);
+    }
+    await manager.stop();
+  });
+
   it('应允许 Agent 认证推送任务分支并通过 hook 拦截主分支', async () => {
     const manager = createManager();
     manager.setSecrets({ githubToken: 'github_pat_agent-push' });

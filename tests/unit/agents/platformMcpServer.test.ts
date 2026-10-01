@@ -42,8 +42,24 @@ describe('cpx platform MCP server', () => {
         'task_status',
         'task_continue',
         'task_cancel',
+        'cli_list',
+        'cli_run',
       ]),
     );
+  });
+
+  it('CLI 工具使用会话 Token 转发，参数错误不调用网络，进程失败标记为工具失败', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ result: { success: false, exitCode: 9, stderr: 'failed' } }), { status: 200 }));
+    const request = { id: 1, method: 'tools/call', params: { name: 'cli_run', arguments: { name: 'feishu', args: ['calendar', '+agenda'] } } };
+    const response = await handlePlatformMcpRequest(request, ENV, fetchMock);
+    expect(response?.result).toMatchObject({ isError: true });
+    expect(fetchMock.mock.calls[0]).toEqual([ENV.CPX_PLATFORM_TOOL_URL, expect.objectContaining({
+      body: JSON.stringify({ taskId: ENV.CPX_PLATFORM_TOOL_TASK_ID, tool: 'cli_run', args: request.params.arguments }),
+    })]);
+    fetchMock.mockClear();
+    const invalid = await handlePlatformMcpRequest({ ...request, params: { name: 'cli_run', arguments: { name: 'feishu', args: 'calendar' } } }, ENV, fetchMock);
+    expect(invalid?.error?.code).toBe(-32602);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('应使用任务 Token 调用 cpx 内部端点', async () => {

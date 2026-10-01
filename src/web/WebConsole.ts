@@ -88,6 +88,7 @@ const GITHUB_TOKEN_PERMISSIONS = {
 } as const;
 
 export interface WebConsoleOptions {
+  cliExtensionsDirectory?: string;
   githubToken?: string;
   githubTokenSource?: GitHubTokenSource;
   githubClientFactory?: GitHubClientFactory;
@@ -142,7 +143,9 @@ export class WebConsole {
     const dataDir = resolve(dirname(storagePath));
     this.settingsPath = join(dataDir, 'console-settings.json');
     this.settings = this.loadSettings();
-    this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
+    this.taskManager = new AgentTaskManager(
+      join(dataDir, 'workspaces'), logger, undefined, options.cliExtensionsDirectory,
+    );
     this.githubToken = options.githubToken?.trim() || undefined;
     this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
     if (this.githubToken) {

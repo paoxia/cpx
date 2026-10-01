@@ -1,6 +1,7 @@
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'fs';
 import { dirname, join, resolve } from 'path';
+import { configureCliExtensionTools } from '../extensions/agentTools';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
@@ -154,7 +155,12 @@ export class AgentTaskManager {
   private repositoryLocks = new Map<string, Promise<void>>();
   private stopped = false;
 
-  constructor(workspaceRoot: string, logger: Logger, repositoryRoot?: string) {
+  constructor(
+    workspaceRoot: string,
+    logger: Logger,
+    repositoryRoot?: string,
+    private readonly cliExtensionsDirectory?: string,
+  ) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.repositoryRoot = resolve(
       repositoryRoot ?? join(dirname(this.workspaceRoot), 'repositories'),
@@ -568,6 +574,9 @@ export class AgentTaskManager {
     if (platformTools) {
       this.configurePlatformTools(args, env, platformTools, Boolean(resumeThreadId));
     }
+    if (!platformTools && this.cliExtensionsDirectory) {
+      configureCliExtensionTools(args, env, this.cliExtensionsDirectory, Boolean(resumeThreadId));
+    }
     await this.runProcess(
       task,
       adapter.command,
@@ -596,7 +605,7 @@ export class AgentTaskManager {
       `mcp_servers.cpx_platform.command=${JSON.stringify(server.command)}`,
       `mcp_servers.cpx_platform.args=${JSON.stringify(server.args)}`,
       'mcp_servers.cpx_platform.env_vars=["CPX_PLATFORM_TOOL_URL","CPX_PLATFORM_TOOL_TOKEN","CPX_PLATFORM_TOOL_TASK_ID","CPX_PLATFORM_NAME"]',
-      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message","github_list_repositories","github_list_branches","task_create","task_list","task_status","task_continue","task_cancel"]',
+      'mcp_servers.cpx_platform.enabled_tools=["platform_get_context","platform_send_message","github_list_repositories","github_list_branches","task_create","task_list","task_status","task_continue","task_cancel","cli_list","cli_run"]',
       'mcp_servers.cpx_platform.default_tools_approval_mode="approve"',
       'mcp_servers.cpx_platform.required=true',
     ];

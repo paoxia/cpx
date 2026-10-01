@@ -73,6 +73,7 @@ secrets/
 credentials.json
 /config/config.yaml
 /config/permissions.yaml
+/config/extensions/
 
 # Docker deployment secrets
 .docker.env

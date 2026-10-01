@@ -36,6 +36,7 @@ Feishu and DingTalk use their official WebSocket/Stream connections, so your NAS
 - **钉钉/飞书远程控制** - 使用官方 WebSocket/Stream 长连接收发机器人消息，无需公网回调
 - **Skill 插件系统** - 从 npm/local/git 安装插件，动态加载执行
 - **MCP 连接器** - 支持 stdio/websocket/http 三种传输协议连接外部 MCP 服务
+- **动态 CLI 扩展** - 用 YAML 注册任意外部 CLI，内置钉钉 `dws`、飞书 `lark-cli` 模板，可授权给 Agent 调用
 - **GitHub 远程操作** - 读取、修改、创建文件并自动创建 PR
 - **Codex 开发控制台** - 以任务会话管理隔离工作区，可在同一任务中持续追加要求
 - **账号模型目录** - 登录后读取与 Codex `/model` 相同的模型列表，并按模型联动推理强度
@@ -59,7 +60,7 @@ cpx doctor
 cpx start --daemon
 ```
 
-浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
+浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或子命令前的全局 `--home <目录>` 覆盖（例如 `cpx --home /path/to/cpx start`）。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
 
 从源码开发时使用：
 
@@ -120,6 +121,23 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 首次使用仓库时，cpx 会把完整 Git 历史克隆到数据库所在目录下的 `repositories/<owner>/<repo>`；后续任务先 fetch 更新缓存，再通过 `git worktree` 创建 `workspaces/<task-id>`。左侧任务列表用于切换或新建任务；同一任务底部输入框可持续接收 prompt，后续轮次复用原分支、worktree 和 `thread_id`，并在会话中保留每轮用户输入与 Agent 最终回复。任务状态、轮次和日志保存在内存中，重启服务后不会恢复，但仓库缓存和工作区文件仍保留在磁盘。
 
 > 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
+
+## 动态扩展 CLI
+
+先在运行 CPX 的同一主机和系统用户下安装、登录所需的外部 CLI，再注册：
+
+```bash
+cpx cli add dingtalk
+cpx cli add feishu
+cpx cli run dingtalk -- calendar event list
+cpx cli run feishu -- calendar +agenda
+
+# 任意其他 CLI 也可以接入
+cpx cli add github --command gh
+cpx cli run github -- repo list
+```
+
+注册默认只供本地调用；通过 `--agent` 和 `--allow` 显式授权后，聊天协调 Agent 和开发任务可用 `cli_list` / `cli_run` 调用。新增、启停和移除即时影响后续调用，无需重启。支持 YAML manifest、环境变量引用、固定参数、超时和输出限制。完整示例和 NAS 图形界面流程见 [动态 CLI 扩展](docs/CLI-EXTENSIONS.md)。
 
 ## 极空间 Docker 部署
 

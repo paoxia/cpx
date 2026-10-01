@@ -53,6 +53,7 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 | `src/github/`         | GitHub REST API、文件读写、功能分支和 Pull Request 流程                             |
 | `src/skills/`         | Skill 安装记录、动态加载、执行超时和受限上下文注入                                  |
 | `src/mcp/`            | JSON-RPC 2.0 与 stdio、WebSocket、HTTP 三种 MCP 传输                                |
+| `src/extensions/`     | 外部 CLI manifest、动态注册、进程执行、授权前缀、审计与 Agent 工具桥接             |
 | `src/agents/`         | 运行消息协调 Codex；同步仓库缓存、创建 worktree、持续运行任务 Codex 并按授权更新 PR |
 | `src/web/`、`public/` | 控制台静态资源、模型设置和任务 HTTP API                                             |
 | `src/permissions/`    | 命令黑名单、Git 分支规则、危险操作确认和审计记录                                    |
@@ -64,7 +65,7 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 1. `MessagingIntegrationManager` 主动建立钉钉 Stream 和飞书 WebSocket 连接；`HttpServer` 的 `/command` 仅用于本地测试与集成调试。
 2. `CommandParser` 去除平台前缀，将飞书和钉钉普通文本转换为 `agent_chat`；仅 `/new`、`/tasks`、`/status`、`/stop`、`/help` 和确认流程保留确定性入口。旧文本命令继续兼容；当会话已有任务时，`AgentSystem` 会把非生命周期文本改回 `agent_chat`，避免旧命令抢走 Codex 上下文。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
-4. 当前会话没有任务时，`MessagingCoordinator` 在独立非 Git 目录中用只读沙箱启动或恢复 Codex。协调 Codex 只能通过 `cpx_platform` 查询仓库/分支和管理当前用户任务；仓库明确后由工具创建异步开发任务。已有任务时，文本直接恢复 worktree 中的任务 Codex。
+4. 当前会话没有任务时，`MessagingCoordinator` 在独立非 Git 目录中用只读沙箱启动或恢复 Codex。协调 Codex 通过 `cpx_platform` 查询仓库/分支、管理当前用户任务，也可调用显式授权的业务 CLI；仓库明确后由工具创建异步开发任务。已有任务时，文本直接恢复 worktree 中的任务 Codex。
 5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
 控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，但强制使用 `--skip-git-repo-check` 与只读沙箱。创建任务时，控制台或协调工具可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
@@ -83,10 +84,15 @@ SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations
 
 ## 扩展方式
 
+外部业务 CLI 由 `src/extensions/CliExtensionRegistry.ts` 统一注册与执行。每个扩展的 manifest 保存在配置目录下的 `extensions/<name>.yaml`，每次发现和调用都重新读取并通过 Zod 校验；进程用固定可执行文件与参数数组启动，不经过 shell。注册信息与外部 CLI 安装、登录独立，钉钉/飞书仅提供 `dws` / `lark-cli` 模板。CLI 执行器负责 Agent 授权前缀、环境变量引用、超时、输出上限、已知密钥脱敏和不含参数及输出的文件审计。
+
+聊天协调会话与聊天开发任务在已有 `cpx_platform` MCP 中提供 `cli_list` / `cli_run`，由服务端验证会话/任务 Token 后调用执行器，并保留 SQLite 调用审计。Web 开发任务由 `AgentTaskManager` 在每轮 CLI 参数中注入本地 `cpx_cli` stdio MCP；注册目录通过环境传递，无需修改全局 Codex 配置。注册默认不给 Agent 授权；授权后是实例级能力，不会自动转换为当前聊天用户的业务权限。完整注册格式见 [CLI 扩展](docs/CLI-EXTENSIONS.md)。
+
 - 新命令：在 `CommandParser` 中定义语法，并通过 `CommandRouter.register` 注册处理器。
 - 新聊天平台：实现消息校验、解析和结果推送，然后在 `AgentSystem` 中注册路由。
 - 新 MCP 传输：实现 `Transport` 接口并在 `MCPManager` 中创建实例。
 - 新 Skill：提供带 `skill.permissions` 的 npm 包并导出 `execute(ctx)`。
+- 新业务 CLI：用 `cpx cli add` 或 YAML manifest 注册可执行文件、参数和授权前缀，无需修改适配器代码。
 - 新 Coding Agent：在 `AgentTaskManager.runAgent` 中增加经过输入约束的非交互 CLI 适配。Agent 可在受控 GitHub 认证和 pre-push 主分支保护下推送任务分支；Pull Request 仍由管理器统一创建或更新。
 
 ## 当前边界

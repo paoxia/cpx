@@ -1,0 +1,19 @@
+# 自定义 CLI 注册示例：在开发机或普通 CLI 主机执行
+# cpx cli add github --file config/cli-extension.example.yaml
+# 已安装并完成登录的 gh CLI 才能执行 GitHub 请求。
+version: 1
+name: github
+description: 'GitHub CLI；使用 repo list 列出仓库。参数帮助见 gh repo list --help。'
+command: gh
+args: []
+enabled: true
+agentEnabled: true
+allowedPrefixes:
+  - ['--help']
+  - ['--version']
+  - ['repo', 'list']
+timeoutMs: 30000
+maxOutputBytes: 131072
+# env 的值为服务环境中的变量名，不能填写令牌本身。
+env:
+  GH_TOKEN: AGENT_GITHUB_TOKEN

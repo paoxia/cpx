@@ -12,6 +12,7 @@
     "dist",
     "config/config.example.yaml",
     "config/permissions.example.yaml",
+    "config/cli-extension.example.yaml",
     "config/mihomo.example.yaml",
     "public"
   ],

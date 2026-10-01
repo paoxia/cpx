@@ -5,6 +5,7 @@
 | 想了解什么 | 文档 |
 |---|---|
 | 安装、配置和使用 | [项目 README](../README.md) |
+| 动态接入钉钉、飞书及任意外部 CLI | [CLI 扩展](CLI-EXTENSIONS.md) |
 | 极空间 Docker 部署、离线镜像与出站代理 | [部署指南](DEPLOYMENT.md) |
 | 在极空间试运行当前开发代码 | [NAS 开发调试指南](NAS-DEBUGGING.md) |
 | 系统如何组成 | [系统架构](../ARCHITECTURE.md) |

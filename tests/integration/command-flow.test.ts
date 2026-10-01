@@ -5,6 +5,7 @@ import { AgentSystem } from '../../src/core/AgentSystem';
 import type { AgentTask } from '../../src/agents/AgentTaskManager';
 import type { MessagingCoordinatorRunner } from '../../src/agents/MessagingCoordinator';
 import packageMetadata from '../../package.json';
+import { CliExtensionRegistry } from '../../src/extensions/CliExtensionRegistry';
 
 const TMP_DIR = join(process.cwd(), 'tmp-test-pipeline');
 const MCP_TMP_DIR = join(process.cwd(), 'tmp-test-mcp-pipeline');
@@ -332,6 +333,22 @@ describe('命令管道集成测试', () => {
         ]),
       },
     });
+
+    // 注册后已启动的服务立即发现扩展；仍要求当前任务 Token。
+    const cliRegistry = new CliExtensionRegistry(join(TMP_DIR, 'extensions'));
+    cliRegistry.add({ name: 'sample', command: process.execPath, args: ['-e', 'console.log("cli-ok")'],
+      agentEnabled: true, allowedPrefixes: [['read']] });
+    const cliCall = (tool: string, args: unknown, token = platformToolContext!.token) => fetch(platformToolContext!.endpoint, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskId, tool, args }),
+    });
+    expect((await cliCall('cli_run', { name: 'sample', args: ['read'] }, 'wrong-token')).status).toBe(401);
+    expect(await (await cliCall('cli_list', {})).json()).toMatchObject({ result: [{ name: 'sample' }] });
+    expect(await (await cliCall('cli_run', { name: 'sample', args: ['read'] })).json()).toMatchObject({ result: { success: true, stdout: 'cli-ok\n' } });
+    expect((await cliCall('cli_run', { name: 'sample', args: ['delete'] })).status).toBe(400);
+    cliRegistry.setEnabled('sample', false);
+    expect(await (await cliCall('cli_list', {})).json()).toMatchObject({ result: [] });
+    expect((await cliCall('cli_run', { name: 'sample', args: ['read'] })).status).toBe(400);
 
     const repositoriesResponse = await fetch(platformToolContext!.endpoint, {
       method: 'POST',

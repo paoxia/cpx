@@ -9,6 +9,7 @@
 **/tmp
 **/tmp-test-*
 **/temp
+config/extensions
 **/*.tmp
 **/*.log
 .env

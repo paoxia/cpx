@@ -22,3 +22,9 @@ export { MCPManager } from './mcp/MCPManager';
 
 export * from './core/types';
 export * from './utils/errors';
+
+export { CliExtensionRegistry, cliExecutionFailed } from './extensions/CliExtensionRegistry';
+export type { CliExecutionResult } from './extensions/CliExtensionRegistry';
+export { CliExtensionSchema, CliArgumentsSchema, ExtensionNameSchema } from './extensions/schema';
+export type { CliExtension, CliExtensionInput } from './extensions/schema';
+export { CLI_PRESETS } from './extensions/presets';

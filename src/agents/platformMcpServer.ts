@@ -1,3 +1,6 @@
+import { CLI_EXTENSION_TOOLS } from '../extensions/tools';
+import { CliRunInputSchema } from '../extensions/schema';
+
 interface JsonRpcRequest {
   jsonrpc?: string;
   id?: string | number | null;
@@ -15,6 +18,7 @@ interface JsonRpcResponse {
 type FetchLike = typeof fetch;
 
 const TOOLS = [
+  ...CLI_EXTENSION_TOOLS,
   {
     name: 'platform_get_context',
     description:
@@ -166,6 +170,9 @@ export async function handlePlatformMcpRequest(
   if (!TOOLS.some((tool) => tool.name === name)) {
     return failure(id, -32602, `不支持的工具：${name || 'unknown'}`);
   }
+  if (name === 'cli_run' && !CliRunInputSchema.safeParse(params?.arguments ?? {}).success) {
+    return failure(id, -32602, 'CLI 参数无效：需要 name 和字符串数组 args');
+  }
   if (name === 'platform_send_message') {
     const text = params?.arguments?.text;
     if (typeof text !== 'string' || !text.trim() || text.length > 6000) {
@@ -220,7 +227,10 @@ export async function handlePlatformMcpRequest(
     return toolResult(
       id,
       typeof payload.result === 'string' ? payload.result : JSON.stringify(payload.result ?? {}),
-      false,
+      name === 'cli_run' && Boolean(
+        payload.result && typeof payload.result === 'object' &&
+        'success' in payload.result && !payload.result.success,
+      ),
     );
   } catch (error) {
     return toolResult(id, `平台工具调用失败：${errorMessage(error)}`, true);
