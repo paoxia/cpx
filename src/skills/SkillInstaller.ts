@@ -1,6 +1,6 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, readFileSync, mkdirSync } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve, delimiter } from 'path';
 import { Logger } from '../utils/Logger';
 import { SkillError } from '../utils/errors';
 import { SkillManifestSchema } from '../config/schema';
@@ -26,6 +26,8 @@ export class SkillInstaller {
 
   /** 安装 Skill */
   async install(source: SkillSource, identifier: string): Promise<InstalledSkill> {
+    if (!identifier || identifier.startsWith('-') || /[\r\n\0]/.test(identifier))
+      throw new SkillError('无效 Skill 来源');
     const skillsDir = this.installPath;
     this.logger.info(`安装 Skill: ${identifier} (来源: ${source})`);
 
@@ -33,7 +35,12 @@ export class SkillInstaller {
     let sourceUrl: string;
 
     if (source === 'npm') {
-      pkgName = identifier;
+      const match = identifier.match(
+        /^(@[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+|[a-zA-Z0-9_.-]+)(?:@([^/]+))?$/,
+      );
+      if (!match || match[2]?.startsWith('npm:'))
+        throw new SkillError('请使用 npm 包名及可选版本，其他来源选择 local 或 git');
+      pkgName = match[1];
       sourceUrl = `npm:${identifier}`;
     } else if (source === 'local') {
       const localPath = resolve(identifier);
@@ -43,23 +50,50 @@ export class SkillInstaller {
       pkgName = this.readLocalPackageName(localPath);
       sourceUrl = localPath;
     } else if (source === 'git') {
-      pkgName = identifier.split('/').pop()?.replace(/\.git$/, '') ?? identifier;
+      pkgName =
+        identifier
+          .split('/')
+          .pop()
+          ?.replace(/\.git$/, '') ?? identifier;
       sourceUrl = identifier;
     } else {
       throw new SkillError(`不支持的安装源: ${source}`);
     }
 
+    const manifestPath = join(skillsDir, 'package.json');
+    const previousDependencies = existsSync(manifestPath)
+      ? ((JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ?? {}) as Record<
+          string,
+          string
+        >)
+      : {};
     // 执行 npm install
     try {
-      execSync(`npm install --prefix "${skillsDir}" ${identifier}`, {
-        stdio: 'pipe',
-        encoding: 'utf8',
-        timeout: 120000,
-      });
+      this.runNpm(['install', '--prefix', skillsDir, '--', identifier], 120000);
     } catch (err) {
       throw new SkillError(`Skill 安装失败: ${(err as Error).message}`);
     }
 
+    if (source === 'git' && existsSync(manifestPath)) {
+      const dependencies = (JSON.parse(readFileSync(manifestPath, 'utf8')).dependencies ??
+        {}) as Record<string, string>;
+      const changed = Object.keys(dependencies).filter(
+        (name) => dependencies[name] !== previousDependencies[name],
+      );
+      if (changed.length === 1) pkgName = changed[0];
+      else {
+        const normalized = identifier.replace(/^git\+/, '');
+        const matched = Object.entries(dependencies).find(
+          ([, value]) => value.replace(/^git\+/, '') === normalized,
+        );
+        if (matched) pkgName = matched[0];
+      }
+    }
+    if (
+      !/^(@[a-zA-Z0-9_.-]+\/)?[a-zA-Z0-9_.-]+$/.test(pkgName) ||
+      pkgName.split('/').some((part) => part === '.' || part === '..')
+    )
+      throw new SkillError('Skill 包名无效');
     // 读取 package.json 获取 manifest
     const pkgPath = join(skillsDir, 'node_modules', pkgName, 'package.json');
     if (!existsSync(pkgPath)) {
@@ -126,17 +160,28 @@ export class SkillInstaller {
     }
 
     try {
-      execSync(`npm uninstall --prefix "${this.installPath}" ${name}`, {
-        stdio: 'pipe',
-        encoding: 'utf8',
-        timeout: 60000,
-      });
+      this.runNpm(['uninstall', '--prefix', this.installPath, '--', name], 60000);
     } catch (err) {
       this.logger.warn(`npm uninstall 失败（将继续删除记录）: ${(err as Error).message}`);
     }
 
     this.db.prepare(`DELETE FROM skills WHERE name = ?`).run(name);
     this.logger.info(`Skill ${name} 已卸载`);
+  }
+
+  private runNpm(args: string[], timeout: number): void {
+    if (process.platform !== 'win32') {
+      execFileSync('npm', args, { stdio: 'pipe', encoding: 'utf8', timeout });
+      return;
+    }
+    // Execute npm's JS entry with Node; never interpolate user arguments into cmd.exe.
+    const candidates = [
+      dirname(process.execPath),
+      ...(process.env.PATH ?? '').split(delimiter),
+    ].map((directory) => join(directory, 'node_modules', 'npm', 'bin', 'npm-cli.js'));
+    const entry = candidates.find((path) => existsSync(path));
+    if (!entry) throw new SkillError('未找到 npm CLI，请检查 Node.js/npm 安装');
+    execFileSync(process.execPath, [entry, ...args], { stdio: 'pipe', encoding: 'utf8', timeout });
   }
 
   /** 列出已安装 Skill */

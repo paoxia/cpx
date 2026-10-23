@@ -2,6 +2,20 @@
  * 数据库表结构定义
  */
 export const MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS workbench_records (
+    kind TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+    PRIMARY KEY(kind,id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS coding_tasks (
+    id TEXT PRIMARY KEY, status TEXT NOT NULL, owner_id TEXT NOT NULL,
+    project_id TEXT, snapshot TEXT NOT NULL, updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_coding_tasks_owner ON coding_tasks(owner_id,status)`,
+  `CREATE TABLE IF NOT EXISTS coding_turns (
+    id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES coding_tasks(id),
+    position INTEGER NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL,
+    UNIQUE(task_id,position)
+  )`,
   `CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     command_id TEXT NOT NULL,

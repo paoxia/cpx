@@ -13,6 +13,7 @@ export interface Command {
   userName: string;
   /** 消息平台会话路由，不作为用户身份或权限标识。 */
   replyRouteId?: string;
+  isGroup?: boolean;
   rawText: string;
   name: string;
   args: Record<string, unknown>;
@@ -34,12 +35,7 @@ export interface CommandResult {
 
 export type TaskType = 'skill_execute' | 'mcp_call' | 'github_op' | 'agent_delegate';
 export type TaskStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'timeout'
-  | 'awaiting_confirmation';
+  'pending' | 'running' | 'completed' | 'failed' | 'timeout' | 'awaiting_confirmation';
 
 export interface Task {
   id: string;

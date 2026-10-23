@@ -146,10 +146,11 @@ elements.repositorySearch.addEventListener('input', renderRepositories);
 
 async function init() {
   try {
-    await loadSettings();
+    await window.Cpx?.ready();
+    if (!window.Cpx || window.Cpx.principal?.role === 'admin') await loadSettings();
     await refreshTasks();
     try {
-      await loadGitHubStatus();
+      if (!window.Cpx || window.Cpx.principal?.role === 'admin') await loadGitHubStatus();
     } catch (error) {
       console.error(error);
       renderTaskRepositoryPicker();
@@ -999,6 +1000,13 @@ async function refreshTasks() {
   try {
     const result = await api('/api/console/tasks');
     state.tasks = result.tasks || [];
+    if (state.selectedTaskId && state.tasks.some((t) => t.id === state.selectedTaskId)) {
+      const task = await api(`/api/console/task?id=${encodeURIComponent(state.selectedTaskId)}`);
+      state.tasks[state.tasks.findIndex((t) => t.id === task.id)] = task;
+    }
+    const deepLink = new URLSearchParams(window.location.search).get('task');
+    if (!state.selectedTaskId && deepLink && state.tasks.some((t) => t.id === deepLink))
+      state.selectedTaskId = deepLink;
     if (!state.selectedTaskId && !state.creatingTask && state.tasks.length) {
       state.selectedTaskId = state.tasks[0].id;
       state.creatingTask = false;
@@ -1033,11 +1041,14 @@ async function createTask() {
         repository: elements.repository.value,
         baseBranch: selectedTaskBaseBranch(),
         taskBranch: elements.taskBranch.value || undefined,
+        ...window.Cpx?.taskOptions(),
+        idempotencyKey: window.Cpx?.requestKey('create'),
         prompt: elements.prompt.value,
       }),
     });
     state.selectedTaskId = task.id;
     state.creatingTask = false;
+    window.Cpx?.clearRequestKey('create');
     state.tasks.unshift(task);
     elements.prompt.value = '';
     updatePromptCount();
@@ -1062,8 +1073,14 @@ async function continueSelectedTask(task) {
   try {
     const continued = await api('/api/console/task/continue', {
       method: 'POST',
-      body: JSON.stringify({ id: task.id, prompt, useFallback: false }),
+      body: JSON.stringify({
+        id: task.id,
+        prompt,
+        useFallback: false,
+        idempotencyKey: window.Cpx?.requestKey(`continue:${task.id}`),
+      }),
     });
+    window.Cpx?.clearRequestKey(`continue:${task.id}`);
     const index = state.tasks.findIndex((item) => item.id === continued.id);
     if (index >= 0) state.tasks[index] = continued;
     elements.prompt.value = '';
@@ -1145,8 +1162,15 @@ function renderTaskDetail() {
     return;
   }
 
-  const active = ['queued', 'preparing', 'running', 'publishing'].includes(task.status);
-  const canContinue = !active && task.workspace && task.agentBranch;
+  const active = ['queued', 'preparing', 'running', 'publishing', 'verifying'].includes(
+    task.status,
+  );
+  const canContinue =
+    !active &&
+    task.workspace &&
+    task.agentBranch &&
+    !task.archivedAt &&
+    task.status !== 'interrupted';
   const runDetailsOpen = state.runDetailsOpenTaskIds.has(task.id);
   elements.threadHeading.innerHTML = `
     <div class="thread-title-row">
@@ -1171,6 +1195,7 @@ function renderTaskDetail() {
       <time>${escapeHtml(formatTime(task.updatedAt))}</time>
       </div>`;
 
+  window.Cpx?.renderTask(task, elements.taskDetail);
   const runDetails = elements.taskDetail.querySelector('.run-details');
   const taskOutput = runDetails?.querySelector('.task-output');
   restoreTaskOutputScroll(task.id, taskOutput);
@@ -1350,8 +1375,12 @@ function updatePromptCount() {
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...window.Cpx?.headers(),
+      ...(options.headers || {}),
+    },
   });
   const data = await response.json();
   if (!response.ok) {
@@ -1378,6 +1407,9 @@ function statusLabel(status) {
       completed: '已完成',
       failed: '失败',
       cancelled: '已取消',
+      interrupted: '已中断',
+      review: '待审查',
+      verifying: '验证中',
     }[status] || status
   );
 }

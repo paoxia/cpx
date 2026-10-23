@@ -8,6 +8,8 @@
 | 极空间 Docker 部署、离线镜像与出站代理 | [部署指南](DEPLOYMENT.md) |
 | 在极空间试运行当前开发代码 | [NAS 开发调试指南](NAS-DEBUGGING.md) |
 | 系统如何组成 | [系统架构](../ARCHITECTURE.md) |
+| 登录、任务恢复、审查发布、项目和远程执行 | [工作站指南](WORKBENCH.md) |
+| P0–P2 实施范围与验证记录 | [实施记录](plans/product-evolution-implementation.md) |
 | 产品为谁解决什么问题 | [产品说明](PRODUCT.md) |
 | 产品还可以怎样进化、建议优先做什么 | [产品演进提案](PRODUCT-EVOLUTION.md) |
 | 如何开发和验证改动 | [开发指南](DEVELOPMENT.md) |

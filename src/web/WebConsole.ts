@@ -1,3 +1,8 @@
+import { RemoteExecutors } from '../workbench/Remote';
+import { AccessControl } from '../workbench/Access';
+import { WorkbenchStore } from '../workbench/Store';
+import { Workbench, ExtensionOperations } from '../workbench/Workbench';
+import type { TaskOptions, TaskOrigin } from '../agents/AgentTaskManager';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
@@ -88,6 +93,13 @@ const GITHUB_TOKEN_PERMISSIONS = {
 } as const;
 
 export interface WebConsoleOptions {
+  store?: WorkbenchStore;
+  access?: AccessControl;
+  extensions?: ExtensionOperations;
+  taskGuard?: (action: string, task: AgentTask) => void;
+  extensionEndpoint?: string;
+  fence?: () => void;
+  protectedBranches?: string[];
   githubToken?: string;
   githubTokenSource?: GitHubTokenSource;
   githubClientFactory?: GitHubClientFactory;
@@ -104,7 +116,7 @@ export interface WebConsoleOptions {
   modelTester?: ModelConfigurationTestRunner;
 }
 
-export interface ConsoleCodingTaskRequest {
+export interface ConsoleCodingTaskRequest extends TaskOptions {
   repository: string;
   baseBranch?: string;
   taskBranch?: string;
@@ -115,6 +127,8 @@ export interface ConsoleCodingTaskRequest {
 
 /** 注册开发控制台页面、设置和 Agent 任务 API。 */
 export class WebConsole {
+  readonly workbench?: Workbench;
+  readonly access?: AccessControl;
   private settings: ConsoleSettings;
   private settingsPath: string;
   private taskManager: AgentTaskManager;
@@ -142,7 +156,30 @@ export class WebConsole {
     const dataDir = resolve(dirname(storagePath));
     this.settingsPath = join(dataDir, 'console-settings.json');
     this.settings = this.loadSettings();
-    this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
+    this.access = options.access;
+    this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger, undefined, {
+      store: options.store,
+      onTerminal: (task) => this.workbench?.terminal(task),
+      guard: options.taskGuard,
+      fence: options.fence,
+      protectedBranches: options.protectedBranches,
+      extensionTools: (task) =>
+        options.extensionEndpoint
+          ? this.workbench?.extensionTools(task, options.extensionEndpoint)
+          : undefined,
+    });
+    if (options.store && options.access) {
+      this.workbench = new Workbench(options.store, options.access, this.taskManager, {
+        dataDir,
+        createTask: (request) =>
+          this.taskManager.create({
+            ...request,
+            configurations: this.executionConfigurations(true),
+          }),
+        extensions: options.extensions,
+        integrationStatus: options.getMessagingConfiguration,
+      });
+    }
     this.githubToken = options.githubToken?.trim() || undefined;
     this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
     if (this.githubToken) {
@@ -160,6 +197,14 @@ export class WebConsole {
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
+    this.workbench?.attach(httpServer);
+    if (this.workbench && this.access && options.store)
+      new RemoteExecutors(
+        options.store,
+        this.access,
+        this.taskManager,
+        () => this.workbench!.runtimeSettings().remoteEnabled,
+      ).attach(httpServer);
   }
 
   async inspectGitHub(): Promise<GitHubConnection> {
@@ -175,13 +220,21 @@ export class WebConsole {
   }
 
   createCodingTask(request: ConsoleCodingTaskRequest): AgentTask {
+    const prepared = this.workbench
+      ? this.workbench.prepare(
+          { ...request, provider: 'codex' },
+          this.access?.account(request.ownerId ?? 'admin'),
+        )
+      : request;
     return this.taskManager.create({
+      ...prepared,
       configurations: this.executionConfigurations(request.useFallback !== false),
-      repository: request.repository,
-      baseBranch: request.baseBranch,
-      taskBranch: request.taskBranch,
-      prompt: request.prompt,
-      createPullRequest: request.createPullRequest,
+      repository: prepared.repository,
+      baseBranch: prepared.baseBranch,
+      taskBranch: prepared.taskBranch,
+      prompt: prepared.prompt,
+      createPullRequest:
+        prepared.policy === 'auto' || (!prepared.policy && request.createPullRequest),
     });
   }
 
@@ -217,10 +270,13 @@ export class WebConsole {
     prompt: string,
     useFallback = true,
     createPullRequest?: boolean,
+    options: TaskOptions & { newSession?: boolean } = {},
   ): AgentTask {
     const task = this.getCodingTask(reference);
     if (!task) throw new Error('任务不存在');
     return this.taskManager.continueTask(task.id, {
+      ...this.workbench?.continuation(task.id),
+      ...options,
       prompt,
       configurations: this.executionConfigurations(useFallback),
       createPullRequest,
@@ -232,7 +288,18 @@ export class WebConsole {
   }
 
   async stop(): Promise<void> {
+    await this.workbench?.stop();
     await Promise.all([this.taskManager.stop(), this.agentAuth.stop()]);
+  }
+
+  start(): void {
+    this.workbench?.start();
+  }
+  getTaskManager(): AgentTaskManager {
+    return this.taskManager;
+  }
+  bindCodingTask(id: string, origin: TaskOrigin): void {
+    this.taskManager.bindOrigin(id, origin);
   }
 
   private registerAssets(httpServer: HttpServer): void {
@@ -488,11 +555,31 @@ export class WebConsole {
       }
     });
 
-    httpServer.register('GET', '/api/console/tasks', async () => ({
-      status: 200,
-      body: { tasks: this.taskManager.list() },
-      headers: API_HEADERS,
-    }));
+    httpServer.register('GET', '/api/console/tasks', async (_body, headers, query) => {
+      const tasks = this.taskManager
+        .list()
+        .filter(
+          (task) => !this.access || this.access.canTask(this.access.principal(headers), task),
+        );
+      const offset = Math.max(0, Number.parseInt(query.offset || '0', 10) || 0);
+      const limit = Math.min(200, Math.max(1, Number.parseInt(query.limit || '100', 10) || 100));
+      return {
+        status: 200,
+        body: {
+          tasks: tasks
+            .slice(offset, offset + limit)
+            .map((task) => ({
+              ...task,
+              logs: task.logs.slice(-5),
+              result: task.result ? { ...task.result, diff: '' } : undefined,
+            })),
+          total: tasks.length,
+          offset,
+          limit,
+        },
+        headers: API_HEADERS,
+      };
+    });
 
     httpServer.register('GET', '/api/console/task', async (_body, _headers, query) => {
       if (!query.id) {
@@ -500,11 +587,15 @@ export class WebConsole {
       }
       const task = this.taskManager.get(query.id);
       return task
-        ? { status: 200, body: task, headers: API_HEADERS }
+        ? {
+            status: 200,
+            body: { ...task, result: task.result ? { ...task.result, diff: '' } : undefined },
+            headers: API_HEADERS,
+          }
         : { status: 404, body: { error: '任务不存在' }, headers: API_HEADERS };
     });
 
-    httpServer.register('POST', '/api/console/tasks', async (body) => {
+    httpServer.register('POST', '/api/console/tasks', async (body, headers) => {
       try {
         const payload = parseJson<{
           provider?: CodingAgentProvider;
@@ -516,29 +607,39 @@ export class WebConsole {
           prompt?: string;
           createPullRequest?: boolean;
           useFallback?: boolean;
+          projectId?: string;
+          policy?: 'local' | 'review' | 'auto';
+          idempotencyKey?: string;
         }>(body);
         const usesLegacySelection = Boolean(
           payload.provider || payload.providers || payload.model !== undefined,
         );
-        const task = usesLegacySelection
-          ? this.taskManager.create({
-              provider: payload.provider,
-              providers: payload.providers,
-              model: payload.model,
+        const task = this.workbench
+          ? this.createCodingTask({
+              ...payload,
               repository: payload.repository ?? '',
-              baseBranch: payload.baseBranch,
-              taskBranch: payload.taskBranch,
               prompt: payload.prompt ?? '',
-              createPullRequest: payload.createPullRequest,
+              ownerId: this.access!.principal(headers).id,
             })
-          : this.createCodingTask({
-              repository: payload.repository ?? '',
-              baseBranch: payload.baseBranch,
-              taskBranch: payload.taskBranch,
-              prompt: payload.prompt ?? '',
-              createPullRequest: payload.createPullRequest,
-              useFallback: payload.useFallback,
-            });
+          : usesLegacySelection
+            ? this.taskManager.create({
+                provider: payload.provider,
+                providers: payload.providers,
+                model: payload.model,
+                repository: payload.repository ?? '',
+                baseBranch: payload.baseBranch,
+                taskBranch: payload.taskBranch,
+                prompt: payload.prompt ?? '',
+                createPullRequest: payload.createPullRequest,
+              })
+            : this.createCodingTask({
+                repository: payload.repository ?? '',
+                baseBranch: payload.baseBranch,
+                taskBranch: payload.taskBranch,
+                prompt: payload.prompt ?? '',
+                createPullRequest: payload.createPullRequest,
+                useFallback: payload.useFallback,
+              });
         return { status: 202, body: task };
       } catch (error) {
         return { status: 400, body: { error: errorMessage(error) } };
@@ -552,6 +653,8 @@ export class WebConsole {
           prompt?: string;
           useFallback?: boolean;
           createPullRequest?: boolean;
+          idempotencyKey?: string;
+          newSession?: boolean;
         }>(body);
         if (!payload.id) throw new Error('id is required');
         const task = this.continueCodingTask(
@@ -559,6 +662,7 @@ export class WebConsole {
           payload.prompt ?? '',
           payload.useFallback !== false,
           payload.createPullRequest,
+          { idempotencyKey: payload.idempotencyKey, newSession: payload.newSession },
         );
         return { status: 202, body: task, headers: API_HEADERS };
       } catch (error) {

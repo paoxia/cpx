@@ -1,3 +1,9 @@
+import type { Project } from '../workbench/Workbench';
+import { InstanceLock } from '../workbench/InstanceLock';
+import { WorkbenchStore } from '../workbench/Store';
+import { AccessControl } from '../workbench/Access';
+import { MCPConnectionConfigSchema } from '../config/schema';
+import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { dirname, join, resolve } from 'path';
 import { ConfigManager } from '../config/ConfigManager';
@@ -28,6 +34,7 @@ import packageMetadata from '../../package.json';
 const VERSION = packageMetadata.version;
 
 interface MessagingTaskOrigin {
+  isGroup?: boolean;
   source: CommandSource;
   userId: string;
   userName: string;
@@ -37,6 +44,7 @@ interface MessagingTaskOrigin {
 }
 
 interface MessagingCoordinatorConversation {
+  isGroup?: boolean;
   id: string;
   key: string;
   source: 'dingtalk' | 'feishu';
@@ -50,6 +58,7 @@ interface MessagingCoordinatorConversation {
 }
 
 interface PlatformToolOrigin {
+  isGroup?: boolean;
   source: 'dingtalk' | 'feishu';
   userId: string;
   userName: string;
@@ -89,6 +98,9 @@ export class AgentSystem {
   private router: CommandRouter;
   private formatter: ResponseFormatter;
   private database: DatabaseService;
+  private store: WorkbenchStore;
+  private access: AccessControl;
+  private instanceLock: InstanceLock;
   private permissionManager: PermissionManager;
   private confirmationStore: PendingConfirmationStore;
   private auditLogger: AuditLogger;
@@ -105,6 +117,7 @@ export class AgentSystem {
   private messagingCoordinatorScopes = new Map<string, MessagingCoordinatorConversation>();
   private detachedMessagingConversations = new Set<string>();
   private running = false;
+  private closed = false;
   private resultPusher?: (
     source: CommandSource,
     userId: string,
@@ -117,6 +130,7 @@ export class AgentSystem {
     this.config = this.configManager.load();
     this.logger = new Logger(this.config.logging.level, this.config.logging.file);
     const dataDir = resolve(dirname(this.config.storage.path));
+    this.instanceLock = new InstanceLock(dataDir);
     this.messagingCoordinator =
       options.messagingCoordinator ??
       new MessagingCoordinator(join(dataDir, 'messaging-coordinator'), this.logger);
@@ -128,6 +142,25 @@ export class AgentSystem {
 
     // 存储与权限
     this.database = new DatabaseService(this.config.storage.path, this.logger);
+    this.store = new WorkbenchStore(this.database);
+    this.access = new AccessControl(this.store, dataDir);
+    this.access.attach(this.httpServer, (id) => this.webConsole?.getCodingTask(id));
+    this.httpServer.use(async ({ method, path }) => {
+      if (method !== 'POST') return;
+      const operation =
+        path === '/api/console/tasks'
+          ? 'agent_develop'
+          : path.endsWith('/continue') || path.endsWith('/resume') || path.endsWith('/input-run')
+            ? 'agent_task_continue'
+            : path.endsWith('/cancel')
+              ? 'agent_task_cancel'
+              : path.endsWith('/publish')
+                ? 'agent_publish'
+                : undefined;
+      if (operation && this.config.permissions.operations.blacklist.includes(operation))
+        return { status: 403, body: { error: '该操作已被权限配置禁止' } };
+      return;
+    });
     this.confirmationStore = new PendingConfirmationStore(
       this.database,
       this.config.permissions.confirmationTtl,
@@ -142,6 +175,7 @@ export class AgentSystem {
       this.config.feishu,
       this.logger,
       (text, userInfo) => this.processCommand(text, userInfo),
+      this.store,
     );
 
     // GitHub 服务
@@ -164,6 +198,95 @@ export class AgentSystem {
 
     // Web 开发控制台：模型配置、GitHub 工作区和 Coding Agent 任务
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
+      store: this.store,
+      access: this.access,
+      fence: () => this.instanceLock.assert(),
+      protectedBranches: this.config.permissions.git.protectedBranches,
+      extensionEndpoint: this.platformToolEndpoint().replace(
+        'agent-platform-tool',
+        'task-extension',
+      ),
+      taskGuard: (action, task) => {
+        const identity = this.store.get<{ userId: string }>('identity', task.ownerId ?? '');
+        const principal = this.access.account(identity?.userId ?? task.ownerId ?? 'admin');
+        if (
+          !principal ||
+          !this.access.canTask(
+            principal,
+            task,
+            action === 'publish' && task.policy !== 'auto' ? 'publish' : 'write',
+          )
+        )
+          throw new Error('任务身份或项目授权已撤销');
+        const operation =
+          action === 'publish'
+            ? 'agent_publish'
+            : task.turns.length > 1
+              ? 'agent_task_continue'
+              : 'agent_develop';
+        if (this.config.permissions.operations.blacklist.includes(operation))
+          throw new Error('该任务操作被禁止');
+        if (
+          action === 'publish' &&
+          this.config.permissions.git.protectedBranches.includes(task.agentBranch ?? '')
+        )
+          throw new Error('禁止推送受保护分支');
+      },
+      extensions: {
+        execute: async (input, task) => {
+          const [kind, ...parts] = input.name.split(':');
+          const name = parts.join(':');
+          if (kind === 'skill')
+            return this.skillManager.execute(
+              name,
+              input.args ?? {},
+              task.id,
+              task.policy !== 'auto',
+              { repository: task.repository, branch: task.agentBranch },
+            );
+          if (kind === 'mcp') {
+            const method = input.method ?? 'tools/list';
+            if (
+              task.policy !== 'auto' &&
+              ![
+                'tools/list',
+                'resources/list',
+                'resources/read',
+                'prompts/list',
+                'prompts/get',
+              ].includes(method)
+            )
+              throw new Error('扩展只允许只读 MCP 方法');
+            return this.mcpManager.call(name, method, input.args);
+          }
+          throw new Error('扩展名称必须使用 skill: 或 mcp: 前缀');
+        },
+        list: () => ({
+          skills: this.skillInstaller.listInstalled(),
+          mcp: this.mcpManager.list().map(({ env: _env, ...connection }) => connection),
+          isolation: 'Skills run in supervised subprocesses; this is not an OS security sandbox.',
+        }),
+        perform: async (input) => {
+          const action = z
+            .enum(['skill-install', 'skill-uninstall', 'mcp-connect', 'mcp-disconnect'])
+            .parse(input.action);
+          if (action === 'skill-install')
+            return this.skillInstaller.install(
+              z.enum(['npm', 'local', 'git']).parse(input.source),
+              z.string().min(1).max(2048).parse(input.identifier),
+            );
+          if (action === 'skill-uninstall') {
+            const name = z.string().parse(input.name);
+            this.skillLoader.unload(name);
+            await this.skillInstaller.uninstall(name);
+            return { success: true };
+          }
+          if (action === 'mcp-connect')
+            return this.mcpManager.connect(MCPConnectionConfigSchema.parse(input.config));
+          await this.mcpManager.disconnect(z.string().parse(input.name));
+          return { success: true };
+        },
+      },
       githubToken: this.config.github.token,
       githubTokenSource: process.env.AGENT_GITHUB_TOKEN?.trim()
         ? 'environment'
@@ -218,6 +341,38 @@ export class AgentSystem {
     this.registerMcpHandlers();
     this.registerPlatformToolEndpoint();
     this.registerTestEndpoint();
+    for (const task of this.webConsole.listCodingTasks()) {
+      if (task.origin) {
+        const origin = task.origin as MessagingTaskOrigin;
+        this.bindMessagingTask(task, {
+          id: origin.commandId,
+          source: origin.source,
+          userId: origin.userId,
+          userName: origin.userName,
+          replyRouteId: origin.replyRouteId,
+        } as Command);
+      }
+    }
+    this.webConsole.workbench?.setNotifier(async (task) => {
+      const origin = task.origin;
+      if (!origin || !this.resultPusher || !this.canUseMessagingOrigin(origin))
+        throw new Error('无可用或已授权的通知路由');
+      const recipient = this.access.chat(origin.source, origin.userId);
+      if (!recipient || !this.access.canTask(recipient, task, 'read'))
+        throw new Error('通知接收者已失去任务权限');
+      const result: CommandResult = {
+        commandId: origin.commandId,
+        success: ['completed', 'review'].includes(task.status),
+        message: `${formatCodingTask(task, true)}\n事件：${task.id}:${task.turns[task.turns.length - 1].id}:${task.recoveryCount ?? 0}:${task.status}`,
+        prUrl: task.pullRequestUrl,
+      };
+      await this.resultPusher(
+        origin.source as CommandSource,
+        origin.userId,
+        this.formatter.format(result, origin.source as CommandSource),
+        origin.replyRouteId,
+      );
+    });
   }
 
   /** 设置结果推送回调（由集成层注入） */
@@ -270,6 +425,37 @@ export class AgentSystem {
 
   /** 处理原始命令文本（消息长连接、HTTP 测试和 CLI 共用入口） */
   async processCommand(rawText: string, userInfo: ParsedUserInfo): Promise<CommandResult> {
+    if (userInfo.source === 'feishu' || userInfo.source === 'dingtalk') {
+      const controlText = this.parser.userText(rawText, userInfo.source).trim();
+      if (controlText.startsWith('/bind ')) {
+        try {
+          this.webConsole.workbench?.bind(controlText.slice(6), userInfo.source, userInfo.userId);
+          return this.controlReply(userInfo, {
+            commandId: randomUUID(),
+            success: true,
+            message: '平台身份已绑定',
+          });
+        } catch {
+          return this.controlReply(userInfo, {
+            commandId: randomUUID(),
+            success: false,
+            message: '绑定码无效或已过期',
+          });
+        }
+      }
+      const principal = this.access.chat(userInfo.source, userInfo.userId);
+      if (
+        !principal ||
+        (userInfo.isGroup && !principal.allowGroups) ||
+        (principal.conversations?.length &&
+          !principal.conversations.includes(userInfo.replyRouteId ?? ''))
+      )
+        return this.controlReply(userInfo, {
+          commandId: randomUUID(),
+          success: false,
+          message: '尚未授权此聊天用户或会话，请联系实例管理员添加平台用户或生成绑定码。',
+        });
+    }
     let command: Command;
     try {
       command = this.parser.parse(rawText, userInfo);
@@ -281,6 +467,39 @@ export class AgentSystem {
         success: false,
         message: `命令解析失败: ${message}`,
       };
+    }
+    const eventKey = userInfo.messageId
+      ? `${userInfo.source}:${userInfo.userId}:${userInfo.messageId}`
+      : undefined;
+    if (eventKey) {
+      const prior = this.store.get<{ commandId: string; result?: CommandResult }>(
+        'message-event',
+        eventKey,
+      );
+      if (prior)
+        return (
+          prior.result ?? {
+            commandId: prior.commandId,
+            success: true,
+            message: '消息已受理，请查询任务状态；服务中断的协调消息可重新发送。',
+          }
+        );
+      this.store.put('message-event', eventKey, { commandId: command.id, createdAt: Date.now() });
+    }
+    if (command.source !== 'cli') {
+      const principal = this.access.chat(command.source, command.userId);
+      const allowed = new Set([
+        ...MESSAGING_TASK_CONTROL_COMMANDS,
+        'agent_chat',
+        'github_overview',
+        'github_branches',
+      ]);
+      if (principal?.role !== 'admin' && !allowed.has(command.name))
+        return this.controlReply(userInfo, {
+          commandId: command.id,
+          success: false,
+          message: '该操作仅限管理员；请使用已授权项目的开发任务。',
+        });
     }
     command = this.delegateMessagingInputToTask(command);
 
@@ -295,6 +514,12 @@ export class AgentSystem {
 
     this.eventBus.emit('command:parsed', command);
     const result = await this.router.dispatch(command);
+    if (eventKey)
+      this.store.put('message-event', eventKey, {
+        commandId: command.id,
+        result,
+        createdAt: Date.now(),
+      });
 
     this.auditLogger.record({
       action: result.success ? 'command_completed' : 'command_failed',
@@ -325,8 +550,28 @@ export class AgentSystem {
     return result;
   }
 
+  private async controlReply(
+    userInfo: ParsedUserInfo,
+    result: CommandResult,
+  ): Promise<CommandResult> {
+    if (this.resultPusher && userInfo.source !== 'cli') {
+      try {
+        await this.resultPusher(
+          userInfo.source,
+          userInfo.userId,
+          this.formatter.format(result, userInfo.source),
+          userInfo.replyRouteId,
+        );
+      } catch {
+        this.logger.warn('控制消息回复未送达');
+      }
+    }
+    return result;
+  }
+
   /** 启动系统 */
   async start(): Promise<void> {
+    if (this.closed) throw new Error('实例已经停止，请创建新的 AgentSystem');
     if (this.running) {
       this.logger.warn('系统已在运行');
       return;
@@ -337,32 +582,37 @@ export class AgentSystem {
       this.config = this.configManager.getConfig();
       this.logger.setLevel(this.config.logging.level);
       this.permissionManager.updateConfig(this.config.permissions);
+      this.webConsole
+        .getTaskManager()
+        .configure({ protectedBranches: this.config.permissions.git.protectedBranches });
       this.logger.info('权限配置已热更新');
     });
     this.confirmationStore.startExpiryCleanup();
     await this.httpServer.start();
     await this.messagingIntegrations.start();
     await this.mcpManager.start();
+    this.webConsole.start();
     this.running = true;
     this.logger.info(`Agent System v${VERSION} 已启动`);
   }
 
   /** 停止系统 */
   async stop(): Promise<void> {
-    if (!this.running) {
-      return;
-    }
+    if (this.closed) return;
+    this.closed = true;
     this.logger.info('Agent System 停止中...');
     this.confirmationStore.stopExpiryCleanup();
     this.configManager.stopWatching();
     await this.webConsole.stop();
     await this.messagingCoordinator.stop();
     await this.messagingIntegrations.stop();
+    this.skillManager.stop();
     await this.mcpManager.stop();
     await this.httpServer.stop();
     this.eventBus.destroy();
     this.skillLoader.unloadAll();
     this.database.close();
+    this.instanceLock.release();
     this.running = false;
     this.logger.info('Agent System 已停止');
   }
@@ -697,21 +947,24 @@ export class AgentSystem {
     this.router.register('github_overview', async (command) => {
       try {
         const connection = await this.webConsole.inspectGitHub();
-        const repositories = connection.repositories.slice(0, 15);
+        const accessible = connection.repositories.filter((repo) =>
+          this.canAccessRepository(repo.fullName, command),
+        );
+        const repositories = accessible.slice(0, 15);
         const lines = repositories.map((repository) => {
           const visibility = repository.private ? '私有' : '公开';
           return `• ${repository.fullName} [${visibility}] 默认分支: ${repository.defaultBranch}`;
         });
         const remaining =
-          connection.repositories.length > repositories.length
-            ? `\n其余 ${connection.repositories.length - repositories.length} 个仓库请在 Web 控制台查看。`
+          accessible.length > repositories.length
+            ? `\n其余 ${accessible.length - repositories.length} 个仓库请在 Web 控制台查看。`
             : '';
         return {
           commandId: command.id,
           success: true,
           message: [
             `GitHub 已连接：${connection.user.login}`,
-            `可访问仓库：${connection.repositories.length} 个`,
+            `可访问仓库：${accessible.length} 个`,
             '',
             lines.join('\n') || '当前 Token 没有可访问的仓库。',
             remaining,
@@ -734,6 +987,7 @@ export class AgentSystem {
     this.router.register('github_branches', async (command) => {
       const repository = command.args.repository as string;
       try {
+        if (!this.canAccessRepository(repository, command)) throw new Error('无权访问此项目');
         const branches = await this.webConsole.getGitHubBranches(repository);
         const visible = branches.slice(0, 40);
         const lines = visible.map(
@@ -773,6 +1027,8 @@ export class AgentSystem {
       }
       const key = messagingConversationKey(command);
       this.detachedMessagingConversations.add(key);
+      this.store.put('detached-conversation', key, { detached: true });
+      this.store.remove('coordinator', key);
       const previous = this.messagingCoordinatorConversations.get(key);
       if (previous) {
         this.messagingCoordinatorConversations.delete(key);
@@ -801,6 +1057,17 @@ export class AgentSystem {
       const task = this.latestMessagingTask(command);
       if (task && isTerminalCodingTask(task)) {
         return this.continueMessagingTask(command, task, prompt);
+      }
+      if (task) {
+        const actor = this.access.chat(command.source, command.userId);
+        if (!actor || !this.access.canTask(actor, task, 'write'))
+          return { commandId: command.id, success: false, message: '当前身份无权向任务追加要求' };
+        const inputId = this.webConsole.getTaskManager().queueInput(task.id, prompt);
+        return {
+          commandId: command.id,
+          success: true,
+          message: `要求已保存为待处理消息 ${inputId.slice(0, 8)}，本轮结束后可在任务页执行或撤回。`,
+        };
       }
       return this.enqueueMessagingCoordinator(command, prompt);
     });
@@ -865,6 +1132,12 @@ export class AgentSystem {
           message: '任务不存在，或不是你在当前平台创建的任务。',
         };
       }
+      const actor =
+        command.source === 'cli'
+          ? this.access.account('admin')
+          : this.access.chat(command.source, command.userId);
+      if (!actor || !this.access.canTask(actor, task, 'write'))
+        return { commandId: command.id, success: false, message: '当前身份无权停止该任务' };
       if (!this.webConsole.cancelCodingTask(task.id)) {
         return {
           commandId: command.id,
@@ -889,6 +1162,7 @@ export class AgentSystem {
     createPullRequest = true,
   ): Promise<CommandResult> {
     try {
+      if (!this.canAccessRepository(repository, command)) throw new Error('无权访问此项目');
       const connection = await this.webConsole.inspectGitHub();
       const selectedRepository = connection.repositories.find(
         (candidate) => candidate.fullName.toLowerCase() === repository.toLowerCase(),
@@ -910,7 +1184,9 @@ export class AgentSystem {
       }
 
       const task = this.webConsole.createCodingTask({
+        idempotencyKey: command.id,
         repository: selectedRepository.fullName,
+        ownerId: this.access.chat(command.source, command.userId)?.id ?? 'admin',
         baseBranch,
         taskBranch,
         prompt,
@@ -955,6 +1231,12 @@ export class AgentSystem {
 
   private continueMessagingTask(command: Command, task: AgentTask, prompt: string): CommandResult {
     try {
+      const actor =
+        command.source === 'cli'
+          ? this.access.account('admin')
+          : this.access.chat(command.source, command.userId);
+      if (!actor || !this.access.canTask(actor, task, 'write'))
+        throw new Error('当前身份无权继续该任务');
       const continued = this.webConsole.continueCodingTask(task.id, prompt, true);
       this.bindMessagingTask(continued, command);
       this.auditLogger.record({
@@ -998,7 +1280,10 @@ export class AgentSystem {
     const key = messagingConversationKey(command);
     let conversation = this.messagingCoordinatorConversations.get(key);
     if (!conversation) {
+      const saved = this.store.get<{ threadId?: string }>('coordinator', key);
       conversation = {
+        threadId: saved?.threadId,
+        isGroup: command.isGroup,
         id: randomUUID(),
         key,
         source: command.source,
@@ -1047,6 +1332,7 @@ export class AgentSystem {
         },
       });
       conversation.threadId = response.threadId ?? conversation.threadId;
+      this.store.put('coordinator', conversation.key, { threadId: conversation.threadId });
       result = { commandId: command.id, success: true, message: response.response };
       this.auditLogger.record({
         action: 'agent_delegate',
@@ -1078,7 +1364,7 @@ export class AgentSystem {
       }
     }
 
-    if (!this.resultPusher) return;
+    if (!this.resultPusher || !this.canUseMessagingOrigin(conversation)) return;
     try {
       await this.resultPusher(
         conversation.source,
@@ -1094,21 +1380,22 @@ export class AgentSystem {
   private bindMessagingTask(task: AgentTask, command: Command): void {
     const existing = this.messagingTaskOrigins.get(task.id);
     const platformToolToken =
-      command.source === 'dingtalk' || command.source === 'feishu'
-        ? (existing?.platformToolToken ?? randomUUID())
-        : undefined;
+      command.source === 'dingtalk' || command.source === 'feishu' ? randomUUID() : undefined;
     const origin: MessagingTaskOrigin = {
       source: existing?.source ?? command.source,
       userId: existing?.userId ?? command.userId,
       userName: existing?.userName ?? command.userName,
       commandId: command.id,
+      isGroup: existing?.isGroup ?? command.isGroup,
       ...(existing?.replyRouteId || command.replyRouteId
         ? { replyRouteId: existing?.replyRouteId ?? command.replyRouteId }
         : {}),
       ...(platformToolToken ? { platformToolToken } : {}),
     };
     this.messagingTaskOrigins.set(task.id, origin);
+    this.webConsole.bindCodingTask(task.id, origin);
     this.detachedMessagingConversations.delete(messagingConversationKey(command));
+    this.store.remove('detached-conversation', messagingConversationKey(command));
     if (platformToolToken && (command.source === 'dingtalk' || command.source === 'feishu')) {
       this.webConsole.setCodingTaskPlatformTools(task.id, {
         endpoint: this.platformToolEndpoint(),
@@ -1160,7 +1447,11 @@ export class AgentSystem {
       const authorization = Array.isArray(headers.authorization)
         ? headers.authorization[0]
         : headers.authorization;
-      if (!origin?.token || authorization !== `Bearer ${origin.token}`) {
+      if (
+        !origin?.token ||
+        !this.canUseMessagingOrigin(origin) ||
+        authorization !== `Bearer ${origin.token}`
+      ) {
         return { status: 401, body: { error: 'Unauthorized' } };
       }
 
@@ -1206,6 +1497,7 @@ export class AgentSystem {
         commandId: task.commandId,
         ...(task.replyRouteId ? { replyRouteId: task.replyRouteId } : {}),
         token: task.platformToolToken,
+        isGroup: task.isGroup,
         scope: 'task',
       };
     }
@@ -1218,6 +1510,7 @@ export class AgentSystem {
       commandId: conversation.activeCommand.id,
       ...(conversation.replyRouteId ? { replyRouteId: conversation.replyRouteId } : {}),
       token: conversation.token,
+      isGroup: conversation.isGroup,
       scope: 'conversation',
     };
   }
@@ -1229,6 +1522,14 @@ export class AgentSystem {
     origin: PlatformToolOrigin,
   ): Promise<unknown> {
     const command = platformToolCommand(origin, tool, args);
+    if (this.config.permissions.operations.blacklist.includes(tool))
+      throw new Error('该工具操作被禁止');
+    if (
+      origin.scope === 'task' &&
+      ['platform_send_message', 'task_create', 'task_continue', 'task_cancel'].includes(tool) &&
+      this.webConsole.getCodingTask(scopeId)?.status !== 'running'
+    )
+      throw new Error('任务工具写权限已结束');
     if (tool === 'platform_get_context') {
       return {
         platform: origin.source,
@@ -1267,17 +1568,21 @@ export class AgentSystem {
       return {
         user: connection.user.login,
         defaultRepository: this.config.github.defaultRepo || null,
-        repositories: connection.repositories.slice(0, 100).map((repository) => ({
-          name: repository.fullName,
-          private: repository.private,
-          archived: repository.archived,
-          defaultBranch: repository.defaultBranch,
-          description: repository.description,
-        })),
+        repositories: connection.repositories
+          .filter((repo) => this.canAccessRepository(repo.fullName, command))
+          .slice(0, 100)
+          .map((repository) => ({
+            name: repository.fullName,
+            private: repository.private,
+            archived: repository.archived,
+            defaultBranch: repository.defaultBranch,
+            description: repository.description,
+          })),
       };
     }
     if (tool === 'github_list_branches') {
       const repository = requiredString(args.repository, 'repository');
+      if (!this.canAccessRepository(repository, command)) throw new Error('无权访问此项目');
       return {
         repository,
         branches: (await this.webConsole.getGitHubBranches(repository)).slice(0, 200),
@@ -1318,14 +1623,53 @@ export class AgentSystem {
       return { message: result.message, data: result.data };
     }
     if (tool === 'task_cancel') {
+      const actor = this.access.chat(command.source, command.userId);
+      if (!actor || !this.access.canTask(actor, task, 'write'))
+        throw new Error('当前身份无权停止该任务');
       if (!this.webConsole.cancelCodingTask(task.id)) throw new Error('任务已结束，无法停止');
       return `已停止任务 ${shortTaskId(task.id)}。`;
     }
     throw new Error(`Unsupported platform tool: ${tool}`);
   }
 
+  private canUseMessagingOrigin(origin: {
+    source: string;
+    userId: string;
+    isGroup?: boolean;
+    replyRouteId?: string;
+  }): boolean {
+    if (origin.source === 'cli') return true;
+    const account = this.access.chat(origin.source, origin.userId);
+    return Boolean(
+      account &&
+      (!origin.isGroup || account.allowGroups) &&
+      (!account.conversations?.length || account.conversations.includes(origin.replyRouteId ?? '')),
+    );
+  }
+
+  private canAccessRepository(
+    repository: string,
+    command: Pick<Command, 'source' | 'userId'>,
+  ): boolean {
+    if (command.source === 'cli') return true;
+    const principal = this.access.chat(command.source, command.userId);
+    if (!principal) return false;
+    if (principal.role === 'admin') return true;
+    return this.store
+      .list<Project>('project')
+      .some(
+        (project) =>
+          displayRepository(project.repository).toLowerCase() ===
+            displayRepository(repository).toLowerCase() &&
+          this.access.canProject(principal, project.id),
+      );
+  }
+
   private latestMessagingTask(command: Command): AgentTask | undefined {
-    if (this.detachedMessagingConversations.has(messagingConversationKey(command))) {
+    if (
+      this.detachedMessagingConversations.has(messagingConversationKey(command)) ||
+      this.store.get('detached-conversation', messagingConversationKey(command))
+    ) {
       return undefined;
     }
     return this.mostRecentOwnedMessagingTask(command);
@@ -1334,6 +1678,7 @@ export class AgentSystem {
   private mostRecentOwnedMessagingTask(command: Command): AgentTask | undefined {
     return this.webConsole.listCodingTasks().find((task) => {
       const origin = this.messagingTaskOrigins.get(task.id);
+      if (task.archivedAt || !this.isMessagingTaskOwner(task.id, command)) return false;
       if (!origin || origin.source !== command.source || origin.userId !== command.userId) {
         return false;
       }
@@ -1351,8 +1696,12 @@ export class AgentSystem {
   }
 
   private isMessagingTaskOwner(taskId: string, command: Command): boolean {
-    const origin = this.messagingTaskOrigins.get(taskId);
-    return Boolean(origin && origin.source === command.source && origin.userId === command.userId);
+    const task = this.webConsole.getCodingTask(taskId);
+    const principal =
+      command.source === 'cli'
+        ? this.access.account('admin')
+        : this.access.chat(command.source, command.userId);
+    return Boolean(task && principal && this.access.canTask(principal, task, 'read'));
   }
 
   private async pushCodingTaskCompletion(taskId: string): Promise<void> {
@@ -1362,7 +1711,12 @@ export class AgentSystem {
     }
     try {
       const task = await this.webConsole.waitForCodingTask(taskId);
-      const success = task.status === 'completed';
+      if (this.webConsole.workbench) {
+        this.webConsole.workbench.terminal({ ...task, origin });
+        await this.webConsole.workbench.tick();
+        return;
+      }
+      const success = task.status === 'completed' || task.status === 'review';
       const result: CommandResult = {
         commandId: origin.commandId,
         success,
@@ -1402,9 +1756,9 @@ export class AgentSystem {
         return { status: 400, body: { error: 'text is required' } };
       }
       const userInfo: ParsedUserInfo = {
-        userId: payload.userId ?? 'test-user',
-        userName: payload.userName ?? 'Tester',
-        source: payload.source ?? 'cli',
+        userId: 'admin',
+        userName: 'Administrator',
+        source: 'cli',
       };
       const result = await this.processCommand(payload.text, userInfo);
       return { status: 200, body: result };
@@ -1473,6 +1827,7 @@ function platformToolCommand(
     source: origin.source,
     userId: origin.userId,
     userName: origin.userName,
+    isGroup: origin.isGroup,
     ...(origin.replyRouteId ? { replyRouteId: origin.replyRouteId } : {}),
     rawText: `[Codex platform tool] ${name}`,
     name,
@@ -1505,7 +1860,7 @@ function platformTaskSummary(task: AgentTask): Record<string, unknown> {
 }
 
 function isTerminalCodingTask(task: AgentTask): boolean {
-  return task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled';
+  return ['completed', 'failed', 'cancelled', 'review', 'interrupted'].includes(task.status);
 }
 
 function codingTaskStatusLabel(status: AgentTask['status']): string {
@@ -1514,6 +1869,9 @@ function codingTaskStatusLabel(status: AgentTask['status']): string {
     preparing: '准备工作区',
     running: '开发中',
     publishing: '提交 PR',
+    verifying: '验证中',
+    review: '待审查',
+    interrupted: '已中断',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消',
@@ -1535,7 +1893,7 @@ function platformTextMessage(source: CommandSource, text: string): unknown {
 
 function formatCodingTask(task: AgentTask, completion = false): string {
   const heading = completion
-    ? task.status === 'completed'
+    ? ['completed', 'review'].includes(task.status)
       ? 'Coding Agent 开发完成'
       : task.status === 'cancelled'
         ? 'Coding Agent 任务已取消'

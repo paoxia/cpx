@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runWorker } from './workbench/Remote';
 import { spawn, spawnSync } from 'child_process';
 import { closeSync, existsSync, openSync } from 'fs';
 import { get } from 'http';
@@ -110,7 +111,7 @@ async function runConfigWizard(paths: CpxRuntimePaths): Promise<void> {
 
   console.log(`\n配置已保存并通过校验: ${configPath}`);
   console.log('敏感值请通过标准输入写入，例如:');
-  console.log("  printf '%s' \"$GITHUB_TOKEN\" | cpx config set github.token --stdin");
+  console.log('  printf \'%s\' "$GITHUB_TOKEN" | cpx config set github.token --stdin');
   console.log('飞书和钉钉可在 cpx 启动后的 Web 设置页继续配置。');
 }
 
@@ -120,7 +121,9 @@ async function healthCheck(port: number): Promise<boolean> {
       { hostname: '127.0.0.1', port, path: '/health', timeout: 1500 },
       (response) => {
         response.resume();
-        done(Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 400));
+        done(
+          Boolean(response.statusCode && response.statusCode >= 200 && response.statusCode < 400),
+        );
       },
     );
     request.on('timeout', () => request.destroy());
@@ -242,7 +245,11 @@ function commandVersion(command: string, args: string[]): string | undefined {
 
 function compareVersions(left: string, right: string): number {
   const normalize = (value: string): number[] =>
-    value.replace(/^v/, '').split(/[.-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+    value
+      .replace(/^v/, '')
+      .split(/[.-]/)
+      .slice(0, 3)
+      .map((part) => Number.parseInt(part, 10) || 0);
   const a = normalize(left);
   const b = normalize(right);
   for (let index = 0; index < 3; index += 1) {
@@ -307,21 +314,28 @@ export function createProgram(): Command {
     .command('set <key> [value]')
     .description('设置点分隔的配置项；密钥必须通过标准输入传入')
     .option('--stdin', '从标准输入读取值')
-    .action(async (key: string, value: string | undefined, options: { stdin?: boolean }, command: Command) => {
-      const paths = runtimePaths(command);
-      printInitialization(initializeConfiguration(paths, PACKAGE_ROOT));
-      if (isSecretConfigPath(key) && !options.stdin) {
-        throw new Error('敏感配置不能出现在命令历史中，请使用 --stdin');
-      }
-      const raw = options.stdin ? await readStdin() : value;
-      if (raw === undefined) throw new Error('缺少配置值');
-      const configPath = join(paths.configDir, 'config.yaml');
-      const root = readYamlObject(configPath);
-      const previous = structuredClone(root);
-      setConfigValue(root, key, isSecretConfigPath(key) ? raw : parseConfigValue(raw));
-      writeValidatedConfiguration(configPath, paths.configDir, root, previous);
-      console.log(`已保存并通过校验: ${key}${isSecretConfigPath(key) ? ' = ***' : ''}`);
-    });
+    .action(
+      async (
+        key: string,
+        value: string | undefined,
+        options: { stdin?: boolean },
+        command: Command,
+      ) => {
+        const paths = runtimePaths(command);
+        printInitialization(initializeConfiguration(paths, PACKAGE_ROOT));
+        if (isSecretConfigPath(key) && !options.stdin) {
+          throw new Error('敏感配置不能出现在命令历史中，请使用 --stdin');
+        }
+        const raw = options.stdin ? await readStdin() : value;
+        if (raw === undefined) throw new Error('缺少配置值');
+        const configPath = join(paths.configDir, 'config.yaml');
+        const root = readYamlObject(configPath);
+        const previous = structuredClone(root);
+        setConfigValue(root, key, isSecretConfigPath(key) ? raw : parseConfigValue(raw));
+        writeValidatedConfiguration(configPath, paths.configDir, root, previous);
+        console.log(`已保存并通过校验: ${key}${isSecretConfigPath(key) ? ' = ***' : ''}`);
+      },
+    );
   config
     .command('validate')
     .description('校验当前配置')
@@ -389,11 +403,11 @@ export function createProgram(): Command {
         console.log(`${ok ? '✓' : required ? '✗' : '!'} ${name}: ${detail}`);
         if (!ok && required) failed = true;
       };
-      const nodeMajor = Number.parseInt(process.versions.node.split('.')[0], 10);
+      const supportedNode = compareVersions(process.versions.node, '18.19.0') >= 0;
       const gitVersion = commandVersion('git', ['--version']);
       const codexVersion = commandVersion('codex', ['--version']);
       const ghVersion = commandVersion('gh', ['--version']);
-      report(nodeMajor >= 18, 'Node.js', process.version);
+      report(supportedNode, 'Node.js', `${process.version}（要求 >=18.19.0）`);
       report(Boolean(gitVersion), 'Git', gitVersion ?? '未找到');
       report(Boolean(codexVersion), 'Codex CLI', codexVersion ?? '未找到');
       report(Boolean(ghVersion), 'GitHub CLI', ghVersion ?? '未找到（可选）', false);
@@ -415,7 +429,8 @@ export function createProgram(): Command {
       const args = ['view', PACKAGE_NAME, 'version', '--json'];
       if (options.registry) args.push('--registry', options.registry);
       const result = spawnSync('npm', args, { encoding: 'utf8', timeout: 15000 });
-      if (result.status !== 0) throw new Error(`更新检查失败: ${(result.stderr || result.stdout).trim()}`);
+      if (result.status !== 0)
+        throw new Error(`更新检查失败: ${(result.stderr || result.stdout).trim()}`);
       const latest = String(JSON.parse(result.stdout.trim()));
       if (compareVersions(latest, packageMetadata.version) > 0) {
         console.log(`发现新版本: ${packageMetadata.version} → ${latest}`);
@@ -425,14 +440,88 @@ export function createProgram(): Command {
       }
     });
 
+  const managementRequest = async (body?: Record<string, unknown>): Promise<unknown> => {
+    const token = process.env.CPX_ACCESS_TOKEN;
+    if (!token) throw new Error('请在页面签发管理员访问令牌，并通过 CPX_ACCESS_TOKEN 环境变量提供');
+    const base = new URL(process.env.CPX_SERVER_URL || 'http://127.0.0.1:3000');
+    if (base.protocol !== 'https:' && !['localhost', '127.0.0.1', '[::1]'].includes(base.hostname))
+      throw new Error('远程管理要求 HTTPS');
+    const response = await fetch(new URL('/api/workbench/extensions', base), {
+      method: body ? 'POST' : 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(120000),
+    });
+    const result = (await response.json()) as { error?: string };
+    if (!response.ok) throw new Error(result.error || `管理请求失败：${response.status}`);
+    return result;
+  };
+  const skill = program.command('skill').description('管理运行实例的可信 Skill');
+  skill
+    .command('list')
+    .action(async () => console.log(JSON.stringify(await managementRequest(), null, 2)));
+  skill
+    .command('install <identifier>')
+    .option('--source <source>', 'npm、local 或 git', 'npm')
+    .action(async (identifier: string, options: { source: string }) =>
+      console.log(
+        JSON.stringify(
+          await managementRequest({ action: 'skill-install', source: options.source, identifier }),
+          null,
+          2,
+        ),
+      ),
+    );
+  skill
+    .command('uninstall <name>')
+    .action(async (name: string) =>
+      console.log(
+        JSON.stringify(await managementRequest({ action: 'skill-uninstall', name }), null, 2),
+      ),
+    );
+  const mcp = program.command('mcp').description('管理运行实例的 MCP 连接');
+  mcp
+    .command('list')
+    .action(async () => console.log(JSON.stringify(await managementRequest(), null, 2)));
+  mcp
+    .command('connect')
+    .requiredOption('--file <path>', '单条 MCP 配置 YAML 文件')
+    .action(async (options: { file: string }) =>
+      console.log(
+        JSON.stringify(
+          await managementRequest({ action: 'mcp-connect', config: readYamlObject(options.file) }),
+          null,
+          2,
+        ),
+      ),
+    );
+  mcp
+    .command('disconnect <name>')
+    .action(async (name: string) =>
+      console.log(
+        JSON.stringify(await managementRequest({ action: 'mcp-disconnect', name }), null, 2),
+      ),
+    );
+
+  program
+    .command('worker')
+    .description('在独立开发机运行出站远程执行器')
+    .requiredOption('--server <url>', 'cpx HTTPS 地址')
+    .requiredOption('--dir <path>', '执行器独立数据目录')
+    .action(async (options: { server: string; dir: string }) =>
+      runWorker(options.server, options.dir),
+    );
+
   program.showHelpAfterError();
   program.showSuggestionAfterError();
   return program;
 }
 
 if (require.main === module) {
-  createProgram().parseAsync(process.argv).catch((error: unknown) => {
-    console.error(`错误: ${(error as Error).message}`);
-    process.exitCode = 1;
-  });
+  createProgram()
+    .parseAsync(process.argv)
+    .catch((error: unknown) => {
+      console.error(`错误: ${(error as Error).message}`);
+      process.exitCode = 1;
+    });
 }

@@ -7,6 +7,8 @@ export interface ParsedUserInfo {
   userName: string;
   source: CommandSource;
   replyRouteId?: string;
+  messageId?: string;
+  isGroup?: boolean;
 }
 
 /**
@@ -43,6 +45,7 @@ export class CommandParser {
       source: userInfo.source,
       userId: userInfo.userId,
       userName: userInfo.userName,
+      ...(userInfo.isGroup !== undefined ? { isGroup: userInfo.isGroup } : {}),
       ...(userInfo.replyRouteId ? { replyRouteId: userInfo.replyRouteId } : {}),
       rawText,
       name,

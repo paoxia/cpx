@@ -105,6 +105,48 @@ describe('AgentTaskManager', () => {
     rmSync(TMP_DIR, { recursive: true, force: true });
   });
 
+  it('独立审查使用新的只读会话并保留开发会话与回答', async () => {
+    const fallback = spawnMock.getMockImplementation()!;
+    let calls = 0;
+    spawnMock.mockImplementation((command: string, args: string[]) => {
+      if (command !== 'codex') return fallback(command, args);
+      calls++;
+      return fakeProcess(
+        JSON.stringify({
+          type: 'thread.started',
+          thread_id: calls === 1 ? 'implementation-thread' : 'review-thread',
+        }) +
+          '\n' +
+          JSON.stringify({
+            type: 'result',
+            result: calls === 1 ? 'implementation complete' : 'independent findings',
+          }) +
+          '\n',
+      );
+    });
+    const manager = createManager();
+    const created = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      prompt: 'fix',
+      policy: 'review',
+      independentReview: true,
+    });
+    const completed = await manager.waitForTerminal(created.id);
+    expect(calls).toBe(2);
+    expect(completed.threadId).toBe('implementation-thread');
+    expect(completed.lastAgentResponse).toBe('implementation complete');
+    expect(completed.turns[0].response).toBe('implementation complete');
+    expect(completed.reviewReport).toMatchObject({
+      status: 'completed',
+      response: 'independent findings',
+    });
+    const reviewer = spawnMock.mock.calls.filter(([command]) => command === 'codex')[1];
+    expect(reviewer[1]).toContain('sandbox_mode="read-only"');
+    expect(reviewer[1]).not.toContain('resume');
+    await manager.stop();
+  });
+
   it('应规范化受支持的 GitHub 仓库地址', () => {
     expect(normalizeRepository('acme/repo')).toBe('https://github.com/acme/repo.git');
     expect(normalizeRepository('https://github.com/acme/repo')).toBe(

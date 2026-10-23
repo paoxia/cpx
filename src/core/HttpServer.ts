@@ -12,6 +12,17 @@ export type RequestHandler = (
   headers?: Record<string, string>;
 }>;
 
+export interface RequestContext {
+  method: string;
+  path: string;
+  body: Buffer;
+  headers: Record<string, string | string[] | undefined>;
+  query: Record<string, string>;
+}
+export type Middleware = (
+  context: RequestContext,
+) => Promise<Awaited<ReturnType<RequestHandler>> | void>;
+
 /**
  * 基于 Node 内置 http 模块的轻量 HTTP 服务
  * 提供本地命令、控制台和健康检查 HTTP 路由
@@ -22,6 +33,7 @@ export class HttpServer {
   private logger: Logger;
   private port: number;
   private host: string;
+  private middleware: Middleware[] = [];
 
   constructor(port: number, host: string, logger: Logger) {
     this.port = port;
@@ -30,6 +42,10 @@ export class HttpServer {
   }
 
   /** 注册路由处理器 */
+  use(middleware: Middleware): void {
+    this.middleware.push(middleware);
+  }
+
   register(method: string, path: string, handler: RequestHandler): void {
     const upperMethod = method.toUpperCase();
     if (!this.routes.has(upperMethod)) {
@@ -54,6 +70,11 @@ export class HttpServer {
         resolve();
       });
     });
+  }
+
+  getPort(): number {
+    const address = this.server?.address();
+    return address && typeof address === 'object' ? address.port : this.port;
   }
 
   async stop(): Promise<void> {
@@ -91,9 +112,17 @@ export class HttpServer {
     // 收集 raw body
     const body = await this.readBody(req);
     const headers = req.headers as Record<string, string | string[] | undefined>;
+    delete headers['x-cpx-user'];
+    delete headers['x-cpx-role'];
+    headers['x-cpx-peer'] = req.socket.remoteAddress;
 
     try {
-      const result = await handler(body, headers, query);
+      let result: Awaited<ReturnType<RequestHandler>> | undefined;
+      for (const middleware of this.middleware) {
+        result = (await middleware({ method, path, body, headers, query })) || undefined;
+        if (result) break;
+      }
+      result ??= await handler(body, headers, query);
       if (result.contentType) {
         this.sendRaw(res, result.status, result.body, result.contentType, result.headers);
       } else {
@@ -145,6 +174,7 @@ export class HttpServer {
   ): void {
     const json = JSON.stringify(body);
     res.writeHead(status, {
+      'Cache-Control': 'no-store',
       'Content-Type': 'application/json; charset=utf-8',
       'Content-Length': Buffer.byteLength(json),
       ...headers,

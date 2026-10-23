@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
+import { WorkbenchStore } from '../../src/workbench/Store';
 import { AgentSystem } from '../../src/core/AgentSystem';
 import type { AgentTask } from '../../src/agents/AgentTaskManager';
 import type { MessagingCoordinatorRunner } from '../../src/agents/MessagingCoordinator';
@@ -47,6 +48,20 @@ describe('命令管道集成测试', () => {
       stop: vi.fn(async () => undefined),
     };
     system = new AgentSystem(TMP_DIR, { messagingCoordinator: coordinator });
+    const store = new WorkbenchStore(system.getDatabase());
+    for (const id of [
+      'dingtalk:u1',
+      'feishu:u1',
+      'feishu:feishu-user-1',
+      'feishu:feishu-natural-user',
+    ])
+      store.put('account', id, { id, name: id, role: 'admin', projects: [] });
+    store.put('account', 'feishu:feishu-user-2', {
+      id: 'feishu:feishu-user-2',
+      name: 'Other',
+      role: 'requester',
+      projects: [],
+    });
   });
 
   afterEach(async () => {
@@ -63,6 +78,52 @@ describe('命令管道集成测试', () => {
     });
     expect(result.success).toBe(true);
     expect(result.message).toContain(packageMetadata.version);
+  });
+
+  it('聊天权限撤销后不能通过原任务归属绕过项目检查', async () => {
+    const store = new WorkbenchStore(system.getDatabase());
+    const actor = { id: 'feishu:u1', name: 'User', role: 'requester', projects: ['demo'] };
+    store.put('account', actor.id, actor);
+    const task = {
+      ...fakeAgentTask('abcdef12-3456-7890-abcd-ef1234567890', 'completed'),
+      ownerId: actor.id,
+      projectId: 'demo',
+    };
+    (
+      system.getWebConsole().getTaskManager() as unknown as { tasks: Map<string, AgentTask> }
+    ).tasks.set(task.id, task);
+    vi.spyOn(system.getWebConsole(), 'getCodingTask').mockReturnValue(task);
+    system
+      .getWebConsole()
+      .bindCodingTask(task.id, {
+        source: 'feishu',
+        userId: 'u1',
+        userName: 'User',
+        commandId: 'cmd',
+      });
+    const user = { source: 'feishu' as const, userId: 'u1', userName: 'User' };
+    expect((await system.processCommand('/status abcdef12', user)).success).toBe(true);
+    store.put('account', actor.id, { ...actor, projects: [] });
+    expect((await system.processCommand('/status abcdef12', user)).success).toBe(false);
+    store.put('account', actor.id, { ...actor, role: 'reviewer' });
+    expect((await system.processCommand('/status abcdef12', user)).success).toBe(true);
+    const denied = await system.processCommand('/agent 继续 abcdef12 change', user);
+    expect(denied.success).toBe(false);
+    expect(denied.message).toContain('无权继续');
+  });
+
+  it('群聊必须显式授权，即使该身份已经允许私聊', async () => {
+    const user = { source: 'feishu' as const, userId: 'u1', userName: 'User', isGroup: true };
+    expect((await system.processCommand('version', user)).success).toBe(false);
+    const store = new WorkbenchStore(system.getDatabase());
+    store.put('account', 'feishu:u1', {
+      id: 'feishu:u1',
+      name: 'User',
+      role: 'admin',
+      projects: [],
+      allowGroups: true,
+    });
+    expect((await system.processCommand('version', user)).success).toBe(true);
   });
 
   it('help 命令应返回帮助文本', async () => {
@@ -237,8 +298,14 @@ describe('命令管道集成测试', () => {
     vi.spyOn(webConsole, 'getGitHubBranches').mockResolvedValue([
       { name: 'dev', protected: false },
     ]);
+    const taskMap = (webConsole.getTaskManager() as unknown as { tasks: Map<string, AgentTask> })
+      .tasks;
+    taskMap.set(taskId, queuedTask);
     vi.spyOn(webConsole, 'createCodingTask').mockReturnValue(queuedTask);
-    vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(completedTask);
+    vi.spyOn(webConsole, 'waitForCodingTask').mockImplementation(async () => {
+      taskMap.set(taskId, { ...completedTask, origin: taskMap.get(taskId)?.origin });
+      return completedTask;
+    });
     vi.spyOn(webConsole, 'getCodingTask').mockReturnValue(completedTask);
     let platformToolContext:
       Parameters<typeof webConsole.setCodingTaskPlatformTools>[1] | undefined;
@@ -267,6 +334,8 @@ describe('命令管道集成测试', () => {
     expect(result.message).toContain('Coding Agent 任务已创建：abcdef12');
     expect(webConsole.createCodingTask).toHaveBeenCalledWith({
       repository: 'paoxia/cpx',
+      ownerId: 'feishu:feishu-user-1',
+      idempotencyKey: expect.any(String),
       baseBranch: 'dev',
       taskBranch: 'feature/fix-login',
       prompt: '修复登录页面',
@@ -366,6 +435,7 @@ describe('命令管道集成测试', () => {
     });
 
     const pushedBeforePlatformTool = pushed.length;
+    completedTask.status = 'running';
     const sendResponse = await fetch(platformToolContext!.endpoint, {
       method: 'POST',
       headers: {
@@ -378,35 +448,44 @@ describe('命令管道集成测试', () => {
         args: { text: '正在运行回归测试' },
       }),
     });
+    completedTask.status = 'completed';
     expect(sendResponse.status).toBe(200);
     expect(pushed).toHaveLength(pushedBeforePlatformTool + 1);
     expect(JSON.stringify(pushed.at(-1))).toContain('正在运行回归测试');
 
-    const continuedQueued = {
-      ...completedTask,
-      status: 'queued' as const,
-      prompt: '把按钮颜色改成蓝色',
-      completedAt: undefined,
-      turns: [
-        ...completedTask.turns,
-        {
-          id: 'turn-2',
-          prompt: '把按钮颜色改成蓝色',
-          status: 'queued' as const,
-          createdAt: Date.now(),
-        },
-      ],
-    };
-    const continuedCompleted = {
-      ...continuedQueued,
-      status: 'completed' as const,
-      completedAt: Date.now(),
-      lastAgentResponse: '按钮颜色已经修改为蓝色。',
-      turns: continuedQueued.turns.map((turn) => ({ ...turn, status: 'completed' as const })),
-    };
+    let currentTaskState = completedTask;
     vi.spyOn(webConsole, 'listCodingTasks').mockReturnValue([completedTask]);
-    const continueSpy = vi.spyOn(webConsole, 'continueCodingTask').mockReturnValue(continuedQueued);
-    vi.spyOn(webConsole, 'waitForCodingTask').mockResolvedValue(continuedCompleted);
+    const continueSpy = vi
+      .spyOn(webConsole, 'continueCodingTask')
+      .mockImplementation((_id, prompt) => {
+        const queued = {
+          ...currentTaskState,
+          status: 'queued' as const,
+          prompt,
+          turns: [
+            ...currentTaskState.turns,
+            {
+              id: `turn-${currentTaskState.turns.length + 1}`,
+              prompt,
+              status: 'queued' as const,
+              createdAt: Date.now(),
+            },
+          ],
+        };
+        currentTaskState = queued as typeof completedTask;
+        return queued;
+      });
+    vi.spyOn(webConsole, 'waitForCodingTask').mockImplementation(async () => {
+      const completed = {
+        ...currentTaskState,
+        status: 'completed' as const,
+        lastAgentResponse: '按钮颜色已经修改为蓝色。',
+        turns: currentTaskState.turns.map((turn) => ({ ...turn, status: 'completed' as const })),
+      };
+      currentTaskState = completed;
+      taskMap.set(taskId, { ...completed, origin: taskMap.get(taskId)?.origin });
+      return completed;
+    });
 
     const pushedBeforeNaturalLanguage = pushed.length;
     const naturalLanguage = await system.processCommand('/agent 把按钮颜色改成蓝色', {
@@ -439,7 +518,7 @@ describe('命令管道集成测试', () => {
       source: 'feishu',
       replyRouteId: 'chat-other:feishu-user-1',
     });
-    expect(explicitContinue.success).toBe(true);
+    expect(explicitContinue.success, explicitContinue.message).toBe(true);
     await vi.waitFor(() => expect(pushed).toHaveLength(pushedBeforeCrossConversationContinue + 2));
     const crossConversationRoutes = pushed
       .slice(pushedBeforeCrossConversationContinue)

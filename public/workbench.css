@@ -1,0 +1,130 @@
+[hidden] {
+  display: none !important;
+}
+
+.cpx-dialog {
+  width: min(900px, 94vw);
+  max-height: 92vh;
+  overflow: auto;
+  background: #171b24;
+  color: #e5e9f0;
+  border: 1px solid #45516a;
+  border-radius: 14px;
+  padding: 24px;
+}
+.cpx-dialog::backdrop {
+  background: #060912d9;
+}
+.cpx-dialog header,
+.cpx-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.cpx-actions {
+  justify-content: flex-start;
+}
+.cpx-dialog form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.cpx-dialog label,
+.cpx-input label,
+.cpx-project-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.cpx-dialog input,
+.cpx-dialog select,
+.cpx-dialog textarea,
+.cpx-input textarea,
+.cpx-project-picker select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  background: #0c111c;
+  color: #e5e9f0;
+  border: 1px solid #45516a;
+  border-radius: 6px;
+}
+.cpx-dialog button,
+.cpx-result button {
+  padding: 8px 12px;
+  border: 1px solid #516383;
+  border-radius: 6px;
+  background: #26364d;
+  color: #edf2ff;
+  cursor: pointer;
+}
+.cpx-dialog button:disabled,
+.cpx-result button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.cpx-dialog pre,
+.cpx-result pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 480px;
+  overflow: auto;
+  padding: 12px;
+  background: #0b1018;
+  font-size: 12px;
+}
+.cpx-result {
+  border: 1px solid #37435a;
+  padding: 16px;
+  border-radius: 10px;
+  margin: 18px 0;
+}
+.cpx-result details {
+  margin: 14px 0;
+}
+.cpx-result p,
+.cpx-dialog p {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.cpx-project-picker {
+  margin-bottom: 12px;
+}
+.cpx-message,
+.cpx-task-message {
+  color: #a8c7ff;
+}
+@media (max-width: 640px) {
+  .cpx-dialog {
+    padding: 14px;
+  }
+  .cpx-dialog form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.workspace-strip {
+  min-width: 0;
+  max-width: 100%;
+}
+.workspace-strip span {
+  min-width: 0;
+  max-width: 100%;
+}
+@media (max-width: 760px) {
+  .primary-nav .nav-item {
+    padding: 8px 6px;
+    min-width: 28px;
+  }
+  .primary-nav {
+    gap: 3px;
+  }
+  .sidebar .brand small {
+    display: none;
+  }
+}

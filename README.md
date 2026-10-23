@@ -40,12 +40,16 @@ Feishu and DingTalk use their official WebSocket/Stream connections, so your NAS
 - **Codex 开发控制台** - 以任务会话管理隔离工作区，可在同一任务中持续追加要求
 - **账号模型目录** - 登录后读取与 Codex `/model` 相同的模型列表，并按模型联动推理强度
 - **多套模型配置** - 保存配置名称、模型与推理强度，一键切换当前方案
-- **权限控制** - 主分支保护、危险操作二次确认、操作审计日志
+- **可靠任务** - SQLite 持久化、默认单任务队列、中断恢复、待处理要求和独立通知重试
+- **成果审查** - 已提交与未提交 diff、真实验证证据、版本绑定的 PR 发布与补丁导出
+- **项目与运维** - 版本化规则、角色权限、容量控制、一致性备份与受保护的归档清理
+- **可选自动化** - 默认关闭的定时维护与出站远程执行器
+- **权限控制** - 实例认领、登录、访问令牌、主分支保护、危险操作二次确认、操作审计日志
 - **命令中英双语** - 支持中文和英文命令（如 `修改` / `modify`）
 
 ## 环境要求
 
-- Node.js >= 18.0
+- Node.js >= 18.19
 - npm >= 8.0
 
 ## 快速开始
@@ -59,7 +63,7 @@ cpx doctor
 cpx start --daemon
 ```
 
-浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
+浏览器访问 `http://localhost:3000/`，使用 `~/.cpx/data/bootstrap-token.txt` 中的初始化令牌认领实例并设置管理员密码。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
 
 从源码开发时使用：
 
@@ -77,11 +81,12 @@ npm run dev -- init -d ./config
 npm run dev -- start -d ./config
 ```
 
-启动后通过 HTTP 接口发送命令测试：
+启动并登录后，在“项目与运行管理 → 用户与令牌”签发管理员访问令牌，通过开发机的 `CPX_ACCESS_TOKEN` 环境变量提供，再发送 HTTP 测试命令：
 
 ```bash
 curl -X POST http://localhost:3000/command \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CPX_ACCESS_TOKEN" \
   -d '{"text":"version","userId":"u1","userName":"Tester","source":"cli"}'
 ```
 
@@ -89,7 +94,7 @@ curl -X POST http://localhost:3000/command \
 
 - 本机已安装 `codex` CLI；可在页面使用 ChatGPT 设备码或 OpenAI API Key 登录。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
-- 通过飞书、钉钉或 API 发布 Pull Request 时还需安装 GitHub CLI（`gh`），并为 Token 配置推送分支和创建 PR 的权限；Web 任务工作台本身不提供 PR 开关。
+- 通过飞书、钉钉或 API 发布 Pull Request 时还需安装 GitHub CLI（`gh`），并为 Token 配置推送分支和创建 PR 的权限；Web 任务成果区提供独立的审查和 PR 发布操作。
 
 控制台的 GitHub 页签在没有 Token 时提供“创建 GitHub Token”入口，打开 GitHub 的 fine-grained PAT 页面并预填 90 天有效期及 Contents、Pull requests、Workflows 写权限；用户仍需在 GitHub 选择资源所有者和仓库，生成后复制回控制台验证。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。页面会区分本地文件与环境变量来源，受限 Token 只显示明确授权的仓库。
 
@@ -117,9 +122,11 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 不要在一个系统用户下授权、再让另一个服务账户运行 cpx，否则状态检查会显示未登录。
 
-首次使用仓库时，cpx 会把完整 Git 历史克隆到数据库所在目录下的 `repositories/<owner>/<repo>`；后续任务先 fetch 更新缓存，再通过 `git worktree` 创建 `workspaces/<task-id>`。左侧任务列表用于切换或新建任务；同一任务底部输入框可持续接收 prompt，后续轮次复用原分支、worktree 和 `thread_id`，并在会话中保留每轮用户输入与 Agent 最终回复。任务状态、轮次和日志保存在内存中，重启服务后不会恢复，但仓库缓存和工作区文件仍保留在磁盘。
+首次使用仓库时，cpx 会把完整 Git 历史克隆到数据库所在目录下的 `repositories/<owner>/<repo>`；后续任务先 fetch 更新缓存，再通过 `git worktree` 创建 `workspaces/<task-id>`。左侧任务列表用于切换或新建任务；同一任务底部输入框可持续接收 prompt，后续轮次复用原分支、worktree 和 `thread_id`，并在会话中保留每轮用户输入与 Agent 最终回复。任务、轮次、归属、日志与通知保存到 SQLite；排队任务在启动后恢复，执行中的任务显示“已中断”，检查成果后可恢复原会话或重建会话。仓库缓存和工作区文件保留在磁盘。
 
-> 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
+> 控制台 API 与 `/command` 需要登录或访问令牌；浏览器写请求校验 CSRF。服务仍具有代码执行与凭据管理能力，使用可信网络或 HTTPS 网关访问。成员共享执行环境，不构成强租户隔离。
+
+任务工作站的登录、项目配置、审查发布、团队授权、定时任务、远程执行、备份与升级流程见 [工作站指南](docs/WORKBENCH.md)。新安装默认先审查再发布；旧版控制台配置首次升级需由管理员选择默认发布方式。
 
 ## 极空间 Docker 部署
 
@@ -131,7 +138,7 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 2. 在极空间文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces` 和 `logs` 子目录
 3. 打开“Docker → Compose → 新建项目”，项目存储位置选择上传后的 `cpx` 目录
 4. 导入或粘贴根目录 `docker-compose.yml`，确认后由极空间自动构建并启动
-5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub、Codex 和所需消息平台
+5. 浏览器访问 `http://<NAS-IP>:3000`，从文件管理器读取 `data/bootstrap-token.txt` 认领实例，然后连接 GitHub、Codex 和所需消息平台
 
 更新已经运行的实例时，先在极空间 Compose 页面停止项目并备份 `data`、`config`、`logs`；在电脑取得新源码后，通过极空间文件管理器覆盖程序文件，但绝不能覆盖或删除这三个持久化目录。由于本版本把消息平台切换为纯长连接，还需要在 Compose 编辑器中同步新版 `docker-compose.yml`，再选择“重新构建并重新创建”并查看健康状态与日志。不要选择“删除数据卷”。NAS 无法稳定访问软件源或资源有限时，可在开发机构建并导出镜像，通过极空间镜像页面导入后修改镜像标签、重新创建容器。完整步骤见 [更新已运行实例](docs/DEPLOYMENT.md#十更新)。
 
@@ -182,7 +189,7 @@ cpx update                         # 检查 npm 新版本
 
 当前会话没有开发任务时，cpx 会启动一个不绑定仓库的只读协调 Codex。它可以通过受限的 `cpx_platform` MCP 工具查询当前 Token 可访问的 GitHub 仓库和分支；仓库不明确时会自然追问，明确后再创建隔离 worktree 任务。任务创建后，后续文本进入该任务的同一个 Codex `thread_id`，继续使用原工作区和任务分支。
 
-Codex 还可通过同一组受限工具查询、继续或停止当前用户的任务，并向发起消息的原会话发送阶段性进度。工具目标由 cpx 锁定为当前平台、用户和会话，不能由 Codex 更换。代码任务完成后，cpx 自动回传最终回答、状态和 PR 链接。同一任务正在执行时不会并行接受下一轮。
+Codex 还可通过同一组受限工具查询、继续或停止当前用户的任务，并向发起消息的原会话发送阶段性进度。工具目标由 cpx 锁定为当前平台、用户和会话，不能由 Codex 更换。代码任务完成后，cpx 自动回传最终回答、状态和 PR 链接。执行中追加的要求先保存在待处理列表，不与当前轮并行运行。
 
 ### 少量控制入口
 
@@ -198,7 +205,7 @@ Codex 还可通过同一组受限工具查询、继续或停止当前用户的�
 | `/confirm <确认ID>` | 确认需要显式授权的高风险操作          |
 | `/cancel <确认ID>`  | 拒绝待确认操作                        |
 
-原有的 `开发 owner/repo ...`、`查看GitHub`、`继续 <ID> ...` 等文本命令仍保留兼容性，主要用于 HTTP `/command` 调试或旧客户端；新的飞书、钉钉使用流程不依赖这些格式。聊天任务只能由创建它的同一平台、同一用户管理。协调会话、任务归属、状态和日志均保存在进程内，服务重启后不会恢复。
+原有的 `开发 owner/repo ...`、`查看GitHub`、`继续 <ID> ...` 等文本命令仍保留兼容性，主要用于 HTTP `/command` 调试或旧客户端；新的飞书、钉钉使用流程不依赖这些格式。聊天用户须先由管理员授权或通过一次性绑定码关联身份，跨平台不会自动互认。任务操作校验归属与项目权限；协调会话 ID、任务归属、状态、日志和通知已持久化。
 
 ## 配置
 
@@ -289,11 +296,13 @@ AGENT_STORAGE_PATH=./data/agent.db
 
 Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录；认证信息由 CLI 管理，模型方案不保存 API Key。
 
+运行容量、发布默认值、项目规则、角色、定时任务和执行器保存在 SQLite，通过“项目与运行管理”配置；不需要额外 YAML 占位字段。`CPX_BOOTSTRAP_TOKEN` 可预设首次认领令牌，`CPX_WORKER_TOKEN` 用于开发机执行器，`CPX_SERVER_URL` 与 `CPX_ACCESS_TOKEN` 用于 CLI 管理运行实例。
+
 ## HTTP API
 
 ### GET /
 
-返回 AI 开发控制台。控制台使用以下 API：
+返回登录入口及 AI 开发控制台。`/api/auth/status` 查询登录状态，`/api/auth/login` 登录或首次认领，`/api/auth/logout` 退出；业务 API 需要管理员会话或有权限的个人令牌。控制台使用以下 API：
 
 | 端点                                         | 说明                                           |
 | -------------------------------------------- | ---------------------------------------------- |
@@ -315,15 +324,16 @@ Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录�
 | `POST /api/console/task/continue`            | 向已结束任务的原工作区追加 prompt              |
 | `POST /api/console/cancel`                   | 取消未结束任务                                 |
 
-仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。Coding Agent 可以提交并推送非主分支，cpx 通过受控认证和 pre-push hook 禁止直接推送基础分支以及 `main`、`master`、`production`；force push 仍然禁止。任务启用 `createPullRequest` 时，系统会提交尚未提交的改动、推送任务分支并调用 `gh pr create`；Agent 已自行提交或推送时也能正确创建或更新 PR。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
+仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。工作站任务由独立发布服务推送经过版本校验的成果；基础分支、`main`、`master`、`production` 及配置中的受保护分支不得直接推送。页面与聊天共用 local/review/auto 策略，发布失败可独立重试并对账已有 PR；程序化无工作站配置的旧适配接口继续保留兼容行为。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
 
 ### POST /command
 
-测试用命令端点，无需钉钉/飞书即可调试：
+仅管理员可用的命令调试端点，无需钉钉/飞书即可调试；请求体的身份字段不授予权限：
 
 ```bash
 curl -X POST http://localhost:3000/command \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CPX_ACCESS_TOKEN" \
   -d '{"text":"help","userId":"u1","userName":"Tester","source":"cli"}'
 ```
 
@@ -363,7 +373,7 @@ module.exports = {
 };
 ```
 
-`SkillInstaller` 已提供从 npm、本地目录和 Git 仓库安装的底层 API；当前 CLI 尚未暴露安装和卸载命令。
+`SkillInstaller` 支持 npm、本地目录和 Git 仓库；页面与 `cpx skill install/uninstall/list` 管理可信扩展，`cpx mcp connect/disconnect/list` 管理连接。CLI 通过 `CPX_ACCESS_TOKEN` 访问运行实例。Skill 在受管理子进程执行，仍不构成操作系统安全沙箱。
 
 ## 程序化调用
 

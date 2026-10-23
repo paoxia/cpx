@@ -1,13 +1,9 @@
+import type { WorkbenchStore } from '../workbench/Store';
 import axios from 'axios';
 import { createLarkChannel, LarkChannel, LoggerLevel } from '@larksuiteoapi/node-sdk';
 import { DWClient, RobotMessage, TOPIC_ROBOT } from 'dingtalk-stream';
 import type { ParsedUserInfo } from '../core/CommandParser';
-import type {
-  CommandResult,
-  CommandSource,
-  DingTalkConfig,
-  FeishuConfig,
-} from '../core/types';
+import type { CommandResult, CommandSource, DingTalkConfig, FeishuConfig } from '../core/types';
 import { Logger } from '../utils/Logger';
 
 export type MessagingPlatform = 'dingtalk' | 'feishu';
@@ -58,11 +54,14 @@ export class MessagingIntegrationManager {
     feishu: FeishuConfig,
     logger: Logger,
     processCommand: CommandProcessor,
+    private readonly store?: WorkbenchStore,
   ) {
     this.dingtalkConfig = structuredClone(dingtalk);
     this.feishuConfig = structuredClone(feishu);
     this.logger = logger.child('Messaging');
     this.processCommand = processCommand;
+    for (const route of store?.list<{ id: string; chatId: string }>('feishu-route') ?? [])
+      this.feishuRoutes.set(route.id, route.chatId);
     this.statuses = {
       dingtalk: this.baseStatus('dingtalk'),
       feishu: this.baseStatus('feishu'),
@@ -174,6 +173,8 @@ export class MessagingIntegrationManager {
           userId,
           userName: message.senderNick || 'DingTalkUser',
           source: 'dingtalk',
+          messageId: event.headers.messageId,
+          isGroup: message.conversationType === '2',
           replyRouteId,
         });
         client.socketCallBackResponse(event.headers.messageId, { success: true });
@@ -223,6 +224,7 @@ export class MessagingIntegrationManager {
     channel.on('message', async (message) => {
       const replyRouteId = `${message.chatId}:${message.senderId}`;
       this.feishuRoutes.set(replyRouteId, message.chatId);
+      this.store?.put('feishu-route', replyRouteId, { id: replyRouteId, chatId: message.chatId });
       this.statuses.feishu = {
         ...this.statuses.feishu,
         state: 'connected',
@@ -234,6 +236,8 @@ export class MessagingIntegrationManager {
           userId: message.senderId,
           userName: message.senderName || 'FeishuUser',
           source: 'feishu',
+          messageId: message.messageId,
+          isGroup: message.chatType === 'group',
           replyRouteId,
         });
       } catch (error) {
@@ -294,7 +298,9 @@ export class MessagingIntegrationManager {
   }
 
   private isDingTalkConfigured(): boolean {
-    return Boolean(this.dingtalkConfig.clientId?.trim() && this.dingtalkConfig.clientSecret?.trim());
+    return Boolean(
+      this.dingtalkConfig.clientId?.trim() && this.dingtalkConfig.clientSecret?.trim(),
+    );
   }
 
   private isFeishuConfigured(): boolean {
@@ -302,8 +308,10 @@ export class MessagingIntegrationManager {
   }
 
   private baseStatus(platform: MessagingPlatform): MessagingPlatformStatus {
-    const enabled = platform === 'dingtalk' ? this.dingtalkConfig.enabled : this.feishuConfig.enabled;
-    const configured = platform === 'dingtalk' ? this.isDingTalkConfigured() : this.isFeishuConfigured();
+    const enabled =
+      platform === 'dingtalk' ? this.dingtalkConfig.enabled : this.feishuConfig.enabled;
+    const configured =
+      platform === 'dingtalk' ? this.isDingTalkConfigured() : this.isFeishuConfigured();
     return {
       platform,
       displayName: platform === 'dingtalk' ? '钉钉' : '飞书',

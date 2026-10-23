@@ -2,7 +2,7 @@
 
 ## 环境与命令
 
-项目要求 Node.js 18 或更高版本。安装依赖后可使用以下命令：
+项目要求 Node.js 18.19 或更高版本。安装依赖后可使用以下命令：
 
 ```bash
 npm run dev <command>  # 直接运行 TypeScript CLI
@@ -68,3 +68,12 @@ npm run lint
 - 用户可观察行为改动更新 `docs/specs/agent-system.md`。
 - 表结构改动后同步 `docs/DATABASE.md`。
 - 不新增只有标题和占位符的文档；新文档必须从 [文档入口](README.md) 链接。
+
+
+## 工作站验证
+
+新增 `tests/unit/workbench/` 覆盖真实 HTTP 认证、项目/任务权限、真实 Git 快照与发布恢复、定时撤权、通知、备份、执行器租约和 Skill 进程。修改执行状态时必须验证中断后恢复的终态通知不会被原中断通知的幂等键吞掉。
+
+浏览器联测应在隔离临时数据库与仓库运行，覆盖首次认领、任务链接与 diff、项目规则保存、备份、成员、模板与执行器页面，以及 390px 手机宽度。不得为测试把真实令牌写入截图或提交目录。
+
+运行时最低版本调整为 18.19，以支持当前进程加载流程与磁盘检查；磁盘检查依赖 Node 的 [statfsSync API](https://nodejs.org/download/release/v18.19.1/docs/api/fs.html#fsstatfssyncpath-options)。Docker 继续使用 Node 22。更新后需同步检查 `package.json`、开发文档和 `cpx doctor` 的版本要求。
