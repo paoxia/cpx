@@ -9,6 +9,7 @@
 | 在极空间试运行当前开发代码 | [NAS 开发调试指南](NAS-DEBUGGING.md) |
 | 系统如何组成 | [系统架构](../ARCHITECTURE.md) |
 | 产品为谁解决什么问题 | [产品说明](PRODUCT.md) |
+| 产品还可以怎样进化、建议优先做什么 | [产品演进提案](PRODUCT-EVOLUTION.md) |
 | 如何开发和验证改动 | [开发指南](DEVELOPMENT.md) |
 | 安全边界和部署注意事项 | [安全说明](SECURITY.md) |
 | 当前能力与验收要求 | [Agent System 规格](specs/agent-system.md) |
