@@ -12,6 +12,8 @@ import {
 import { HttpServer } from '../core/HttpServer';
 import { AccessControl, digest, Principal } from './Access';
 import { WorkbenchStore } from './Store';
+import { nextScheduleAt, Schedule, scheduleDate, scheduleSchema } from './Schedules';
+import { newsPrompt } from '../agents/News';
 
 const checkSchema = z.object({
   command: z.string().min(1).max(512),
@@ -30,6 +32,7 @@ const projectSchema = z.object({
   executorId: z.string().max(100).optional(),
   extensions: z.array(z.string().max(100)).max(30).default([]),
   independentReview: z.boolean().default(false),
+  allowScheduledMerge: z.boolean().default(false),
 });
 export type Project = z.infer<typeof projectSchema> & { version: number; updatedAt: number };
 const runtimeSchema = z.object({
@@ -48,21 +51,6 @@ const runtimeSchema = z.object({
   retentionDays: z.number().int().min(1).max(3650).default(30),
   autoCleanup: z.boolean().default(false),
 });
-const scheduleSchema = z.object({
-  id: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
-  projectId: z.string().max(80),
-  templateId: z.string().max(80),
-  prompt: z.string().min(1).max(20000),
-  intervalMinutes: z.number().int().min(5).max(525600),
-  timeZone: z.string().max(100).default('Asia/Shanghai'),
-  enabled: z.boolean().default(false),
-});
-type Schedule = z.infer<typeof scheduleSchema> & {
-  ownerId: string;
-  nextAt: number;
-  lastTaskId?: string;
-  error?: string;
-};
 interface Notice {
   id: string;
   taskId: string;
@@ -89,6 +77,12 @@ interface WorkbenchOptions {
 }
 
 const templates = [
+  { id: 'custom', name: '自定义任务', prompt: '{{input}}' },
+  {
+    id: 'news',
+    name: '新闻日报（实时搜索）',
+    prompt: '搜集以下范围的最新新闻，更新仓库中的新闻日报：\n{{input}}',
+  },
   {
     id: 'investigate',
     name: '调查问题',
@@ -194,16 +188,62 @@ export class Workbench {
       ? this.store.get<Project>('project', task.projectId)
       : undefined;
     if (!project) return {};
+    const schedule = task?.scheduleId
+      ? this.store.get<Schedule>('schedule', task.scheduleId)
+      : undefined;
     return {
       projectVersion: project.version,
       context: project.context,
       verificationCommands: project.verificationCommands,
       timeoutMs: project.timeoutMs,
-      policy: project.policy,
+      policy:
+        task?.scheduleId && (task.policy === 'review' || schedule?.publication === 'review')
+          ? 'review'
+          : project.policy,
+      autoMerge: Boolean(
+        task?.autoMerge &&
+        project.policy === 'auto' &&
+        project.allowScheduledMerge &&
+        schedule?.publication === 'merge',
+      ),
       executorId: project.executorId,
       extensions: project.extensions,
       independentReview: project.independentReview,
     };
+  }
+
+  private scheduleProject(schedule: Schedule): Project {
+    const project = this.store.get<Project>('project', schedule.projectId);
+    if (!project) throw new Error('项目不存在');
+    if (schedule.publication !== 'review' && project.policy !== 'auto')
+      throw new Error('自动发布需先在项目中预授权自动发布 PR');
+    if (schedule.publication === 'merge' && !project.allowScheduledMerge)
+      throw new Error('项目未授权定时任务自动合并');
+    return project;
+  }
+
+  /** Recheck current project authorization at execution/publication, not just at enqueue. */
+  authorizeScheduledTask(action: string, task: AgentTask): void {
+    if (!task.scheduleId) return;
+    const schedule = this.store.get<Schedule>('schedule', task.scheduleId);
+    const owner = task.ownerId ? this.access.account(task.ownerId) : undefined;
+    if (
+      !schedule ||
+      schedule.projectId !== task.projectId ||
+      schedule.ownerId !== task.ownerId ||
+      !owner ||
+      !['admin', 'maintainer'].includes(owner.role) ||
+      !this.access.canProject(owner, task.projectId, true)
+    )
+      throw new Error('定时任务授权已撤销');
+    const project = this.store.get<Project>('project', task.projectId!);
+    if (!project) throw new Error('项目不存在');
+    if (action === 'publish' && (task.policy === 'auto' || task.autoMerge)) {
+      if (project.policy !== 'auto' || schedule.publication === 'review')
+        throw new Error('定时任务自动发布授权已撤销');
+      if (task.autoMerge && (!project.allowScheduledMerge || schedule.publication !== 'merge'))
+        throw new Error('定时任务自动合并授权已撤销');
+    }
   }
 
   terminal(task: AgentTask): void {
@@ -253,6 +293,73 @@ export class Workbench {
     return this.currentTick;
   }
 
+  private triggerSchedule(
+    schedule: Schedule,
+    now: number,
+    key: string,
+    reviewOnly = false,
+  ): AgentTask {
+    const owner = this.access.account(schedule.ownerId);
+    if (
+      !owner ||
+      !['admin', 'maintainer'].includes(owner.role) ||
+      !this.access.canProject(owner, schedule.projectId, true)
+    )
+      throw new Error('定时任务创建者权限已撤销');
+    if (reviewOnly) {
+      if (!this.store.get<Project>('project', schedule.projectId)) throw new Error('项目不存在');
+    } else this.scheduleProject(schedule);
+    if (
+      this.manager
+        .list()
+        .some(
+          (task) =>
+            task.projectId === schedule.projectId &&
+            ['queued', 'preparing', 'running', 'verifying', 'publishing'].includes(task.status),
+        )
+    )
+      throw new Error('项目有活动任务，本次跳过');
+    const template = templates.find((item) => item.id === schedule.templateId);
+    if (!template) throw new Error('模板不存在');
+    const news =
+      schedule.templateId === 'news'
+        ? {
+            directory: schedule.newsDirectory,
+            date: scheduleDate(schedule.timeZone, now),
+            since: now - 86400000,
+            until: now,
+            maxItems: schedule.newsMaxItems,
+            timeZone: schedule.timeZone,
+          }
+        : undefined;
+    const request = this.prepare(
+      {
+        projectId: schedule.projectId,
+        repository: '',
+        provider: 'codex',
+        prompt:
+          template.prompt.replace('{{input}}', () => schedule.prompt) +
+          (news ? newsPrompt(news) : ''),
+        idempotencyKey: key,
+      },
+      owner,
+    );
+    request.policy = reviewOnly || schedule.publication === 'review' ? 'review' : 'auto';
+    request.scheduleId = schedule.id;
+    request.autoMerge = !reviewOnly && schedule.publication === 'merge';
+    request.news = news;
+    if (news) request.webSearch = 'live';
+    return this.store.db.transaction(() => {
+      const task = this.options.createTask(request);
+      schedule.lastTaskId = task.id;
+      schedule.lastAt = now;
+      schedule.error = undefined;
+      this.store.put('schedule', schedule.id, schedule);
+      this.store.audit(owner.id, reviewOnly ? 'schedule_test' : 'schedule_trigger', schedule.id);
+      return task;
+    });
+  }
+
   private async performTick(now: number): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
@@ -260,42 +367,13 @@ export class Workbench {
       if (this.runtimeSettings().schedulesEnabled) {
         for (const schedule of this.store.list<Schedule>('schedule')) {
           if (!schedule.enabled || schedule.nextAt > now) continue;
+          Object.assign(schedule, scheduleSchema.parse(schedule));
           const trigger = schedule.nextAt;
-          schedule.nextAt = now + schedule.intervalMinutes * 60000;
-          this.store.put('schedule', schedule.id, schedule);
+          schedule.nextAt = nextScheduleAt(schedule, now);
+          schedule.lastAt = now;
           try {
-            const owner = this.access.account(schedule.ownerId);
-            if (!owner || !this.access.canProject(owner, schedule.projectId, true))
-              throw new Error('定时任务创建者权限已撤销');
-            if (
-              this.manager
-                .list()
-                .some(
-                  (t) =>
-                    t.projectId === schedule.projectId &&
-                    ['queued', 'preparing', 'running', 'verifying', 'publishing'].includes(
-                      t.status,
-                    ),
-                )
-            )
-              throw new Error('项目有活动任务，本次跳过');
-            const template = templates.find((t) => t.id === schedule.templateId);
-            if (!template) throw new Error('模板不存在');
-            // Scheduled work never inherits a previous manual publication approval.
-            const request = this.prepare(
-              {
-                projectId: schedule.projectId,
-                repository: '',
-                provider: 'codex',
-                prompt: template.prompt.replace('{{input}}', schedule.prompt),
-                idempotencyKey: `schedule:${schedule.id}:${trigger}`,
-              },
-              owner,
-            );
-            request.policy = 'review';
-            schedule.lastTaskId = this.options.createTask(request).id;
+            this.triggerSchedule(schedule, now, `schedule:${schedule.id}:${trigger}`);
             schedule.error = undefined;
-            this.store.audit(owner.id, 'schedule_trigger', schedule.id);
           } catch (error) {
             schedule.error = String(error);
           }
@@ -414,6 +492,8 @@ export class Workbench {
     });
     route('POST', 'projects', false, (body, principal) => {
       const input = projectSchema.parse(body);
+      if (input.allowScheduledMerge && input.policy !== 'auto')
+        throw new Error('自动合并需要预授权自动发布 PR');
       normalizeRepository(input.repository);
       if (!this.access.canProject(principal, input.id, true) || principal.role === 'requester')
         throw new Error('无权修改项目规则');
@@ -487,7 +567,29 @@ export class Workbench {
     route('GET', 'schedules', false, (_body, principal) =>
       this.store
         .list<Schedule>('schedule')
-        .filter((s) => principal.role === 'admin' || s.ownerId === principal.id),
+        .filter(
+          (s) =>
+            (principal.role === 'admin' || s.ownerId === principal.id) &&
+            this.access.canProject(principal, s.projectId),
+        )
+        .map((s) => {
+          const task = s.lastTaskId ? this.manager.get(s.lastTaskId) : undefined;
+          return {
+            ...s,
+            ...scheduleSchema.parse(s),
+            lastTask:
+              task && this.access.canTask(principal, task)
+                ? {
+                    id: task.id,
+                    status: task.status,
+                    error: task.error,
+                    publication: task.publication,
+                    pullRequestUrl: task.pullRequestUrl,
+                    merge: task.merge,
+                  }
+                : undefined,
+          };
+        }),
     );
     route('POST', 'schedules', false, (body, principal) => {
       const input = scheduleSchema.parse(body);
@@ -496,16 +598,40 @@ export class Workbench {
         principal.role === 'requester'
       )
         throw new Error('无权设置定时任务');
-      new Intl.DateTimeFormat('zh-CN', { timeZone: input.timeZone }).format();
       if (!templates.some((t) => t.id === input.templateId)) throw new Error('模板不存在');
       const old = this.store.get<Schedule>('schedule', input.id);
       if (old && old.ownerId !== principal.id && principal.role !== 'admin')
         throw new Error('无权修改此定时任务');
-      return this.store.put<Schedule>('schedule', input.id, {
+      const next: Schedule = {
         ...input,
-        ownerId: principal.id,
-        nextAt: Date.now() + input.intervalMinutes * 60000,
-      });
+        ownerId: old?.ownerId ?? principal.id,
+        nextAt: nextScheduleAt(input, Date.now()),
+        lastAt: old?.lastAt,
+        lastTaskId: old?.lastTaskId,
+      };
+      this.scheduleProject(next);
+      this.store.put('schedule', input.id, next);
+      this.store.audit(principal.id, 'schedule_save', input.id);
+      return next;
+    });
+    route('POST', 'schedule-run', false, (body, principal) => {
+      const id = z.string().parse(body.id);
+      const runId = z.string().uuid().parse(body.runId);
+      const saved = this.store.get<Schedule>('schedule', id);
+      if (
+        !saved ||
+        (principal.role !== 'admin' && saved.ownerId !== principal.id) ||
+        !['admin', 'maintainer'].includes(principal.role) ||
+        !this.access.canProject(principal, saved.projectId, true)
+      )
+        throw new Error('无权试运行此定时任务');
+      const schedule = { ...saved, ...scheduleSchema.parse(saved) };
+      const key = `schedule-test:${id}:${runId}`;
+      const existing = this.manager
+        .list()
+        .find((task) => task.idempotencyKey === key && task.ownerId === saved.ownerId);
+      if (existing) return existing;
+      return this.triggerSchedule(schedule, Date.now(), key, true);
     });
     route('POST', 'notice-retry', true, (body) => {
       const id = z.string().parse(body.id);

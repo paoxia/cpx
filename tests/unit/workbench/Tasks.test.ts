@@ -235,6 +235,202 @@ describe('durable tasks with real Git workspaces', () => {
     expect(readFileSync(join(task.workspace!, 'unpublished.txt'), 'utf8')).toBe('keep me');
   });
 
+  it('generates a dated news report but fails when the agent changes unrelated files', async () => {
+    const task = seed();
+    create({
+      runAgent: async (active, workspace) => {
+        active.webSearches = 1;
+        mkdirSync(join(workspace, 'news'));
+        writeFileSync(
+          join(workspace, 'news/2026-10-24.sources.json'),
+          JSON.stringify({
+            items: [
+              {
+                title: 'An announcement',
+                url: 'https://example.com/announcement',
+                publishedAt: '2026-10-24T00:00:00Z',
+                summary: '官方公告摘要',
+              },
+            ],
+          }),
+        );
+        writeFileSync(join(workspace, 'tracked.txt'), 'unrelated change');
+      },
+    });
+    manager.continueTask(task.id, {
+      prompt: 'news',
+      webSearch: 'live',
+      news: {
+        directory: 'news',
+        date: '2026-10-24',
+        since: Date.parse('2026-10-23T01:00:00Z'),
+        until: Date.parse('2026-10-24T01:00:00Z'),
+        maxItems: 10,
+        timeZone: 'Asia/Shanghai',
+      },
+    });
+    const completed = await manager.waitForTerminal(task.id);
+    expect(completed.status).toBe('failed');
+    expect(completed.error).toContain('当天新闻文件以外');
+    expect(readFileSync(join(task.workspace!, 'news/2026-10-24.md'), 'utf8')).toContain(
+      '官方公告摘要',
+    );
+    await expect(manager.publish(task.id, completed.result!.version)).rejects.toThrow('先恢复');
+  });
+
+  it('validates news output before publishing the generated Markdown and source manifest', async () => {
+    const task = seed();
+    task.policy = 'auto';
+    store.saveTask(task);
+    const remoteCalls: string[][] = [];
+    create({
+      runAgent: async (active, workspace) => {
+        active.webSearches = 1;
+        mkdirSync(join(workspace, 'news'));
+        writeFileSync(
+          join(workspace, 'news/2026-10-24.sources.json'),
+          JSON.stringify({
+            items: [
+              {
+                title: 'Official news',
+                url: 'https://example.com/official',
+                publishedAt: '2026-10-24T00:00:00Z',
+                summary: '官方新闻摘要',
+              },
+            ],
+          }),
+        );
+      },
+      runGitHub: async (_task, command, args) => {
+        remoteCalls.push(args);
+        return {
+          stdout:
+            command === 'gh'
+              ? args[1] === 'list'
+                ? '[]'
+                : 'https://github.com/acme/repo/pull/42'
+              : '',
+          stderr: '',
+        };
+      },
+    });
+    manager.continueTask(task.id, {
+      prompt: 'news',
+      news: {
+        directory: 'news',
+        date: '2026-10-24',
+        since: Date.parse('2026-10-23T01:00:00Z'),
+        until: Date.parse('2026-10-24T01:00:00Z'),
+        maxItems: 10,
+        timeZone: 'Asia/Shanghai',
+      },
+    });
+    const completed = await manager.waitForTerminal(task.id);
+    expect(completed.publication?.status).toBe('published');
+    expect(completed.result?.diff).toContain('官方新闻摘要');
+    expect(completed.result?.files).toContain('2026-10-24.md');
+    expect(completed.result?.files).toContain('2026-10-24.sources.json');
+    expect(remoteCalls.some((args) => args[0] === 'push')).toBe(true);
+    expect(completed.merge).toBeUndefined();
+  });
+
+  it.each(['head', 'base', 'branch', 'repository'])(
+    'refuses automatic merging when the PR %s differs',
+    async (mismatch) => {
+      const task = seed();
+      task.autoMerge = true;
+      store.saveTask(task);
+      let merges = 0;
+      create({
+        runGitHub: async (_task, command, args) => {
+          if (command === 'git') return { stdout: '', stderr: '' };
+          if (args[1] === 'list') return { stdout: '[]', stderr: '' };
+          if (args[1] === 'create')
+            return {
+              stdout: `https://github.com/${mismatch === 'repository' ? 'other/repo' : 'acme/repo'}/pull/42`,
+              stderr: '',
+            };
+          if (args[1] === 'view')
+            return {
+              stdout: JSON.stringify({
+                state: 'OPEN',
+                headRefOid:
+                  mismatch === 'head' ? 'f'.repeat(40) : git(task.workspace!, 'rev-parse', 'HEAD'),
+                baseRefName: mismatch === 'base' ? 'other' : 'main',
+                headRefName: mismatch === 'branch' ? 'other' : 'feature/task',
+              }),
+              stderr: '',
+            };
+          merges++;
+          return { stdout: '', stderr: '' };
+        },
+      });
+      writeFileSync(join(task.workspace!, 'tracked.txt'), 'publication\n');
+      const result = await manager.result(task.id);
+      await expect(manager.publish(task.id, result.version)).rejects.toThrow();
+      expect(merges).toBe(0);
+      expect(manager.get(task.id)?.merge?.status).toBe('failed');
+      expect(manager.get(task.id)?.publication?.status).toBe('failed');
+    },
+  );
+
+  it('retries a failed merge request on the same PR without rerunning development', async () => {
+    const task = seed();
+    task.autoMerge = true;
+    store.saveTask(task);
+    let created = false;
+    let fail = true;
+    const merges: string[][] = [];
+    create({
+      runGitHub: async (_task, command, args) => {
+        if (command === 'git') return { stdout: '', stderr: '' };
+        expect(args).toContain('--repo');
+        expect(args).toContain('acme/repo');
+        if (args[1] === 'list')
+          return {
+            stdout: created ? '[{"url":"https://github.com/acme/repo/pull/42"}]' : '[]',
+            stderr: '',
+          };
+        if (args[1] === 'create') {
+          created = true;
+          return { stdout: 'https://github.com/acme/repo/pull/42', stderr: '' };
+        }
+        if (args[1] === 'view')
+          return {
+            stdout: JSON.stringify({
+              state: 'OPEN',
+              headRefOid: git(task.workspace!, 'rev-parse', 'HEAD'),
+              baseRefName: 'main',
+              headRefName: 'feature/task',
+            }),
+            stderr: '',
+          };
+        merges.push(args);
+        if (fail) throw new Error('Auto merge unavailable');
+        return { stdout: '', stderr: '' };
+      },
+    });
+    writeFileSync(join(task.workspace!, 'tracked.txt'), 'publication\n');
+    const result = await manager.result(task.id);
+    await expect(manager.publish(task.id, result.version)).rejects.toThrow('Auto merge');
+    expect(manager.get(task.id)?.pullRequestUrl).toContain('/pull/42');
+    fail = false;
+    const retry = await manager.result(task.id);
+    const published = await manager.publish(task.id, retry.version);
+    expect(published.merge?.status).toBe('requested');
+    expect(published.publication?.status).toBe('published');
+    expect(merges[1]).toEqual(
+      expect.arrayContaining([
+        '42',
+        '--auto',
+        '--squash',
+        '--match-head-commit',
+        git(task.workspace!, 'rev-parse', 'HEAD'),
+      ]),
+    );
+    expect(merges[1]).not.toContain('--admin');
+  });
+
   it('reconciles a PR created before interruption and retries publication without rerunning development', async () => {
     const task = seed();
     const remote = join(root, 'remote.git');

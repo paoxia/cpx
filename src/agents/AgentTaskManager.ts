@@ -14,6 +14,7 @@ import { dirname, join, resolve, sep } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
+import { NewsRequest, validateNews } from './News';
 import {
   AgentErrorKind,
   AgentProcessError,
@@ -81,6 +82,10 @@ export interface TaskOrigin {
   replyRouteId?: string;
 }
 export interface TaskOptions {
+  scheduleId?: string;
+  autoMerge?: boolean;
+  webSearch?: 'live';
+  news?: NewsRequest;
   ownerId?: string;
   projectId?: string;
   projectVersion?: number;
@@ -171,6 +176,8 @@ export interface AgentTaskTurn {
 }
 
 export interface AgentTask extends TaskOptions {
+  webSearches?: number;
+  merge?: { status: 'requested' | 'merged' | 'failed'; error?: string };
   reviewReport?: {
     status: 'completed' | 'failed';
     response?: string;
@@ -268,7 +275,9 @@ export class AgentTaskManager {
   private resumeWorkspace = new Set<string>();
   private executionPromises = new Set<Promise<void>>();
   private deadlines = new Map<string, number>();
-  private remoteRunner?: (task: AgentTask) => Promise<{ patch: string; response: string }>;
+  private remoteRunner?: (
+    task: AgentTask,
+  ) => Promise<{ patch: string; response: string; webSearches?: number }>;
 
   constructor(
     workspaceRoot: string,
@@ -410,6 +419,7 @@ export class AgentTaskManager {
     task.status = 'queued';
     task.error = undefined;
     task.lastAgentResponse = undefined;
+    task.merge = undefined;
     task.completedAt = undefined;
     task.updatedAt = now;
     task.turns.push(this.createTurn(prompt, now));
@@ -504,6 +514,10 @@ export class AgentTaskManager {
       'seedPatch',
       'extensions',
       'independentReview',
+      'scheduleId',
+      'autoMerge',
+      'webSearch',
+      'news',
     ] as const;
     return Object.fromEntries(
       fields.filter((key) => request[key] !== undefined).map((key) => [key, request[key]]),
@@ -643,7 +657,9 @@ export class AgentTaskManager {
     child.once('close', () => clearTimeout(force));
   }
 
-  setRemoteRunner(runner: (task: AgentTask) => Promise<{ patch: string; response: string }>): void {
+  setRemoteRunner(
+    runner: (task: AgentTask) => Promise<{ patch: string; response: string; webSearches?: number }>,
+  ): void {
     this.remoteRunner = runner;
   }
 
@@ -788,6 +804,26 @@ export class AgentTaskManager {
     }
   }
 
+  private async checkNews(task: AgentTask, result: TaskResult): Promise<void> {
+    if (!task.news) return;
+    validateNews(this.assertWorkspace(task), task.news, task.webSearches ?? 0, false);
+    const changed = await this.runProcess(
+      task,
+      'git',
+      ['diff', '--no-renames', '--name-only', '-z', result.baseCommit, result.tree, '--'],
+      this.assertWorkspace(task),
+    );
+    const prefix = `${task.news.directory}/${task.news.date}`;
+    const allowed = new Set([`${prefix}.md`, `${prefix}.sources.json`]);
+    if (
+      changed.stdout
+        .split('\0')
+        .filter(Boolean)
+        .some((path) => !allowed.has(path))
+    )
+      throw new Error('新闻任务修改了当天新闻文件以外的内容，拒绝发布');
+  }
+
   async publish(id: string, version: string, automatic = false): Promise<AgentTask> {
     const task = this.requireTask(id);
     this.options.guard?.('publish', task);
@@ -805,6 +841,7 @@ export class AgentTaskManager {
       const current = await this.captureResult(task);
       if (!task.result || version !== current.version || task.result.version !== current.version)
         throw new Error('成果版本已变化，请重新审查');
+      if (task.news) await this.checkNews(task, current);
       task.publication = { status: 'publishing', version };
       this.persist(task);
       const workspace = this.assertWorkspace(task);
@@ -910,6 +947,56 @@ export class AgentTaskManager {
           )?.[0];
           if (!task.pullRequestUrl) throw new Error('PR 创建结果未知，请核对远端后重试');
         }
+        if (task.autoMerge) {
+          this.options.guard?.('publish', task);
+          try {
+            const coordinates = repositoryCoordinates(task.repository);
+            const url = new URL(task.pullRequestUrl!);
+            const match = url.pathname.match(/^\/([^/]+)\/([^/]+)\/pull\/(\d+)$/);
+            if (
+              url.origin !== 'https://github.com' ||
+              !match ||
+              match[1].toLowerCase() !== coordinates.owner.toLowerCase() ||
+              match[2].toLowerCase() !== coordinates.repository.toLowerCase()
+            )
+              throw new Error('PR 不属于任务仓库');
+            const number = match[3];
+            // Pin the PR identity, base and head before asking GitHub to merge.
+            const view = await this.runGitHubProcess(
+              task,
+              'gh',
+              ['pr', 'view', number, '--json', 'state,headRefOid,baseRefName,headRefName'],
+              workspace,
+            );
+            const pr = JSON.parse(view.stdout) as {
+              state: string;
+              headRefOid: string;
+              baseRefName: string;
+              headRefName: string;
+            };
+            if (
+              pr.headRefOid !== commitId ||
+              pr.baseRefName !== task.baseBranch ||
+              pr.headRefName !== task.agentBranch
+            )
+              throw new Error('PR 目标或提交已变化，拒绝自动合并');
+            if (pr.state === 'MERGED') task.merge = { status: 'merged' };
+            else {
+              if (pr.state !== 'OPEN') throw new Error('PR 已关闭，无法自动合并');
+              await this.runGitHubProcess(
+                task,
+                'gh',
+                ['pr', 'merge', number, '--auto', '--squash', '--match-head-commit', commitId],
+                workspace,
+              );
+              task.merge = { status: 'requested' };
+              this.store?.audit(task.ownerId ?? 'admin', 'auto_merge_request', task.id);
+            }
+          } catch (error) {
+            task.merge = { status: 'failed', error: this.redact(String(error)) };
+            throw error;
+          }
+        }
       }
       task.publication = { status: 'published', version: task.result?.version };
       if (task.status === 'review') task.status = 'completed';
@@ -994,6 +1081,7 @@ export class AgentTaskManager {
     this.deadlines.set(task.id, Date.now() + (task.timeoutMs ?? this.options.timeoutMs ?? 1800000));
     try {
       this.options.guard?.('execute', task);
+      task.webSearches = 0;
       if (this.runtime().freeBytes < (this.options.minFreeBytes ?? 0))
         throw new Error('磁盘可用空间不足');
       task.status = 'preparing';
@@ -1021,8 +1109,10 @@ export class AgentTaskManager {
         this.assertNotCancelled(task);
         await this.importRemoteResult(task, remote.patch);
         task.lastAgentResponse = turn.response = this.redact(remote.response);
+        task.webSearches = remote.webSearches ?? 0;
       } else if (this.options.runAgent) await this.options.runAgent(task, workspace);
       else await this.runAgentWithFallback(task, workspace, resumeThreadId);
+      if (task.news) validateNews(workspace, task.news, task.webSearches ?? 0);
       if (task.policy) {
         task.status = 'verifying';
         this.persist(task);
@@ -1134,6 +1224,7 @@ export class AgentTaskManager {
           this.persist(task);
         }
         task.result = await this.captureResult(task);
+        if (task.news) await this.checkNews(task, task.result);
       }
       this.assertNotCancelled(task);
 
@@ -1285,6 +1376,7 @@ export class AgentTaskManager {
       );
 
       try {
+        task.webSearches = 0;
         await this.runAgent(task, workspace, configuration, resumeThreadId);
         attempt.status = 'success';
         attempt.endedAt = Date.now();
@@ -1375,6 +1467,14 @@ export class AgentTaskManager {
       appendGitConfig(env, 'credential.helper', '');
       appendGitConfig(env, 'core.hooksPath', this.ensurePushGuard(task));
       env.GIT_TERMINAL_PROMPT = '0';
+    }
+    if (task.news || task.webSearch === 'live') {
+      args.splice(
+        Math.max(2, args.length - (resumeThreadId ? 2 : 1)),
+        0,
+        '--config',
+        'web_search="live"',
+      );
     }
     const platformTools = this.platformToolContexts.get(task.id);
     if (platformTools) {
@@ -1592,6 +1692,12 @@ export class AgentTaskManager {
     const pinned = [...args];
     const env = { ...this.githubEnvironment() };
     if (task.policy) {
+      if (
+        (command === 'git' && pinned[0] === 'push') ||
+        (command === 'gh' && pinned[0] === 'pr' && ['create', 'merge'].includes(pinned[1]))
+      )
+        this.options.guard?.('publish', task);
+
       if (command === 'git' && pinned[0] === 'push') {
         const index = pinned.indexOf('origin');
         if (index !== -1) pinned[index] = task.repository;
@@ -1688,6 +1794,8 @@ export class AgentTaskManager {
             continue;
           }
           if (captureAgentJson) {
+            if (stream === 'stdout' && successfulWebSearch(line))
+              task.webSearches = (task.webSearches ?? 0) + 1;
             const threadId = extractAgentThreadId(line);
             if (threadId) task.threadId = threadId;
             const response = extractAgentResponse(line);
@@ -2139,6 +2247,22 @@ function formatAgentEvent(line: string): string {
     return `[${type}]`;
   } catch {
     return line;
+  }
+}
+
+export function successfulWebSearch(line: string): boolean {
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      item?: { type?: string; status?: string };
+    };
+    return (
+      event.type === 'item.completed' &&
+      event.item?.type === 'web_search' &&
+      (!event.item.status || event.item.status === 'completed')
+    );
+  } catch {
+    return false;
   }
 }
 

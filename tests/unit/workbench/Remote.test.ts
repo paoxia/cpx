@@ -64,6 +64,15 @@ describe('remote executor pairing and fenced leases', () => {
   it('issues one-time worker tokens, checks result hashes and rejects duplicate reports', async () => {
     const paired = await post('/api/workbench/workers', adminToken, { name: 'Dev machine' });
     task.executorId = paired.body.id;
+    task.webSearch = 'live';
+    task.news = {
+      directory: 'news',
+      date: '2026-10-24',
+      since: 0,
+      until: 86400000,
+      maxItems: 10,
+      timeZone: 'Asia/Shanghai',
+    };
     expect(JSON.stringify(store.list('worker'))).not.toContain(paired.body.token);
     const result = remote.run(task);
     expect((await post('/api/worker/claim', 'invalid')).status).toBe(401);
@@ -72,6 +81,8 @@ describe('remote executor pairing and fenced leases', () => {
     });
     const job = claim.body.job;
     expect(job.baseCommit).toBe(task.baseCommit);
+    expect(job.webSearch).toBe('live');
+    expect(job.news).toEqual(task.news);
     expect(JSON.stringify(job)).not.toContain(adminToken);
     expect((await post('/api/worker/claim', paired.body.token)).body.job).toBeNull();
     expect(
@@ -90,10 +101,11 @@ describe('remote executor pairing and fenced leases', () => {
       patch: '',
       checksum: digest(''),
       response: 'done',
+      webSearches: 2,
     };
     expect((await post('/api/worker/report', paired.body.token, body)).status).toBe(200);
     expect((await post('/api/worker/report', paired.body.token, body)).status).toBe(409);
-    expect(await result).toEqual({ patch: '', response: 'done' });
+    expect(await result).toEqual({ patch: '', response: 'done', webSearches: 2 });
   });
 
   it('fences expired executions, refuses late results and requires explicit release', async () => {

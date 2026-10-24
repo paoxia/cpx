@@ -160,7 +160,10 @@ export class WebConsole {
     this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger, undefined, {
       store: options.store,
       onTerminal: (task) => this.workbench?.terminal(task),
-      guard: options.taskGuard,
+      guard: (action, task) => {
+        options.taskGuard?.(action, task);
+        this.workbench?.authorizeScheduledTask(action, task);
+      },
       fence: options.fence,
       protectedBranches: options.protectedBranches,
       extensionTools: (task) =>
@@ -566,13 +569,11 @@ export class WebConsole {
       return {
         status: 200,
         body: {
-          tasks: tasks
-            .slice(offset, offset + limit)
-            .map((task) => ({
-              ...task,
-              logs: task.logs.slice(-5),
-              result: task.result ? { ...task.result, diff: '' } : undefined,
-            })),
+          tasks: tasks.slice(offset, offset + limit).map((task) => ({
+            ...task,
+            logs: task.logs.slice(-5),
+            result: task.result ? { ...task.result, diff: '' } : undefined,
+          })),
           total: tasks.length,
           offset,
           limit,

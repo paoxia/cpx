@@ -31,7 +31,7 @@ interface Job {
   status: 'queued' | 'claimed' | 'completed' | 'failed' | 'unknown' | 'cancelled';
   leaseHash?: string;
   expiresAt?: number;
-  result?: { patch: string; response: string };
+  result?: { patch: string; response: string; webSearches?: number };
   error?: string;
 }
 const reportSchema = z.object({
@@ -44,6 +44,7 @@ const reportSchema = z.object({
   checksum: z.string().optional(),
   response: z.string().max(16384).optional(),
   error: z.string().max(2000).optional(),
+  webSearches: z.number().int().min(0).max(10000).optional(),
 });
 
 export class RemoteExecutors {
@@ -63,7 +64,7 @@ export class RemoteExecutors {
     manager.setRemoteRunner((task) => this.run(task));
   }
 
-  async run(task: AgentTask): Promise<{ patch: string; response: string }> {
+  async run(task: AgentTask): Promise<{ patch: string; response: string; webSearches?: number }> {
     if (Buffer.byteLength(task.result?.diff ?? '') > 4 * 1024 * 1024)
       throw new Error('成果超过远程补丁 4 MiB 上限，请使用本机执行');
     const worker = this.store.get<Worker>('worker', task.executorId!);
@@ -227,6 +228,8 @@ export class RemoteExecutors {
                   seedPatch: job.task.result?.diff ?? '',
                   prompt: job.task.prompt,
                   context: job.task.context,
+                  news: job.task.news,
+                  webSearch: job.task.webSearch,
                   configurations: job.task.configurations,
                   timeoutMs: job.task.timeoutMs,
                   verificationCommands: job.task.verificationCommands,
@@ -263,7 +266,11 @@ export class RemoteExecutors {
             )
               throw new Error('成果校验失败');
             job.status = 'completed';
-            job.result = { patch: input.patch, response: input.response ?? '' };
+            job.result = {
+              patch: input.patch,
+              response: input.response ?? '',
+              webSearches: input.webSearches,
+            };
           }
           this.store.put('remote-job', job.id, job);
           this.store.audit(worker.id, 'remote_report', job.taskId);
@@ -287,6 +294,8 @@ interface RemoteJob {
   context?: string;
   timeoutMs?: number;
   configurations: AgentTask['configurations'];
+  news?: AgentTask['news'];
+  webSearch?: AgentTask['webSearch'];
 }
 
 /** Development-machine worker. Never requires a terminal on the NAS. */
@@ -357,6 +366,8 @@ export async function runWorker(serverUrl: string, directory: string): Promise<v
           seedPatch: job.seedPatch,
           prompt: job.prompt,
           context: job.context,
+          news: job.news,
+          webSearch: job.webSearch,
           timeoutMs: job.timeoutMs,
           policy: 'local',
         });
@@ -377,6 +388,7 @@ export async function runWorker(serverUrl: string, directory: string): Promise<v
           patch: result.diff,
           checksum: digest(result.diff),
           response: completed.lastAgentResponse,
+          webSearches: completed.webSearches,
         });
       } catch (error) {
         console.error('远程执行失败：', error instanceof Error ? error.message : 'unknown');

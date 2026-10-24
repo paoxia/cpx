@@ -12,6 +12,7 @@ import {
   AgentTaskManager,
   normalizeRepository,
   repositoryCoordinates,
+  successfulWebSearch,
 } from '../../../src/agents/AgentTaskManager';
 import { Logger } from '../../../src/utils/Logger';
 
@@ -103,6 +104,48 @@ describe('AgentTaskManager', () => {
 
   afterEach(() => {
     rmSync(TMP_DIR, { recursive: true, force: true });
+  });
+
+  it('forces live search per task, records completed searches and preserves the workspace sandbox', async () => {
+    const fallback = spawnMock.getMockImplementation()!;
+    spawnMock.mockImplementation((command: string, args: string[]) =>
+      command === 'codex'
+        ? fakeProcess(
+            '{"type":"item.completed","item":{"id":"search-1","type":"web_search","status":"completed"}}\n{"type":"result","result":"news found"}\n',
+          )
+        : fallback(command, args),
+    );
+    const manager = createManager();
+    const task = manager.create({
+      provider: 'codex',
+      repository: 'acme/repo',
+      prompt: 'Find news',
+      policy: 'review',
+      webSearch: 'live',
+    });
+    const completed = await manager.waitForTerminal(task.id);
+    expect(completed.webSearches).toBe(1);
+    const [, args, options] = spawnMock.mock.calls.find(([command]) => command === 'codex')!;
+    expect(args).toContain('web_search="live"');
+    expect(args).toContain('sandbox_workspace_write.network_access=false');
+    expect(args).toContain('approval_policy="never"');
+    expect(options.env.GH_TOKEN).toBeUndefined();
+    await manager.stop();
+  });
+
+  it('does not treat search start, failure or an agent message as successful search evidence', () => {
+    expect(successfulWebSearch('{"type":"item.started","item":{"type":"web_search"}}')).toBe(false);
+    expect(
+      successfulWebSearch(
+        '{"type":"item.completed","item":{"type":"web_search","status":"failed"}}',
+      ),
+    ).toBe(false);
+    expect(
+      successfulWebSearch(
+        '{"type":"item.completed","item":{"type":"agent_message","text":"searched the web"}}',
+      ),
+    ).toBe(false);
+    expect(successfulWebSearch('invalid')).toBe(false);
   });
 
   it('独立审查使用新的只读会话并保留开发会话与回答', async () => {

@@ -217,6 +217,14 @@ window.Cpx = (() => {
           ['auto', '预授权自动发布 PR'],
         ],
         p.policy,
+      )}${select(
+        'allowScheduledMerge',
+        '允许定时任务通过 GitHub 自动合并（需自动发布策略）',
+        [
+          ['false', '关闭'],
+          ['true', '允许（遵循 GitHub 仓库规则）'],
+        ],
+        String(Boolean(p.allowScheduledMerge)),
       )}${area('context', '长期项目规则与背景', p.context)}${area('checks', '验证命令（每行一条，仅配置可信命令）', p.verificationCommands?.map((c) => (c.command === 'sh' && c.args[0] === '-lc' ? c.args[1] : c.command === 'cmd' && c.args[2] === '/c' ? c.args[3] : [c.command, ...c.args].join(' '))).join('\n'))}${field('timeoutMinutes', '单轮上限（分钟）', p.timeoutMs / 60000, 'number')}${select(
         'independentReview',
         '额外独立只读审查（产生模型调用）',
@@ -257,6 +265,7 @@ window.Cpx = (() => {
         timeoutMs: Number(values.timeoutMinutes) * 60000,
         verificationCommands,
         independentReview: values.independentReview === 'true',
+        allowScheduledMerge: values.allowScheduledMerge === 'true',
         executorId: values.executorId || undefined,
         extensions: values.extensions
           .split(',')
@@ -453,43 +462,147 @@ window.Cpx = (() => {
       }
     }
   }
+  function newRunId() {
+    // getRandomValues also works on the NAS HTTP origin, where randomUUID may be unavailable.
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 15) | 64;
+    bytes[8] = (bytes[8] & 63) | 128;
+    const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
   async function schedulesPage(el) {
-    const templates = await api('/api/workbench/templates');
-    const schedules = await api('/api/workbench/schedules');
+    const [templates, schedules] = await Promise.all([
+      api('/api/workbench/templates'),
+      api('/api/workbench/schedules'),
+    ]);
+    projects = await api('/api/workbench/projects');
+    const editable = ['admin', 'maintainer'].includes(principal.role);
     el.querySelector('#cpx-admin-content').innerHTML =
-      `<p>定时任务默认关闭，按固定间隔执行，停机期间不补跑。自动任务产出待审查成果；同项目有活动任务时跳过。</p><form>${field('id', '定时任务标识')}${select(
+      `<p>支持每天定点或固定间隔。定时功能和任务都启用后才会自动运行；停机后处理一次到期任务，同项目忙碌时跳过。</p>
+      <p>新闻日报使用实时搜索，校验来源、时间与重复条目后生成 Markdown。先保存并试运行，检查结果后再启用自动发布。</p>
+      <form>${field('id', '定时任务标识')}${select(
         'projectId',
         '项目',
         projects.map((p) => [p.id, p.name]),
-      )}${select(
+      )}
+      ${select(
         'templateId',
-        '模板',
+        '任务模板',
         templates.map((t) => [t.id, t.name]),
-      )}${area('prompt', '具体范围、复现步骤与验收条件')}${field('intervalMinutes', '执行间隔（分钟，至少 5）', 1440, 'number')}${field('timeZone', '显示时区', 'Asia/Shanghai')}${select(
+        'news',
+      )}
+      ${area('prompt', '新闻主题、优先来源与筛选要求，或自定义任务指令')}
+      ${select(
+        'cadence',
+        '执行频率',
+        [
+          ['daily', '每天指定时间'],
+          ['interval', '固定间隔'],
+        ],
+        'daily',
+      )}
+      ${field('dailyTime', '每天执行时间', '09:00', 'time')}
+      ${field('intervalMinutes', '执行间隔（分钟，至少 5）', 1440, 'number')}
+      ${field('timeZone', '执行时区', 'Asia/Shanghai')}
+      ${field('newsDirectory', '新闻保存目录', 'news')}
+      ${field('newsMaxItems', '每次最多新闻条数（1–50）', 10, 'number')}
+      ${select(
+        'publication',
+        '交付方式',
+        [
+          ['review', '生成待审查成果'],
+          ['pull_request', '自动创建 PR（项目需预授权）'],
+          ['merge', '自动创建并请求合并 PR（项目需单独授权）'],
+        ],
+        'review',
+      )}
+      ${select(
         'enabled',
-        '任务开关',
+        '定时任务开关',
         [
           ['false', '暂停'],
           ['true', '启用'],
         ],
         'false',
-      )}<button>保存定时任务</button></form>${schedules.map((s) => `<p>${escape(s.id)} · ${s.enabled ? '已启用' : '已暂停'} · 下次 ${new Date(s.nextAt).toLocaleString('zh-CN', { timeZone: s.timeZone })} ${escape(s.timeZone)} · ${escape(s.error || '')} <button data-schedule="${escape(s.id)}">编辑</button></p>`).join('')}<h3>模板内容</h3>${templates.map((t) => `<details><summary>${escape(t.name)}</summary><pre>${escape(t.prompt)}</pre></details>`).join('')}`;
-    form(el, (v) =>
-      api('/api/workbench/schedules', {
+      )}
+      <button>保存定时任务</button></form>
+      <div class="cpx-actions"><button data-new-schedule>新建任务</button><button data-refresh-schedules>刷新执行结果</button></div>
+      ${schedules
+        .map(
+          (
+            s,
+          ) => `<div class="cpx-result"><p><strong>${escape(s.id)}</strong> · ${s.enabled ? '已启用' : '已暂停'} · ${s.cadence === 'daily' ? `每天 ${escape(s.dailyTime)}` : `间隔 ${s.intervalMinutes} 分钟`} · ${escape(s.timeZone)}<br>下次：${new Date(s.nextAt).toLocaleString('zh-CN', { timeZone: s.timeZone })}${s.lastAt ? `<br>上次触发：${new Date(s.lastAt).toLocaleString('zh-CN', { timeZone: s.timeZone })}` : ''}</p>
+      ${s.error ? `<p role="alert">${escape(s.error)}</p>` : ''}
+      ${s.lastTask ? `<p>最近任务：<a href="?task=${encodeURIComponent(s.lastTask.id)}">${escape(s.lastTask.id.slice(0, 8))}</a> · ${escape(s.lastTask.status)}${s.lastTask.publication ? ` · 发布 ${escape(s.lastTask.publication.status)}` : ''}${s.lastTask.merge ? ` · 合并 ${escape(s.lastTask.merge.status)}` : ''}</p><p>${escape(s.lastTask.error || s.lastTask.publication?.error || '')}</p>` : ''}
+      ${editable ? `<div class="cpx-actions"><button data-schedule="${escape(s.id)}">编辑</button><button data-test-schedule="${escape(s.id)}">试运行（待审查）</button></div>` : ''}</div>`,
+        )
+        .join('')}
+      <h3>模板内容</h3>${templates.map((t) => `<details><summary>${escape(t.name)}</summary><pre>${escape(t.prompt)}</pre></details>`).join('')}`;
+    const formEl = el.querySelector('form');
+    const toggle = () => {
+      const daily = formEl.elements.cadence.value === 'daily';
+      formEl.elements.dailyTime.closest('label').hidden = !daily;
+      formEl.elements.intervalMinutes.closest('label').hidden = daily;
+      const news = formEl.elements.templateId.value === 'news';
+      for (const name of ['newsDirectory', 'newsMaxItems'])
+        formEl.elements[name].closest('label').hidden = !news;
+    };
+    formEl.elements.cadence.onchange = toggle;
+    formEl.elements.templateId.onchange = toggle;
+    formEl.elements.id.required = true;
+    formEl.elements.prompt.required = true;
+    formEl.elements.intervalMinutes.min = '5';
+    formEl.elements.newsMaxItems.min = '1';
+    formEl.elements.newsMaxItems.max = '50';
+    if (!editable)
+      formEl.querySelectorAll('input, textarea, select, button').forEach((input) => {
+        input.disabled = true;
+      });
+    form(el, async (v) => {
+      await api('/api/workbench/schedules', {
         ...v,
         intervalMinutes: Number(v.intervalMinutes),
+        newsMaxItems: Number(v.newsMaxItems),
         enabled: v.enabled === 'true',
-      }),
-    );
+      });
+      await schedulesPage(el);
+    });
+    el.querySelector('[data-new-schedule]').onclick = () =>
+      schedulesPage(el).catch((error) => message(el, error.message));
+    el.querySelector('[data-refresh-schedules]').onclick = () =>
+      schedulesPage(el).catch((error) => message(el, error.message));
     el.querySelectorAll('[data-schedule]').forEach((button) => {
       button.onclick = () => {
         const s = schedules.find((v) => v.id === button.dataset.schedule);
+        formEl.reset();
         for (const [key, value] of Object.entries(s)) {
-          const input = el.querySelector(`[name="${key}"]`);
+          const input = formEl.elements.namedItem(key);
           if (input) input.value = String(value);
+        }
+        toggle();
+        formEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+    });
+    el.querySelectorAll('[data-test-schedule]').forEach((button) => {
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          // Retain the same key if a network failure prompts a retry.
+          const runId = button.dataset.runId || (button.dataset.runId = newRunId());
+          const task = await api('/api/workbench/schedule-run', {
+            id: button.dataset.testSchedule,
+            runId,
+          });
+          await schedulesPage(el);
+          message(el, `试运行已创建：${task.id}。本次仅生成待审查成果。`);
+        } catch (error) {
+          message(el, error.message);
+        } finally {
+          button.disabled = false;
         }
       };
     });
+    toggle();
   }
   async function extensionsPage(el) {
     const data = await api('/api/workbench/extensions');
@@ -586,6 +699,7 @@ window.Cpx = (() => {
       task.acceptedAt,
       task.result?.version,
       task.publication?.status,
+      task.merge?.status,
       (task.pendingInputs || []).map((i) => i.id).join(','),
     ].join(':');
     const cached = results.get(task.id);
@@ -607,7 +721,7 @@ window.Cpx = (() => {
     panel.className = 'cpx-result';
     panels.set(task.id, { signature, panel });
     const result = results.get(task.id) || task.result;
-    panel.innerHTML = `<h3>成果与交付</h3><p>${escape({ review: '审查后发布', local: '仅保留成果', auto: '预授权自动发布' }[task.policy] || '兼容策略')} · ${escape({ not_requested: '未请求发布', pending: '待批准', publishing: '发布中', published: '已发布', failed: '发布失败', unknown: '待核对' }[task.publication?.status] || '尚未发布')}${task.publication?.error ? ` · ${escape(task.publication.error)}` : ''}${task.archivedAt ? ' · 已归档' : ''}</p><div class="cpx-actions"><button data-action="link">复制任务链接</button>${!active && task.workspace ? '<button data-action="result">审查改动</button><button data-action="export">导出补丁</button>' : ''}${canWrite && task.status === 'interrupted' ? '<button data-action="resume">检查后继续原会话</button><button data-action="new-session">重建会话后继续</button>' : ''}${canWrite && !active && !task.archivedAt ? '<button data-action="accept">标记采用</button><button data-action="archive">归档</button>' : ''}${result && task.policy !== 'local' && !active && !task.archivedAt ? '<button data-action="publish">发布或更新 PR</button>' : ''}${canWrite && task.archivedAt && task.workspace ? '<button data-action="cleanup">预览工作区清理</button>' : ''}</div>${task.pullRequestUrl ? `<p><a href="${escape(task.pullRequestUrl)}" target="_blank" rel="noreferrer">查看 Pull Request</a></p>` : ''}${result ? `<details><summary>文件改动 · ${escape(result.version.slice(0, 12))}</summary><pre>${escape(result.files)}\n${escape(result.diff)}</pre></details>` : ''}<details><summary>验证证据 · ${task.verification?.length || 0} 项</summary>${task.verification?.length ? task.verification.map((v) => `<p>${escape(v.command)} ${escape(v.args.join(' '))} · 退出码 ${escape(v.exitCode)} · ${v.endedAt - v.startedAt}ms</p><pre>${escape(v.output)}</pre>`).join('') : '<p>没有运行平台配置的验证命令，Agent 回复不能替代验证证据。</p>'}</details>${task.reviewReport ? `<details><summary>独立审查 · ${task.reviewReport.status === 'completed' ? '已返回意见' : '执行失败'}</summary><p>独立会话生成的意见，不替代实际验证与用户批准。</p><pre>${escape(task.reviewReport.response || task.reviewReport.error)}</pre></details>` : ''}${canWrite && active ? `<form class="cpx-input"><label>追加待处理要求<textarea name="prompt" required maxlength="20000"></textarea></label><button>保存待处理消息</button></form>` : ''}${(task.pendingInputs || []).map((i) => `<p>${escape(i.prompt)} <button data-action="input-remove" data-input="${escape(i.id)}">撤回</button>${!active ? `<button data-action="input-run" data-input="${escape(i.id)}">执行此要求</button>` : ''}</p>`).join('')}<p role="status" class="cpx-task-message"></p>`;
+    panel.innerHTML = `<h3>成果与交付</h3>${task.merge ? `<p>自动合并：${escape({ requested: '已提交 GitHub 自动合并请求；最终状态以 GitHub 为准', merged: 'GitHub 已合并', failed: '失败' }[task.merge.status])} ${escape(task.merge.error || '')}</p>` : ''}<p>${escape({ review: '审查后发布', local: '仅保留成果', auto: '预授权自动发布' }[task.policy] || '兼容策略')} · ${escape({ not_requested: '未请求发布', pending: '待批准', publishing: '发布中', published: '已发布', failed: '发布失败', unknown: '待核对' }[task.publication?.status] || '尚未发布')}${task.publication?.error ? ` · ${escape(task.publication.error)}` : ''}${task.archivedAt ? ' · 已归档' : ''}</p><div class="cpx-actions"><button data-action="link">复制任务链接</button>${!active && task.workspace ? '<button data-action="result">审查改动</button><button data-action="export">导出补丁</button>' : ''}${canWrite && task.status === 'interrupted' ? '<button data-action="resume">检查后继续原会话</button><button data-action="new-session">重建会话后继续</button>' : ''}${canWrite && !active && !task.archivedAt ? '<button data-action="accept">标记采用</button><button data-action="archive">归档</button>' : ''}${result && task.policy !== 'local' && !active && !task.archivedAt ? '<button data-action="publish">发布或更新 PR</button>' : ''}${canWrite && task.archivedAt && task.workspace ? '<button data-action="cleanup">预览工作区清理</button>' : ''}</div>${task.pullRequestUrl ? `<p><a href="${escape(task.pullRequestUrl)}" target="_blank" rel="noreferrer">查看 Pull Request</a></p>` : ''}${result ? `<details><summary>文件改动 · ${escape(result.version.slice(0, 12))}</summary><pre>${escape(result.files)}\n${escape(result.diff)}</pre></details>` : ''}<details><summary>验证证据 · ${task.verification?.length || 0} 项</summary>${task.verification?.length ? task.verification.map((v) => `<p>${escape(v.command)} ${escape(v.args.join(' '))} · 退出码 ${escape(v.exitCode)} · ${v.endedAt - v.startedAt}ms</p><pre>${escape(v.output)}</pre>`).join('') : '<p>没有运行平台配置的验证命令，Agent 回复不能替代验证证据。</p>'}</details>${task.reviewReport ? `<details><summary>独立审查 · ${task.reviewReport.status === 'completed' ? '已返回意见' : '执行失败'}</summary><p>独立会话生成的意见，不替代实际验证与用户批准。</p><pre>${escape(task.reviewReport.response || task.reviewReport.error)}</pre></details>` : ''}${canWrite && active ? `<form class="cpx-input"><label>追加待处理要求<textarea name="prompt" required maxlength="20000"></textarea></label><button>保存待处理消息</button></form>` : ''}${(task.pendingInputs || []).map((i) => `<p>${escape(i.prompt)} <button data-action="input-remove" data-input="${escape(i.id)}">撤回</button>${!active ? `<button data-action="input-run" data-input="${escape(i.id)}">执行此要求</button>` : ''}</p>`).join('')}<p role="status" class="cpx-task-message"></p>`;
     holder.append(panel);
     panel.querySelectorAll('details').forEach((el, i) => {
       el.open = Boolean(open[i]);

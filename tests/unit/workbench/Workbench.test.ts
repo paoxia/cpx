@@ -151,6 +151,140 @@ describe('projects, automation and operational controls', () => {
     expect(access.chat('feishu', 'actual-sdk-user')).toBeUndefined();
   });
 
+  it('creates daily news tasks with live search and fresh dated output, and does not replay downtime', async () => {
+    await request('projects', { ...project, version: 0 });
+    await request('runtime', { schedulesEnabled: true });
+    const saved = await request('schedules', {
+      id: 'news',
+      projectId: 'demo',
+      templateId: 'news',
+      prompt: '孵化器相关的 AI 创业新闻，优先官方公告',
+      cadence: 'daily',
+      dailyTime: '09:00',
+      timeZone: 'Asia/Shanghai',
+      enabled: true,
+    });
+    expect(saved.status).toBe(200);
+    const now = saved.body.nextAt + 3 * 86400000;
+    await workbench.tick(now);
+    await workbench.tick(now);
+    expect(create).toHaveBeenCalledTimes(1);
+    const task = create.mock.calls[0][0];
+    expect(task.webSearch).toBe('live');
+    expect(task.policy).toBe('review');
+    expect(task.news.until - task.news.since).toBe(86400000);
+    expect(task.prompt).toContain(`${task.news.date}.sources.json`);
+    expect(task.prompt).toContain('孵化器');
+    expect(store.get<{ nextAt: number }>('schedule', 'news')!.nextAt).toBe(now + 86400000);
+  });
+
+  it('requires explicit project and schedule authorization for automatic PRs and merging', async () => {
+    await request('projects', { ...project, policy: 'review', version: 0 });
+    const input = {
+      id: 'daily',
+      projectId: 'demo',
+      templateId: 'custom',
+      prompt: 'Update notes',
+      publication: 'pull_request',
+      enabled: true,
+    };
+    expect((await request('schedules', input)).status).toBe(400);
+    await request('projects', { ...project, version: 1 });
+    expect((await request('schedules', { ...input, publication: 'merge' })).status).toBe(400);
+    await request('projects', { ...project, allowScheduledMerge: true, version: 2 });
+    expect((await request('schedules', { ...input, publication: 'merge' })).status).toBe(200);
+    await request('runtime', { schedulesEnabled: true });
+    await workbench.tick(store.get<{ nextAt: number }>('schedule', 'daily')!.nextAt);
+    const task = create.mock.calls[0][0] as AgentTask;
+    expect(task.policy).toBe('auto');
+    expect(task.autoMerge).toBe(true);
+    expect(task.prompt).toBe('Update notes');
+    expect(() => workbench.authorizeScheduledTask('publish', task)).not.toThrow();
+    await request('projects', { ...project, allowScheduledMerge: false, version: 3 });
+    expect(() => workbench.authorizeScheduledTask('publish', task)).toThrow('合并授权已撤销');
+    await request('projects', { ...project, policy: 'review', version: 4 });
+    expect(() => workbench.authorizeScheduledTask('publish', task)).toThrow('发布授权已撤销');
+  });
+
+  it('permits immediate review-only tests while disabled without moving the schedule', async () => {
+    await request('projects', { ...project, allowScheduledMerge: true, version: 0 });
+    const saved = await request('schedules', {
+      id: 'daily',
+      projectId: 'demo',
+      templateId: 'news',
+      prompt: 'AI news',
+      publication: 'merge',
+    });
+    const tested = await request('schedule-run', {
+      id: 'daily',
+      runId: 'a7f20d3e-262b-4b24-9afa-d3348e9d1422',
+    });
+    expect(tested.status).toBe(200);
+    expect(create.mock.calls[0][0].policy).toBe('review');
+    expect(create.mock.calls[0][0].autoMerge).toBe(false);
+    expect(store.get<{ nextAt: number }>('schedule', 'daily')!.nextAt).toBe(saved.body.nextAt);
+    const queued = {
+      ...create.mock.calls[0][0],
+      id: 'generated-task',
+      status: 'queued',
+    } as AgentTask;
+    vi.spyOn(manager, 'list').mockReturnValue([queued]);
+    expect(
+      (
+        await request('schedule-run', {
+          id: 'daily',
+          runId: 'a7f20d3e-262b-4b24-9afa-d3348e9d1422',
+        })
+      ).status,
+    ).toBe(200);
+    expect(create).toHaveBeenCalledTimes(1);
+    vi.spyOn(manager, 'get').mockReturnValue(queued);
+    expect(workbench.continuation(queued.id).policy).toBe('review');
+    expect(workbench.continuation(queued.id).autoMerge).toBe(false);
+    const other = access.saveAccount({
+      id: 'other',
+      name: 'Other',
+      role: 'maintainer',
+      projects: ['demo'],
+    });
+    const token = `Bearer ${access.issue(other.id, 'test').token}`;
+    expect(
+      (
+        await request(
+          'schedule-run',
+          { id: 'daily', runId: 'a7f20d3e-262b-4b24-9afa-d3348e9d1422' },
+          token,
+        )
+      ).status,
+    ).toBe(400);
+  });
+
+  it('rejects invalid schedules and skips a project that already has active work', async () => {
+    await request('projects', { ...project, version: 0 });
+    const input = {
+      id: 'daily',
+      projectId: 'demo',
+      templateId: 'news',
+      prompt: 'AI news',
+      enabled: true,
+    };
+    for (const invalid of [
+      { timeZone: 'invalid' },
+      { dailyTime: '25:30' },
+      { projectId: 'missing' },
+      { newsDirectory: '../config' },
+    ])
+      expect((await request('schedules', { ...input, ...invalid })).status).toBe(400);
+    await request('schedules', input);
+    await request('runtime', { schedulesEnabled: true });
+    vi.spyOn(manager, 'list').mockReturnValue([
+      { projectId: 'demo', status: 'running' } as AgentTask,
+    ]);
+    await workbench.tick(store.get<{ nextAt: number }>('schedule', 'daily')!.nextAt);
+    expect(create).not.toHaveBeenCalled();
+    expect(store.get<{ error: string }>('schedule', 'daily')!.error).toContain('活动任务');
+  });
+
   it('persists failed notifications and retries independently without running the agent', async () => {
     const task = {
       id: 'task',
