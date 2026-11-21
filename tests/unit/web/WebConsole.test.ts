@@ -1,11 +1,12 @@
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RequestHandler } from '../../../src/core/HttpServer';
 import { WebConsole } from '../../../src/web/WebConsole';
 import { registerWorkspaceRoutes } from '../../../src/web/WorkspaceRoutes';
 import { Logger } from '../../../src/utils/Logger';
+import { WORKSPACE_FILE_LIMIT } from '../../../src/workspace/WorkspaceFile';
 import { GitHubError } from '../../../src/utils/errors';
 import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
 import type { AgentAuthService } from '../../../src/web/AgentAuthManager';
@@ -197,6 +198,12 @@ describe('WebConsole', () => {
     expect(await submit('github-tree', { directory: `story/${id}` })).toMatchObject({
       status: 200, body: { entries: [{ type: 'file', name: '说明.md', storyId: id }] },
     });
+    expect(await submit('github-file', { file: `story/${id}/说明.md` })).toMatchObject({
+      status: 200, body: {
+        kind: 'text', content: '# 示例需求',
+        url: `https://github.com/octocat/desktop/blob/${revision}/story/${id}/${encodeURIComponent('说明.md')}`,
+      },
+    });
     const count = requests.length;
     expect(await submit('github', { repository: 'https://elsewhere.example/octocat/desktop' })).toMatchObject({ status: 400 });
     expect(requests).toHaveLength(count);
@@ -231,6 +238,39 @@ describe('WebConsole', () => {
     expect((await send('story', { id: '../README.md' })).status).toBe(400);
     expect((await send('create-story', { description: '更新本地流程' })).status).toBe(400);
     expect(execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()).toBe('main');
+  });
+
+  it('预览工作区内的文本与图片，并拒绝越界或不支持的文件', async () => {
+    const root = join(realpathSync(TMP_DIR), 'file-preview-workspace');
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer, { host: '127.0.0.1' });
+    const submit = server.handler('POST', '/api/console/workspace');
+    const send = (payload: object) => submit(
+      Buffer.from(JSON.stringify({ ...payload, path: root })),
+      { host: 'localhost:3000', 'content-type': 'application/json' }, {}, '127.0.0.1',
+    );
+    const preview = (file: string) => send({ operation: 'workspace-file', file });
+    expect((await send({ operation: 'init' })).status).toBe(200);
+    const text = '文件预览\n<script>Text remains literal</script>';
+    writeFileSync(join(root, 'code', '示例.txt'), text);
+    expect(await preview('code/示例.txt')).toMatchObject({ status: 200, body: { kind: 'text', content: text } });
+    const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZkUAAAAASUVORK5CYII=';
+    writeFileSync(join(root, 'picture.png'), Buffer.from(image, 'base64'));
+    expect(await preview('picture.png')).toMatchObject({
+      status: 200, body: { kind: 'image', imageType: 'image/png', content: image },
+    });
+    writeFileSync(join(root, 'example.bin'), Buffer.from([0, 255]));
+    expect(await preview('example.bin')).toMatchObject({ status: 200, body: { kind: 'unsupported' } });
+    writeFileSync(join(root, 'large.txt'), Buffer.alloc(WORKSPACE_FILE_LIMIT + 1));
+    expect(await preview('large.txt')).toMatchObject({ status: 200, body: { kind: 'too-large' } });
+    for (const file of ['../README.md', '.GIT/config', 'code']) {
+      expect((await preview(file)).status).toBe(400);
+    }
+    if (process.platform !== 'win32') {
+      symlinkSync(join(root, 'README.md'), join(root, 'linked.md'));
+      symlinkSync(root, join(root, 'linked-directory'));
+      expect((await preview('linked.md')).status).toBe(400);
+      expect((await preview('linked-directory/README.md')).status).toBe(400);
+    }
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {

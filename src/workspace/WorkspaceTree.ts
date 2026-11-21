@@ -20,7 +20,7 @@ export function workspaceDirectoryParts(directory: string): string[] {
         !part ||
         part === '.' ||
         part === '..' ||
-        part === '.git' ||
+        part.toLowerCase() === '.git' ||
         part.includes('\\') ||
         part.includes('\0'),
     )
@@ -42,14 +42,8 @@ export async function listWorkspaceDirectory(
   directory: string,
 ): Promise<WorkspaceTreeEntry[]> {
   const workspace = await inspectWorkspace(path);
-  let target = workspace.root;
   const parts = workspaceDirectoryParts(directory);
-  for (const part of parts) {
-    target = join(target, part);
-    if (!lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) {
-      throw new Error('目录不存在，或指向工作区外的位置');
-    }
-  }
+  const target = localWorkspaceDirectory(workspace.root, parts);
   const repositories = new Set(
     directory === 'code'
       ? workspace.projects.filter((project) => project.present).map((project) => project.name)
@@ -69,4 +63,15 @@ export async function listWorkspaceDirectory(
       return [];
     }),
   );
+}
+
+export function localWorkspaceDirectory(root: string, parts: string[]): string {
+  let target = root;
+  for (const part of parts) {
+    target = join(target, part);
+    if (!lstatSync(target, { throwIfNoEntry: false })?.isDirectory()) {
+      throw new Error('目录不存在，或指向工作区外的位置');
+    }
+  }
+  return target;
 }

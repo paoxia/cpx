@@ -61,58 +61,71 @@
                 </div>
                 <button class="text-button" id="story-workspace" type="button" data-view="workspace">选择</button>
               </div>
-              <button class="secondary-button session-new-button" id="story-new" type="button" hidden>＋ 新会话</button>
-              <details class="workspace-tree-panel" id="session-tree-panel" hidden>
-                <summary>目录结构</summary>
-                <div id="session-tree"></div>
-              </details>
-              <section class="session-history" id="session-history" aria-label="会话列表" hidden>
-                <h3>会话</h3>
+              <div class="session-tabs" id="session-tabs" role="tablist" aria-label="侧栏视图" hidden>
+                <button id="sessions-tab" type="button" role="tab" aria-controls="session-history" aria-selected="true" data-tab="sessions">会话</button>
+                <button id="directory-tab" type="button" role="tab" aria-controls="session-tree-panel" aria-selected="false" tabindex="-1" data-tab="directory">目录结构</button>
+              </div>
+              <section class="session-history" id="session-history" role="tabpanel" aria-labelledby="sessions-tab" hidden>
+                <button class="secondary-button session-new-button" id="story-new" type="button">＋ 新会话</button>
                 <input class="session-search" id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" hidden />
                 <ul class="story-list" id="story-list"></ul>
                 <p class="workspace-feedback" id="session-list-empty" hidden></p>
+              </section>
+              <section class="session-tree-panel" id="session-tree-panel" role="tabpanel" aria-labelledby="directory-tab" hidden>
+                <div id="session-tree"></div>
               </section>
             </aside>
             <section class="session-main" aria-labelledby="story-title">
               <header class="session-header">
                 <button class="secondary-button" id="session-rail-toggle" type="button" aria-controls="session-rail" aria-expanded="false">目录与会话</button>
-                <h1 id="story-title">新会话</h1>
+                <h1 id="story-title" tabindex="-1">新会话</h1>
               </header>
-              <div class="session-body">
-                <div class="session-welcome" id="session-welcome">
-                  <h2>想做点什么？</h2>
-                  <p id="session-welcome-hint">选择工作区后即可开始会话。</p>
-                </div>
-                <div id="session-messages" class="session-messages" hidden></div>
-                <details class="workspace-tree-panel session-record" id="session-record" hidden>
-                  <summary>需求记录</summary>
-                  <p class="workspace-feedback" id="story-location" hidden></p>
-                  <a id="story-github-link" class="workspace-source-link" target="_blank" rel="noreferrer" hidden>在 GitHub 查看 ↗</a>
-                  <pre class="story-content" id="story-content" hidden></pre>
-                </details>
-              </div>
-              <div class="session-dock">
-                <section id="story-run" class="story-run" aria-label="Codex 执行状态" hidden>
-                  <div class="story-actions">
-                    <strong id="story-run-status" role="status"></strong>
-                    <button class="text-button" id="story-run-stop" type="button" hidden>停止执行</button>
+              <div class="session-conversation" id="session-conversation">
+                <div class="session-body">
+                  <div class="session-welcome" id="session-welcome">
+                    <h2>想做点什么？</h2>
+                    <p id="session-welcome-hint">选择工作区后即可开始会话。</p>
                   </div>
-                  <details class="session-log" id="session-log" hidden>
-                    <summary>运行日志</summary>
-                    <pre class="story-content" id="story-run-output" aria-label="Codex 运行输出" tabindex="0" hidden></pre>
+                  <div id="session-messages" class="session-messages" hidden></div>
+                  <details class="workspace-tree-panel session-record" id="session-record" hidden>
+                    <summary>需求记录</summary>
+                    <p class="workspace-feedback" id="story-location" hidden></p>
+                    <a id="story-github-link" class="workspace-source-link" target="_blank" rel="noreferrer" hidden>在 GitHub 查看 ↗</a>
+                    <pre class="story-content" id="story-content" hidden></pre>
                   </details>
-                  <pre class="story-content" id="story-run-result" aria-label="Codex 运行提示" hidden></pre>
-                </section>
-                <form class="session-composer" id="story-form" hidden>
-                  <label class="sr-only" id="story-description-label" for="story-description">描述需求</label>
-                  <textarea id="story-description" rows="2" maxlength="20000" placeholder="告诉 Codex 你想做什么…" enterkeyhint="send" required></textarea>
-                  <div class="session-composer-actions">
-                    <span>Codex <small>Enter 发送 · Shift+Enter 换行</small></span>
-                    <button class="save-button" id="story-submit" type="submit">发送 <span aria-hidden="true">↑</span></button>
-                  </div>
-                </form>
-                <p class="workspace-feedback" id="story-feedback" role="status" aria-live="polite" hidden></p>
+                </div>
+                <div class="session-dock">
+                  <section id="story-run" class="story-run" aria-label="Codex 执行状态" hidden>
+                    <div class="story-actions">
+                      <strong id="story-run-status" role="status"></strong>
+                      <button class="text-button" id="story-run-stop" type="button" hidden>停止执行</button>
+                    </div>
+                    <details class="session-log" id="session-log" hidden>
+                      <summary>运行日志</summary>
+                      <pre class="story-content" id="story-run-output" aria-label="Codex 运行输出" tabindex="0" hidden></pre>
+                    </details>
+                    <pre class="story-content" id="story-run-result" aria-label="Codex 运行提示" hidden></pre>
+                  </section>
+                  <form class="session-composer" id="story-form" hidden>
+                    <label class="sr-only" id="story-description-label" for="story-description">描述需求</label>
+                    <textarea id="story-description" rows="2" maxlength="20000" placeholder="告诉 Codex 你想做什么…" enterkeyhint="send" required></textarea>
+                    <div class="session-composer-actions">
+                      <span>Codex <small>Enter 发送 · Shift+Enter 换行</small></span>
+                      <button class="save-button" id="story-submit" type="submit">发送 <span aria-hidden="true">↑</span></button>
+                    </div>
+                  </form>
+                  <p class="workspace-feedback" id="story-feedback" role="status" aria-live="polite" hidden></p>
+                </div>
               </div>
+              <section class="file-preview" id="file-preview" aria-label="文件预览" hidden>
+                <div class="file-preview-meta" id="file-preview-meta" hidden>
+                  <span id="file-preview-path"></span>
+                  <a id="file-preview-link" class="workspace-source-link" target="_blank" rel="noreferrer" hidden>在 GitHub 查看 ↗</a>
+                </div>
+                <p class="file-preview-status" id="file-preview-status" role="status">在目录中选择一个文件</p>
+                <pre id="file-preview-text" hidden tabindex="0"></pre>
+                <img id="file-preview-image" hidden alt="" />
+              </section>
             </section>
           </div>
         </div>

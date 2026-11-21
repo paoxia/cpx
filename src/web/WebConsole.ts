@@ -63,7 +63,7 @@ const DEFAULT_SETTINGS: ConsoleSettings = createDefaultSettings();
 
 const STATIC_SECURITY_HEADERS = {
   'Content-Security-Policy':
-    "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    "default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Referrer-Policy': 'no-referrer',
   'X-Content-Type-Options': 'nosniff',
 };

@@ -75,7 +75,9 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `src/web/GitHubWorkspace.ts` 使用控制台的 GitHub 客户端读取 `main` 的固定提交，并复用本地项目清单解析。`src/workspace/Story.ts` 管理本地 Story 文件，控制台从这些文件恢复需求和后续补充记录。
 
-`src/workspace/StoryRunner.ts` 管理会话工作台的异步执行。它复用 `AgentTaskManager` 的模型配置和 Codex 进程，先在只读环境中为需求命名，再以 Story 目录为 Codex 工作目录启动执行。可写范围为所选工作区，Codex 按该工作区规约识别项目和执行位置。初始需求写入 Story 说明。工作区 Git 元数据中的 `cpx/sessions.db` 以 Story ID 为会话标识，保存 Codex 线程 ID 和各轮消息、回复及状态。第一次执行收到 Codex 的线程事件时保存绑定，之后通过 `codex exec resume <thread-id>` 继续。会话列表从数据库读取已绑定线程，按最近一轮的顺序排列。目录树按文件系统或 GitHub 内容读取需求记录。实时运行日志留在 cpx 进程中。
+`src/workspace/StoryRunner.ts` 管理会话工作台的异步执行。它复用 `AgentTaskManager` 的模型配置和 Codex 进程，先在只读环境中为需求命名，再以 Story 目录为 Codex 工作目录启动执行。可写范围为所选工作区，Codex 按该工作区规约识别项目和执行位置。初始需求写入 Story 说明。工作区 Git 元数据中的 `cpx/sessions.db` 以 Story ID 为会话标识，保存 Codex 线程 ID 和各轮消息、回复及状态。第一次执行收到 Codex 的线程事件时保存绑定，之后通过 `codex exec resume <thread-id>` 继续。会话列表从数据库读取已绑定线程，按最近一轮的顺序排列。实时运行日志留在 cpx 进程中。
+
+目录标签页按需读取本地目录或 GitHub 仓库对应目录。选择文件时，`WorkspaceRoutes` 按来源读取工作区内的普通文件，两个来源共用 `WorkspaceFile.ts` 的大小检查和预览格式识别。浏览器将文本作为纯文本展示。
 
 配置优先级从低到高为：代码默认值、`config.yaml`、`permissions.yaml`、`AGENT_` 环境变量。npm CLI 默认以 `CPX_HOME`（未设置时为 `~/.cpx`）为运行根目录，配置、数据、日志和 PID 分目录保存；配置中的相对存储、Skill 与日志路径以配置目录的父目录为基准解析。Docker 通过 `-d /app/config` 保持 `/app` 为运行根。运行时会监听 YAML 文件；目前热更新会应用日志级别与权限配置，其他组件仍使用启动时配置。
 

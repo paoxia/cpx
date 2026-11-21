@@ -5,6 +5,7 @@ import type { HttpServer, RequestHandler } from '../core/HttpServer';
 import { GitHubError } from '../utils/errors';
 import { createLocalStory, listLocalStories, readLocalStory, storyId } from '../workspace/Story';
 import type { StoryRunner } from '../workspace/StoryRunner';
+import { readLocalWorkspaceFile } from '../workspace/WorkspaceFile';
 import { listWorkspaceDirectory } from '../workspace/WorkspaceTree';
 import {
   addWorkspaceProject,
@@ -17,6 +18,7 @@ import {
   listGitHubWorkspaceDirectory,
   readGitHubStory,
   readGitHubWorkspace,
+  readGitHubWorkspaceFile,
 } from './GitHubWorkspace';
 
 export interface WorkspaceWebAccess {
@@ -34,10 +36,13 @@ const description = z.string().trim().min(1).max(20000);
 const story = z.string().regex(storyId);
 const runId = z.string().uuid();
 const directory = z.string().max(4096).default('');
+const file = z.string().min(1).max(4096);
 const payload = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('show'), path: workspacePath }),
   z.object({ operation: z.literal('workspace-tree'), path: workspacePath, directory }),
   z.object({ operation: z.literal('github-tree'), repository: remote, directory }),
+  z.object({ operation: z.literal('workspace-file'), path: workspacePath, file }),
+  z.object({ operation: z.literal('github-file'), repository: remote, file }),
   z.object({ operation: z.literal('init'), path: workspacePath }),
   z.object({ operation: z.literal('clone'), path: workspacePath, remote }),
   z.object({ operation: z.literal('github'), repository: remote }),
@@ -169,15 +174,21 @@ async function runOperation(
       return inspectWorkspace(request.path);
     case 'workspace-tree':
       return { entries: await listWorkspaceDirectory(request.path, request.directory) };
+    case 'workspace-file':
+      return readLocalWorkspaceFile(request.path, request.file);
     case 'init':
       return initializeWorkspace(request.path);
     case 'clone':
       return cloneWorkspace(request.remote, request.path);
     case 'github':
     case 'github-story':
+    case 'github-file':
     case 'github-tree': {
       if (!github) throw new Error('GitHub 读取服务不可用');
       const client = github();
+      if (request.operation === 'github-file') {
+        return readGitHubWorkspaceFile(client, request.repository, request.file);
+      }
       if (request.operation === 'github-tree') {
         return {
           entries: await listGitHubWorkspaceDirectory(

@@ -5,11 +5,12 @@ const state = {
   workspace: null,
   workspacePaths: new Set(),
   workspaceBusy: false,
+  workspaceFile: null,
   story: null,
-  storyRecordOnly: false,
   storyRun: null,
   storyRunPolling: false,
   sessionIndex: [],
+  sessionTab: 'sessions',
   sessionSelection: 0,
   githubStatus: null,
   githubUser: null,
@@ -56,6 +57,8 @@ const elements = {
   storiesView: document.querySelector('#stories-view'),
   sessionLayout: document.querySelector('#session-layout'),
   sessionRailToggle: document.querySelector('#session-rail-toggle'),
+  sessionTabs: document.querySelector('#session-tabs'),
+  sessionConversation: document.querySelector('#session-conversation'),
   sessionBody: document.querySelector('.session-body'),
   sessionWelcome: document.querySelector('#session-welcome'),
   sessionWelcomeHint: document.querySelector('#session-welcome-hint'),
@@ -66,6 +69,13 @@ const elements = {
   sessionTree: document.querySelector('#session-tree'),
   sessionMessages: document.querySelector('#session-messages'),
   sessionRecord: document.querySelector('#session-record'),
+  filePreview: document.querySelector('#file-preview'),
+  filePreviewMeta: document.querySelector('#file-preview-meta'),
+  filePreviewPath: document.querySelector('#file-preview-path'),
+  filePreviewLink: document.querySelector('#file-preview-link'),
+  filePreviewStatus: document.querySelector('#file-preview-status'),
+  filePreviewText: document.querySelector('#file-preview-text'),
+  filePreviewImage: document.querySelector('#file-preview-image'),
   storySource: document.querySelector('#story-source'),
   storyWorkspace: document.querySelector('#story-workspace'),
   storyList: document.querySelector('#story-list'),
@@ -156,6 +166,21 @@ elements.workspaceOperation.addEventListener('change', updateWorkspaceForm);
 elements.workspaceForm.addEventListener('submit', submitWorkspace);
 elements.workspaceProjectForm.addEventListener('submit', submitWorkspaceProject);
 elements.sessionSearch.addEventListener('input', renderSessionList);
+elements.sessionTabs.addEventListener('click', ({ target }) => {
+  const tab = target.closest('[role="tab"]');
+  if (tab) selectSessionTab(tab.dataset.tab);
+});
+elements.sessionTabs.addEventListener('keydown', (event) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const tabs = [...elements.sessionTabs.querySelectorAll('[role="tab"]:not([hidden])')];
+  const current = tabs.indexOf(event.target);
+  if (current === -1) return;
+  event.preventDefault();
+  const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs.at(-1)
+    : tabs[(current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length];
+  selectSessionTab(next.dataset.tab);
+  next.focus();
+});
 elements.sessionRailToggle.addEventListener('click', () => {
   setSessionRail(!elements.sessionLayout.classList.contains('rail-open'));
 });
@@ -894,12 +919,16 @@ function renderWorkspace(workspace) {
     state.sessionSelection += 1;
     renderStoryRun(null);
     renderStory(null);
+    state.workspaceFile = null;
     state.sessionIndex = [];
     elements.sessionSearch.value = '';
     renderSessionList();
     workspaceFeedback(elements.storyFeedback, '');
   }
   state.workspace = workspace;
+  if (workspace.root && !previous?.root) state.sessionTab = 'sessions';
+  selectSessionTab(state.sessionTab);
+  renderFilePreview();
   if (workspace.root) state.workspacePaths.add(workspace.root);
   updateWorkspaceOptions(elements.workspacePaths, state.workspacePaths);
   updateWorkspaceOptions(elements.workspaceProjectNames, workspace.projects.map((project) => project.name));
@@ -941,41 +970,43 @@ function directoryTree(workspace, entries, parent = '') {
   const list = document.createElement('ul');
   list.className = 'directory-tree';
   for (const entry of entries) {
+    const path = parent ? `${parent}/${entry.name}` : entry.name;
     const row = document.createElement('li');
+    row.dataset.kind = entry.repository ? 'repository' : entry.type;
     if (entry.type === 'directory') {
       const folder = document.createElement('details');
       const summary = document.createElement('summary');
-      summary.textContent = `${entry.name}/`;
+      styleTreeEntry(summary, entry.name);
       folder.append(summary);
       folder.addEventListener('toggle', async () => {
+        if (folder.open && folder.lastElementChild?.dataset.failed) folder.lastElementChild.remove();
         if (!folder.open || folder.childElementCount > 1) return;
         const status = document.createElement('small');
+        status.className = 'tree-status';
+        status.setAttribute('role', 'status');
         status.textContent = '读取中…';
         folder.append(status);
         try {
-          const directory = parent ? `${parent}/${entry.name}` : entry.name;
-          const children = await readWorkspaceDirectory(workspace, directory);
-          if (children.length) status.replaceWith(directoryTree(workspace, children, directory));
+          const children = await readWorkspaceDirectory(workspace, path);
+          if (children.length) status.replaceWith(directoryTree(workspace, children, path));
           else status.textContent = '空目录';
         } catch (error) {
           status.textContent = error.message;
+          status.dataset.failed = 'true';
         }
       });
       row.append(folder);
-    } else if (entry.storyId) {
+    } else if (entry.type === 'file') {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'story-document-button';
-      button.textContent = entry.name;
-      button.addEventListener('click', async () => {
-        if (state.workspace !== workspace || storyRunActive(state.storyRun)) return;
-        if (state.activeView !== 'stories') await switchView('stories');
-        if (state.workspace === workspace) await openStory(entry.storyId, true);
-      });
+      button.dataset.filePath = path;
+      button.setAttribute('aria-current', String(state.workspaceFile?.path === path));
+      styleTreeEntry(button, entry.name);
+      button.addEventListener('click', () => void openWorkspaceFile(workspace, path));
       row.append(button);
     } else {
       const label = document.createElement(entry.url ? 'a' : 'span');
-      label.textContent = entry.name;
+      styleTreeEntry(label, entry.name);
       if (entry.url) {
         label.href = entry.url;
         label.target = '_blank';
@@ -983,28 +1014,95 @@ function directoryTree(workspace, entries, parent = '') {
       }
       row.append(label);
     }
-    if (entry.repository) row.classList.add('tree-repository');
     list.append(row);
   }
   return list;
 }
 
+function styleTreeEntry(element, name) {
+  element.className = 'tree-entry';
+  element.title = name;
+  const icon = document.createElement('span');
+  icon.className = 'tree-entry-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  const label = document.createElement('span');
+  label.className = 'tree-entry-name';
+  label.textContent = name;
+  element.append(icon, label);
+}
+
 async function loadWorkspaceTree(workspace) {
   elements.workspaceTree.hidden = true;
-  elements.sessionTreePanel.hidden = true;
-  elements.sessionTreePanel.open = true;
+  const status = document.createElement('p');
+  status.className = 'tree-status';
+  status.setAttribute('role', 'status');
+  status.textContent = '正在读取目录…';
+  elements.sessionTree.replaceChildren(status);
   try {
     const entries = await readWorkspaceDirectory(workspace, '');
     if (state.workspace !== workspace) return;
     elements.workspaceTree.replaceChildren(directoryTree(workspace, entries));
     elements.sessionTree.replaceChildren(directoryTree(workspace, entries));
     elements.workspaceTree.hidden = false;
-    elements.sessionTreePanel.hidden = false;
     elements.workspaceProjects.hidden = true;
   } catch (error) {
     if (state.workspace !== workspace) return;
-    elements.sessionTree.replaceChildren(document.createTextNode(error.message));
-    elements.sessionTreePanel.hidden = false;
+    status.textContent = error.message;
+  }
+}
+
+async function openWorkspaceFile(workspace, path) {
+  if (state.workspace !== workspace) return;
+  const selection = { path };
+  state.workspaceFile = selection;
+  selectSessionTab('directory');
+  renderFilePreview();
+  elements.filePreview.scrollTop = 0;
+  if (state.activeView !== 'stories') void switchView('stories');
+  if (elements.sessionRailToggle.getAttribute('aria-expanded') === 'true') {
+    setSessionRail(false);
+    elements.storyTitle.focus();
+  }
+
+  try {
+    selection.result = await callWorkspace(workspace.root
+      ? { operation: 'workspace-file', path: workspace.root, file: path }
+      : { operation: 'github-file', repository: workspace.repository, file: path });
+  } catch (error) {
+    selection.error = error.message;
+  }
+  if (state.workspaceFile === selection) renderFilePreview();
+}
+
+function renderFilePreview() {
+  const { path, result, error } = state.workspaceFile || {};
+  const url = result?.url;
+  const image = result?.kind === 'image';
+  const text = result?.kind === 'text' ? result.content : '';
+  const nested = path?.includes('/');
+  elements.filePreviewMeta.hidden = !nested && !url;
+  elements.filePreviewPath.hidden = !nested;
+  elements.filePreviewPath.textContent = nested ? path : '';
+  elements.filePreviewLink.hidden = !url;
+  elements.filePreviewLink.href = url || '#';
+  elements.filePreviewText.hidden = !text;
+  elements.filePreviewText.textContent = text;
+  elements.filePreviewImage.hidden = !image;
+  if (image) {
+    elements.filePreviewImage.alt = path.split('/').at(-1);
+    elements.filePreviewImage.src = `data:${result.imageType};base64,${result.content}`;
+  } else {
+    elements.filePreviewImage.removeAttribute('src');
+  }
+  elements.filePreviewStatus.hidden = Boolean(image || text);
+  elements.filePreviewStatus.dataset.error = String(Boolean(error));
+  elements.filePreviewStatus.textContent = error || (!path ? '在目录中选择一个文件' : !result ? '正在读取文件…' : {
+    text: '空文件',
+    'too-large': '文件超过 1 MiB，无法预览',
+    unsupported: '此文件格式暂不支持预览',
+  }[result.kind] || '');
+  for (const button of document.querySelectorAll('button[data-file-path]')) {
+    button.setAttribute('aria-current', String(button.dataset.filePath === path));
   }
 }
 
@@ -1081,8 +1179,6 @@ async function submitWorkspaceProject(event) {
 
 async function loadStories() {
   const workspace = state.workspace;
-  elements.storyNew.hidden = !workspace?.root;
-  elements.sessionHistory.hidden = !workspace?.root;
   if (!workspace) return;
   const location = workspace.root || workspace.repository;
   elements.storySource.textContent = workspace.root ? location.split(/[\\/]/).filter(Boolean).at(-1) || location : location;
@@ -1092,20 +1188,44 @@ async function loadStories() {
   elements.sessionWelcomeHint.textContent = workspace.root
     ? '直接说出你的想法，Codex 会在当前工作区开始处理。'
     : '已连接 GitHub。打开本地工作区即可发起会话。';
-  elements.storyForm.hidden = !workspace.root || state.storyRecordOnly;
+  elements.storyForm.hidden = !workspace.root;
   if (!workspace.root) return;
   try {
     const { sessions } = await callWorkspace({ operation: 'sessions', path: workspace.root });
     if (state.workspace !== workspace) return;
     state.sessionIndex = sessions.map(({ id, title }) => ({ id, title: title || id.slice(11).replace(/[-_]+/g, ' ') }));
     renderSessionList();
-    if (!state.storyRun && !state.storyRecordOnly) {
+    if (!state.storyRun) {
       const run = await callWorkspace({ operation: 'latest-story-run', path: workspace.root });
-      if (state.workspace === workspace && !state.storyRun && !state.storyRecordOnly && run) renderStoryRun(run);
+      if (state.workspace === workspace && !state.storyRun && run) renderStoryRun(run);
     }
   } catch (error) {
     workspaceFeedback(elements.storyFeedback, error.message, true);
   }
+}
+
+function selectSessionTab(tab) {
+  const workspace = state.workspace;
+  state.sessionTab = workspace && !workspace.root ? 'directory' : tab;
+  const directory = Boolean(workspace && state.sessionTab === 'directory');
+  elements.sessionTabs.hidden = !workspace;
+  for (const button of elements.sessionTabs.querySelectorAll('[role="tab"]')) {
+    const selected = button.dataset.tab === state.sessionTab;
+    button.hidden = button.dataset.tab === 'sessions' && !workspace?.root;
+    button.tabIndex = selected ? 0 : -1;
+    button.setAttribute('aria-selected', String(selected));
+  }
+  elements.sessionTreePanel.hidden = !directory;
+  elements.sessionHistory.hidden = directory || !workspace?.root;
+  elements.sessionConversation.hidden = directory;
+  elements.filePreview.hidden = !directory;
+  renderSessionTitle();
+}
+
+function renderSessionTitle() {
+  elements.storyTitle.textContent = state.sessionTab === 'directory'
+    ? state.workspaceFile?.path.split('/').at(-1) || '目录结构'
+    : state.story?.content.match(/^#\s+(.+)$/m)?.[1] || state.story?.id || '新会话';
 }
 
 function setSessionRail(open) {
@@ -1125,7 +1245,7 @@ function renderSessionList() {
     button.type = 'button';
     button.textContent = title;
     button.title = `${title} · ${id.slice(0, 10)}`;
-    button.setAttribute('aria-current', String(!state.storyRecordOnly && state.story?.id === id));
+    button.setAttribute('aria-current', String(state.story?.id === id));
     button.disabled = storyRunActive(state.storyRun);
     button.addEventListener('click', () => void openStory(id));
     row.append(button);
@@ -1134,12 +1254,10 @@ function renderSessionList() {
   elements.storyList.replaceChildren(...rows);
 }
 
-function renderStory(story, recordOnly = false) {
-  const changed = state.story?.id !== story?.id || state.storyRecordOnly !== recordOnly;
+function renderStory(story) {
+  const changed = state.story?.id !== story?.id;
   state.story = story;
-  state.storyRecordOnly = recordOnly;
-  elements.storyForm.hidden = !state.workspace?.root || recordOnly;
-  elements.storyTitle.textContent = story?.content.match(/^#\s+(.+)$/m)?.[1] || story?.id || '新会话';
+  renderSessionTitle();
   elements.sessionWelcome.hidden = Boolean(story || state.storyRun);
   elements.sessionRecord.hidden = !story?.content;
   elements.storyLocation.hidden = !story;
@@ -1155,7 +1273,7 @@ function renderStory(story, recordOnly = false) {
   if (changed) renderSessionList();
 }
 
-async function openStory(id, recordOnly = false) {
+async function openStory(id) {
   const workspace = state.workspace;
   if (!workspace || storyRunActive(state.storyRun)) return;
   const selection = ++state.sessionSelection;
@@ -1165,13 +1283,13 @@ async function openStory(id, recordOnly = false) {
   try {
     const story = await callWorkspace(payload);
     if (state.workspace !== workspace || state.sessionSelection !== selection) return;
-    renderStory(story, recordOnly);
+    renderStory(story);
     renderStoryRun(null);
     elements.sessionRecord.open = true;
     elements.sessionBody.scrollTop = 0;
     setSessionRail(false);
     workspaceFeedback(elements.storyFeedback, '');
-    if (workspace.root && !recordOnly) {
+    if (workspace.root) {
       const run = await callWorkspace({ operation: 'latest-story-run', path: workspace.root, id });
       if (state.workspace === workspace && state.sessionSelection === selection && run) {
         elements.sessionRecord.open = false;
@@ -1186,7 +1304,7 @@ async function openStory(id, recordOnly = false) {
 async function submitStory(event) {
   event.preventDefault();
   const workspace = state.workspace;
-  if (!workspace?.root || state.storyRecordOnly || storyRunActive(state.storyRun)) return;
+  if (!workspace?.root || storyRunActive(state.storyRun)) return;
   const current = state.story;
   elements.storySubmit.disabled = true;
   workspaceFeedback(elements.storyFeedback, '正在提交给 Codex…');

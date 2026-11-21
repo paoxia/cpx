@@ -1,6 +1,7 @@
 import { GitHubError } from '../utils/errors';
 import { storyDocuments, storyId, storyIdForDirectory } from '../workspace/Story';
 import { workspaceProjects } from '../workspace/Workspace';
+import { WORKSPACE_FILE_LIMIT, workspaceFilePreview } from '../workspace/WorkspaceFile';
 import {
   sortWorkspaceEntries,
   workspaceDirectoryParts,
@@ -11,6 +12,7 @@ import type { GitHubApiClient } from './GitHubExplorer';
 interface GitHubContent {
   type: string;
   name: string;
+  size?: number;
   encoding?: string;
   content?: string;
 }
@@ -173,4 +175,26 @@ export async function readGitHubStory(client: GitHubApiClient, value: string, id
     content,
     url: `https://github.com/${repository}/blob/${revision}/${directory}/${encodeURIComponent(file)}`,
   };
+}
+
+export async function readGitHubWorkspaceFile(
+  client: GitHubApiClient,
+  value: string,
+  file: string,
+) {
+  const parts = workspaceDirectoryParts(file);
+  if (!parts.length) throw new Error('请选择文件');
+  const repository = normalizeRepository(value);
+  const revision = await mainRevision(client, repository);
+  const path = parts.map(encodeURIComponent).join('/');
+  const data = await readContent(client, repository, revision, path);
+  if (Array.isArray(data) || data?.type !== 'file') throw new Error('GitHub 文件不可读取');
+  const url = `https://github.com/${repository}/blob/${revision}/${path}`;
+  if (data.size !== undefined && data.size > WORKSPACE_FILE_LIMIT) {
+    return { kind: 'too-large' as const, url };
+  }
+  if (data.encoding !== 'base64' || typeof data.content !== 'string') {
+    return { kind: 'unsupported' as const, url };
+  }
+  return { ...workspaceFilePreview(Buffer.from(data.content, 'base64')), url };
 }
