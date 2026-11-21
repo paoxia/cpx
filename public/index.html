@@ -19,36 +19,27 @@
         </div>
 
         <nav class="primary-nav" aria-label="主导航">
-          <button class="nav-item active" id="tasks-tab" data-view="tasks" type="button">
+          <button class="nav-item active" id="tasks-tab" data-view="stories" type="button" aria-label="会话工作台">
             <span class="nav-icon">⌁</span>
-            <span>任务控制台</span>
+            <span>会话工作台</span>
           </button>
-          <button class="nav-item" id="github-tab" data-view="github" type="button">
+          <button class="nav-item" id="workspace-tab" data-view="workspace" type="button" aria-label="工作区">
+            <span class="nav-icon" aria-hidden="true">▱</span>
+            <span>工作区</span>
+          </button>
+          <button class="nav-item" id="github-tab" data-view="github" type="button" aria-label="GitHub">
             <span class="nav-icon">⑂</span>
             <span>GitHub</span>
           </button>
-          <button class="nav-item" id="integrations-tab" data-view="integrations" type="button">
+          <button class="nav-item" id="integrations-tab" data-view="integrations" type="button" aria-label="消息平台">
             <span class="nav-icon">◫</span>
             <span>消息平台</span>
           </button>
-          <button class="nav-item" id="codex-tab" data-view="codex" type="button">
+          <button class="nav-item" id="codex-tab" data-view="codex" type="button" aria-label="Agent 设置">
             <span class="nav-icon">◎</span>
             <span>Agent 设置</span>
           </button>
         </nav>
-
-        <div class="sidebar-section">
-          <div class="section-label">
-            <span>最近任务</span>
-            <div class="task-section-actions">
-              <span id="task-count">0</span>
-              <button id="new-task-button" type="button" aria-label="新建任务">＋</button>
-            </div>
-          </div>
-          <div id="task-list" class="task-list">
-            <div class="empty-list">尚未运行任务</div>
-          </div>
-        </div>
 
         <div class="runtime-card">
           <span class="status-dot"></span>
@@ -60,136 +51,146 @@
       </aside>
 
       <main class="main-content">
-        <div class="app-view" id="tasks-view">
-          <section class="task-workbench">
-            <header class="thread-toolbar">
-              <div class="thread-heading" id="thread-heading">
-                <p class="eyebrow">AGENT WORKSPACE</p>
-                <h1>新建任务</h1>
-                <p>选择仓库并描述你想完成的工作</p>
-              </div>
-              <div class="thread-actions">
-                <button
-                  class="secondary-button new-task-action"
-                  id="new-task-toolbar"
-                  type="button"
-                >
-                  <span>＋</span> 新建任务
-                </button>
-                <button
-                  class="icon-button"
-                  id="top-settings"
-                  data-view="codex"
-                  type="button"
-                  aria-label="打开模型配置"
-                >
-                  ⚙
-                </button>
-              </div>
-            </header>
-
-            <div id="task-detail" class="task-detail thread-empty">
-              <div class="thread-empty-mark" aria-hidden="true">⌁</div>
-              <h2>从一个开发任务开始</h2>
-              <p>
-                每个任务拥有独立的 Git worktree。完成第一轮后，可以在这里持续追加要求和调整代码。
-              </p>
-            </div>
-
-            <form id="task-form" class="thread-composer new-task-mode">
-              <div class="new-task-context" id="new-task-context">
-                <div class="new-task-context-heading">
-                  <div>
-                    <strong>新任务</strong>
-                    <span>选择这次对话使用的代码仓库</span>
-                  </div>
-                  <div class="execution-order-preview" id="execution-order-preview">
-                    <span><b>1</b>Codex</span>
-                  </div>
+        <div class="app-view session-view" id="stories-view">
+          <div class="session-layout" id="session-layout">
+            <aside class="session-rail" id="session-rail" aria-label="工作区与会话导航">
+              <div class="session-workspace-header">
+                <div class="session-workspace-name">
+                  <h2>工作区</h2>
+                  <p id="story-source">请选择工作区</p>
                 </div>
-                <div class="field-row compact-fields">
-                  <label class="field field-grow">
-                    <span>GitHub 仓库</span>
-                    <select id="repository-picker" aria-describedby="repository-hint" hidden>
-                      <option value="">选择已有 Token 授权的项目</option>
-                      <option value="__manual__">手动输入仓库地址…</option>
-                    </select>
-                    <input
-                      id="repository"
-                      type="text"
-                      placeholder="owner/repository"
-                      autocomplete="off"
-                      required
-                    />
-                    <small id="repository-hint">支持 owner/repo、HTTPS 或 SSH 地址</small>
-                  </label>
-                  <label class="field branch-field">
-                    <span>分支</span>
-                    <select id="branch-picker" aria-describedby="branch-hint" hidden>
-                      <option value="">先选择项目</option>
-                    </select>
-                    <input
-                      id="base-branch"
-                      type="text"
-                      placeholder="基础分支（可选）"
-                      autocomplete="off"
-                    />
-                    <input
-                      id="task-branch"
-                      type="text"
-                      placeholder="例如：feature/login"
-                      autocomplete="off"
-                      hidden
-                    />
-                    <small id="branch-hint">手动输入仓库时可指定基础分支</small>
-                  </label>
-                </div>
+                <button class="text-button" id="story-workspace" type="button" data-view="workspace">选择</button>
               </div>
-
-              <div class="composer-box">
-                <textarea id="prompt" rows="3" required placeholder="描述要完成的工作…"></textarea>
-                <div class="composer-toolbar">
-                  <div class="composer-meta">
-                    <div class="suggestions" id="task-suggestions">
-                      <button
-                        type="button"
-                        data-prompt="先分析当前项目，并修复所有会阻止构建和测试通过的问题。"
-                      >
-                        修复项目
-                      </button>
-                      <button
-                        type="button"
-                        data-prompt="阅读现有架构，实现需求中缺失的核心功能，并补充测试。"
-                      >
-                        实现功能
-                      </button>
-                      <button
-                        type="button"
-                        data-prompt="审查当前代码的安全风险，修复高优先级问题并给出验证结果。"
-                      >
-                        安全审查
-                      </button>
-                    </div>
-                    <span id="prompt-count">0 / 20000</span>
+              <button class="secondary-button session-new-button" id="story-new" type="button" hidden>＋ 新会话</button>
+              <details class="workspace-tree-panel" id="session-tree-panel" hidden>
+                <summary>目录结构</summary>
+                <div id="session-tree"></div>
+              </details>
+              <section class="session-history" id="session-history" aria-label="会话列表" hidden>
+                <h3>会话</h3>
+                <input class="session-search" id="session-search" type="search" placeholder="搜索会话" aria-label="搜索会话" hidden />
+                <ul class="story-list" id="story-list"></ul>
+                <p class="workspace-feedback" id="session-list-empty" hidden></p>
+              </section>
+            </aside>
+            <section class="session-main" aria-labelledby="story-title">
+              <header class="session-header">
+                <button class="secondary-button" id="session-rail-toggle" type="button" aria-controls="session-rail" aria-expanded="false">目录与会话</button>
+                <h1 id="story-title">新会话</h1>
+              </header>
+              <div class="session-body">
+                <div class="session-welcome" id="session-welcome">
+                  <h2>想做点什么？</h2>
+                  <p id="session-welcome-hint">选择工作区后即可开始会话。</p>
+                </div>
+                <div id="session-messages" class="session-messages" hidden></div>
+                <details class="workspace-tree-panel session-record" id="session-record" hidden>
+                  <summary>需求记录</summary>
+                  <p class="workspace-feedback" id="story-location" hidden></p>
+                  <a id="story-github-link" class="workspace-source-link" target="_blank" rel="noreferrer" hidden>在 GitHub 查看 ↗</a>
+                  <pre class="story-content" id="story-content" hidden></pre>
+                </details>
+              </div>
+              <div class="session-dock">
+                <section id="story-run" class="story-run" aria-label="Codex 执行状态" hidden>
+                  <div class="story-actions">
+                    <strong id="story-run-status" role="status"></strong>
+                    <button class="text-button" id="story-run-stop" type="button" hidden>停止执行</button>
                   </div>
-                  <button
-                    class="composer-send"
-                    id="launch-button"
-                    type="submit"
-                    aria-label="发送任务"
-                  >
-                    <span>创建任务</span>
-                    <b>↑</b>
-                  </button>
-                </div>
+                  <details class="session-log" id="session-log" hidden>
+                    <summary>运行日志</summary>
+                    <pre class="story-content" id="story-run-output" aria-label="Codex 运行输出" tabindex="0" hidden></pre>
+                  </details>
+                  <pre class="story-content" id="story-run-result" aria-label="Codex 运行提示" hidden></pre>
+                </section>
+                <form class="session-composer" id="story-form" hidden>
+                  <label class="sr-only" id="story-description-label" for="story-description">描述需求</label>
+                  <textarea id="story-description" rows="2" maxlength="20000" placeholder="告诉 Codex 你想做什么…" enterkeyhint="send" required></textarea>
+                  <div class="session-composer-actions">
+                    <span>Codex <small>Enter 发送 · Shift+Enter 换行</small></span>
+                    <button class="save-button" id="story-submit" type="submit">发送 <span aria-hidden="true">↑</span></button>
+                  </div>
+                </form>
+                <p class="workspace-feedback" id="story-feedback" role="status" aria-live="polite" hidden></p>
               </div>
-            </form>
-          </section>
+            </section>
+          </div>
+        </div>
 
-          <footer class="page-footer">
-            <span>每个任务保留独立 workspace 与连续 Agent 会话</span>
-            <a href="/health" target="_blank" rel="noreferrer">服务状态 ↗</a>
-          </footer>
+        <div class="app-view" id="workspace-view" hidden>
+          <header class="topbar">
+            <h1>工作区</h1>
+          </header>
+
+          <div class="workspace-onboarding">
+            <section class="workspace-card" aria-labelledby="workspace-connect-title">
+              <h2 id="workspace-connect-title">接入工作区</h2>
+              <label class="field" id="workspace-access-field" hidden>
+                <span>工作区访问令牌</span>
+                <input id="workspace-access" type="password" autocomplete="off" />
+              </label>
+              <form id="workspace-form" class="workspace-form" hidden>
+                <label class="field">
+                  <span>接入方式</span>
+                  <select id="workspace-operation">
+                    <option value="show">打开已有工作区</option>
+                    <option value="github">读取 GitHub 工作区</option>
+                    <option value="init">新建本地工作区</option>
+                    <option value="clone">克隆远端工作区</option>
+                  </select>
+                </label>
+                <label class="field" id="workspace-github-field" hidden>
+                  <span>GitHub 仓库</span>
+                  <input id="workspace-github-repository" list="workspace-github-repositories" type="text" autocomplete="off" placeholder="owner/repo 或 GitHub 仓库地址" />
+                  <datalist id="workspace-github-repositories"></datalist>
+                  <small>可以直接填写公开仓库，或选择 GitHub 账号已授权的仓库。</small>
+                </label>
+                <button class="text-button" id="workspace-github-connect" type="button" data-view="github" hidden>连接 GitHub</button>
+                <label class="field" id="workspace-remote-field" hidden>
+                  <span>工作区 Git 地址</span>
+                  <input id="workspace-remote" type="text" autocomplete="off" placeholder="git@gitee.com:owner/workspace.git" />
+                </label>
+                <label class="field" id="workspace-path-field">
+                  <span>服务器上的目录</span>
+                  <input id="workspace-path" type="text" list="workspace-recent-paths" autocomplete="off" placeholder="/path/to/digital-avatar" required />
+                  <datalist id="workspace-recent-paths"></datalist>
+                  <small id="workspace-path-hint">填写 cpx 服务所在机器上的绝对路径。</small>
+                </label>
+                <button class="save-button" id="workspace-submit" type="submit">打开工作区</button>
+              </form>
+              <p id="workspace-feedback" class="workspace-feedback" role="status" aria-live="polite">正在读取工作区访问方式…</p>
+            </section>
+
+            <section class="workspace-card" aria-labelledby="workspace-projects-title">
+              <div>
+                <h2 id="workspace-projects-title">目录结构</h2>
+                <p id="workspace-summary" class="workspace-feedback">打开工作区后即可查看项目。</p>
+                <a id="workspace-github-link" class="workspace-source-link" target="_blank" rel="noreferrer" hidden>在 GitHub 查看工作区 ↗</a>
+              </div>
+              <button class="secondary-button" id="workspace-stories" type="button" data-view="stories" hidden>打开会话工作台</button>
+              <div id="workspace-tree" hidden></div>
+              <ul id="workspace-projects" class="workspace-projects" hidden></ul>
+              <form id="workspace-project-form" class="workspace-form workspace-project-form" hidden>
+                <h3>登记项目</h3>
+                <label class="field">
+                  <span>项目目录名</span>
+                  <input id="workspace-project-name" type="text" list="workspace-project-names" autocomplete="off" required />
+                  <datalist id="workspace-project-names"></datalist>
+                </label>
+                <label class="field">
+                  <span>项目职能</span>
+                  <input id="workspace-project-purpose" type="text" required />
+                </label>
+                <label class="field">
+                  <span>项目 Git 地址（可选）</span>
+                  <input id="workspace-project-remote" type="text" autocomplete="off" />
+                  <small>项目已位于 <code>code/</code> 或已在项目清单中登记时，可留空。</small>
+                </label>
+                <button class="secondary-button" id="workspace-project-submit" type="submit">登记项目</button>
+                <p id="workspace-project-feedback" class="workspace-feedback" role="status" aria-live="polite" hidden></p>
+              </form>
+            </section>
+          </div>
         </div>
 
         <div class="app-view" id="github-view" hidden>

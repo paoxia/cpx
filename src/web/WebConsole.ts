@@ -22,6 +22,8 @@ import {
   listGitHubBranches,
 } from './GitHubExplorer';
 import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
+import { registerWorkspaceRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
+import { StoryRunner } from '../workspace/StoryRunner';
 import {
   isMessagingPlatform,
   MessagingPlatform,
@@ -102,6 +104,7 @@ export interface WebConsoleOptions {
     config: Partial<DingTalkConfig & FeishuConfig>,
   ) => Promise<PublicMessagingConfiguration>;
   modelTester?: ModelConfigurationTestRunner;
+  workspaceAccess?: WorkspaceWebAccess;
 }
 
 export interface ConsoleCodingTaskRequest {
@@ -118,6 +121,7 @@ export class WebConsole {
   private settings: ConsoleSettings;
   private settingsPath: string;
   private taskManager: AgentTaskManager;
+  private storyRunner: StoryRunner;
   private logger: Logger;
   private githubToken?: string;
   private githubTokenSource: GitHubTokenSource;
@@ -143,6 +147,7 @@ export class WebConsole {
     this.settingsPath = join(dataDir, 'console-settings.json');
     this.settings = this.loadSettings();
     this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
+    this.storyRunner = new StoryRunner(dataDir, logger, () => this.executionConfigurations(true));
     this.githubToken = options.githubToken?.trim() || undefined;
     this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
     if (this.githubToken) {
@@ -160,6 +165,9 @@ export class WebConsole {
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
+    registerWorkspaceRoutes(httpServer, options.workspaceAccess, () =>
+      this.githubClientFactory(this.githubToken ?? ''), this.storyRunner,
+    );
   }
 
   async inspectGitHub(): Promise<GitHubConnection> {
@@ -232,7 +240,7 @@ export class WebConsole {
   }
 
   async stop(): Promise<void> {
-    await Promise.all([this.taskManager.stop(), this.agentAuth.stop()]);
+    await Promise.all([this.taskManager.stop(), this.storyRunner.stop(), this.agentAuth.stop()]);
   }
 
   private registerAssets(httpServer: HttpServer): void {
@@ -471,114 +479,6 @@ export class WebConsole {
       }
     });
 
-    httpServer.register('GET', '/api/console/github/branches', async (_body, _headers, query) => {
-      try {
-        validateGitHubToken(this.githubToken);
-        if (!query.repository) {
-          throw new Error('repository is required');
-        }
-        const branches = await this.getGitHubBranches(query.repository);
-        return {
-          status: 200,
-          body: { repository: query.repository, branches },
-          headers: API_HEADERS,
-        };
-      } catch (error) {
-        return githubErrorResponse(error);
-      }
-    });
-
-    httpServer.register('GET', '/api/console/tasks', async () => ({
-      status: 200,
-      body: { tasks: this.taskManager.list() },
-      headers: API_HEADERS,
-    }));
-
-    httpServer.register('GET', '/api/console/task', async (_body, _headers, query) => {
-      if (!query.id) {
-        return { status: 400, body: { error: 'id is required' } };
-      }
-      const task = this.taskManager.get(query.id);
-      return task
-        ? { status: 200, body: task, headers: API_HEADERS }
-        : { status: 404, body: { error: '任务不存在' }, headers: API_HEADERS };
-    });
-
-    httpServer.register('POST', '/api/console/tasks', async (body) => {
-      try {
-        const payload = parseJson<{
-          provider?: CodingAgentProvider;
-          providers?: CodingAgentProvider[];
-          model?: string;
-          repository?: string;
-          baseBranch?: string;
-          taskBranch?: string;
-          prompt?: string;
-          createPullRequest?: boolean;
-          useFallback?: boolean;
-        }>(body);
-        const usesLegacySelection = Boolean(
-          payload.provider || payload.providers || payload.model !== undefined,
-        );
-        const task = usesLegacySelection
-          ? this.taskManager.create({
-              provider: payload.provider,
-              providers: payload.providers,
-              model: payload.model,
-              repository: payload.repository ?? '',
-              baseBranch: payload.baseBranch,
-              taskBranch: payload.taskBranch,
-              prompt: payload.prompt ?? '',
-              createPullRequest: payload.createPullRequest,
-            })
-          : this.createCodingTask({
-              repository: payload.repository ?? '',
-              baseBranch: payload.baseBranch,
-              taskBranch: payload.taskBranch,
-              prompt: payload.prompt ?? '',
-              createPullRequest: payload.createPullRequest,
-              useFallback: payload.useFallback,
-            });
-        return { status: 202, body: task };
-      } catch (error) {
-        return { status: 400, body: { error: errorMessage(error) } };
-      }
-    });
-
-    httpServer.register('POST', '/api/console/task/continue', async (body) => {
-      try {
-        const payload = parseJson<{
-          id?: string;
-          prompt?: string;
-          useFallback?: boolean;
-          createPullRequest?: boolean;
-        }>(body);
-        if (!payload.id) throw new Error('id is required');
-        const task = this.continueCodingTask(
-          payload.id,
-          payload.prompt ?? '',
-          payload.useFallback !== false,
-          payload.createPullRequest,
-        );
-        return { status: 202, body: task, headers: API_HEADERS };
-      } catch (error) {
-        return { status: 400, body: { error: errorMessage(error) }, headers: API_HEADERS };
-      }
-    });
-
-    httpServer.register('POST', '/api/console/cancel', async (body) => {
-      try {
-        const payload = parseJson<{ id?: string }>(body);
-        if (!payload.id) {
-          return { status: 400, body: { error: 'id is required' } };
-        }
-        return this.taskManager.cancel(payload.id)
-          ? { status: 200, body: { success: true } }
-          : { status: 409, body: { error: '任务不存在或已结束' } };
-      } catch (error) {
-        return { status: 400, body: { error: errorMessage(error) } };
-      }
-    });
   }
 
   private loadSettings(): ConsoleSettings {

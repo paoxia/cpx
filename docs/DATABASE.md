@@ -24,3 +24,14 @@
 - 参数、结果、权限、能力等结构化值以 JSON 文本存储。
 - 业务层负责状态值和 JSON 结构的校验，SQLite 表本身未声明外键或 `CHECK` 约束。
 - 当前只有初始化式迁移，没有版本表和增量迁移记录；修改现有结构前需要先建立兼容迁移策略。
+
+## 工作区会话数据库
+
+每个本地工作区在其 Git 目录下独立保存 `cpx/sessions.db`。cpx 打开工作区会话时初始化数据库。
+
+| 表 | 用途 | 主键 | 主要字段 |
+|---|---|---|---|
+| `workspace_sessions` | Story 与 Codex 线程的绑定 | `story_id` | `thread_id`（唯一） |
+| `workspace_session_turns` | 用户消息、回复和运行状态 | `id` | `story_id`, `status`, `created_at`, `owner_pid`, `description`, `response`, `error` |
+
+轮次表按 `story_id` 索引。部分唯一索引限制同一工作区同时只有一轮处于等待、命名、创建或执行状态。运行服务退出后，cpx 将遗留的运行轮次标为失败，已保存的线程可继续使用。

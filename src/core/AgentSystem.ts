@@ -164,6 +164,11 @@ export class AgentSystem {
 
     // Web 开发控制台：模型配置、GitHub 工作区和 Coding Agent 任务
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
+      workspaceAccess: {
+        host: this.config.server.host,
+        token: process.env.AGENT_WORKSPACE_WEB_TOKEN,
+        defaultRoot: process.env.AGENT_WORKSPACE_DEFAULT_ROOT,
+      },
       githubToken: this.config.github.token,
       githubTokenSource: process.env.AGENT_GITHUB_TOKEN?.trim()
         ? 'environment'

@@ -5,6 +5,7 @@ export type RequestHandler = (
   body: Buffer,
   headers: Record<string, string | string[] | undefined>,
   query: Record<string, string>,
+  remoteAddress?: string,
 ) => Promise<{
   status: number;
   body: unknown;
@@ -93,7 +94,7 @@ export class HttpServer {
     const headers = req.headers as Record<string, string | string[] | undefined>;
 
     try {
-      const result = await handler(body, headers, query);
+      const result = await handler(body, headers, query, req.socket.remoteAddress);
       if (result.contentType) {
         this.sendRaw(res, result.status, result.body, result.contentType, result.headers);
       } else {

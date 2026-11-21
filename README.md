@@ -19,10 +19,6 @@ Feishu and DingTalk use their official WebSocket/Stream connections, so your NAS
 
 ## 页面预览 / Screenshots
 
-### 任务控制台 / Task workspace
-
-![cpx task workspace](docs/images/console-task.png)
-
 ### 飞书与钉钉长连接 / Feishu and DingTalk connections
 
 ![cpx messaging integrations](docs/images/console-integrations.png)
@@ -89,11 +85,11 @@ curl -X POST http://localhost:3000/command \
 
 - 本机已安装 `codex` CLI；可在页面使用 ChatGPT 设备码或 OpenAI API Key 登录。
 - 本机已安装 Git，且能访问目标 GitHub 仓库。
-- 通过飞书、钉钉或 API 发布 Pull Request 时还需安装 GitHub CLI（`gh`），并为 Token 配置推送分支和创建 PR 的权限；Web 任务工作台本身不提供 PR 开关。
+- 通过飞书或钉钉发布 Pull Request 时还需安装 GitHub CLI（`gh`），并为 Token 配置推送分支和创建 PR 的权限。
 
 控制台的 GitHub 页签在没有 Token 时提供“创建 GitHub Token”入口，打开 GitHub 的 fine-grained PAT 页面并预填 90 天有效期及 Contents、Pull requests、Workflows 写权限；用户仍需在 GitHub 选择资源所有者和仓库，生成后复制回控制台验证。新输入的 Token 仅在验证成功后写入 `config/config.yaml`；若 `github.token` 或 `AGENT_GITHUB_TOKEN` 已配置，可以留空直接验证，且不会将环境变量 Token 复制到配置文件。页面会区分本地文件与环境变量来源，受限 Token 只显示明确授权的仓库。
 
-验证成功的 Token 同时供 GitHub API、HTTPS `git clone/fetch/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。任务控制台采用任务列表、连续对话和底部输入框布局；新建任务时可选择 Token 授权的未归档项目和基础分支，任务完成后继续输入会复用原 worktree 与 Codex 会话。还可从仓库列表点击“用于新任务”，或手动输入仓库地址和基础分支。
+验证成功的 Token 同时供 GitHub API、HTTPS `git clone/fetch/push` 和 `gh pr create` 使用。Token 仅通过子进程环境和 askpass helper 传递，不会拼入 Git URL 或任务日志；SSH 仓库仍使用部署环境中的 SSH Key。GitHub 页提供仓库筛选与仓库主页链接。
 
 “Agent 设置”页管理 Codex 登录并保存多套执行方案。每套方案包含名称、模型和推理强度；模型来自当前登录账号在 Codex `/model` 中使用的同一目录，推理强度只显示该模型支持的值。设为“当前”的方案供 Web 任务使用，聊天任务在额度或鉴权失败时会按列表顺序尝试其余方案。Codex 的审批策略、沙箱模式和网页搜索写入 `CODEX_HOME/config.toml`。登录密钥不写入模型方案；页面还可用当前方案发送最多 4000 字的内容进行真实连通性测试。
 
@@ -117,9 +113,32 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 不要在一个系统用户下授权、再让另一个服务账户运行 cpx，否则状态检查会显示未登录。
 
-首次使用仓库时，cpx 会把完整 Git 历史克隆到数据库所在目录下的 `repositories/<owner>/<repo>`；后续任务先 fetch 更新缓存，再通过 `git worktree` 创建 `workspaces/<task-id>`。左侧任务列表用于切换或新建任务；同一任务底部输入框可持续接收 prompt，后续轮次复用原分支、worktree 和 `thread_id`，并在会话中保留每轮用户输入与 Agent 最终回复。任务状态、轮次和日志保存在内存中，重启服务后不会恢复，但仓库缓存和工作区文件仍保留在磁盘。
+> 控制台设置 API 没有通用身份认证。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问。[安全说明](docs/SECURITY.md#http-端点)
 
-> 控制台及 `/api/console/*` 当前没有身份认证，并可执行代码、读取仓库和推送分支。默认配置监听 `0.0.0.0`，请通过防火墙或带认证的反向代理限制访问，禁止直接暴露到公网。
+## digital-avatar 工作区
+
+控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、通过通用 Git 地址克隆根仓库，以及登记本地或远端子项目。页面填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。通过 HTTPS 代理访问部署实例时，在服务端设置至少 32 字符的随机 `AGENT_WORKSPACE_WEB_TOKEN`，进入页面时填写该令牌。页面使用运行 cpx 的系统用户所配置的 Git 凭据。
+
+Docker 部署时，在 Compose 项目环境变量中设置工作区令牌。页面路径使用容器内路径，持久化工作区可以放在已挂载的 `/app/data/` 内。
+
+选择「读取 GitHub 工作区」，可输入 `owner/repo` 或 GitHub 仓库主页，也可从已连接账号的授权仓库中选择。cpx 实时读取 `main` 上的项目清单和 Story。私有仓库使用 GitHub 页已连接的凭据。
+
+首页是「会话工作台」。左侧可展开 `code/`、`story/`、`archive/` 与根目录文件，可从 `story/` 打开需求记录。打开本地工作区后，在输入框描述想法，cpx 调用 Codex 命名、用初始需求创建 `story/YYYY-MM-DD-需求名/说明.md` 并执行。页面显示对话和执行状态，运行日志按需展开。会话列表显示当前工作区已绑定 Codex 线程的会话，支持搜索。按 Enter 发送，按 Shift+Enter 换行。cpx 将后续消息、回复和绑定的 Codex 线程 ID 保存在工作区本地会话数据库中。cpx 重启后，重新打开会话即可查看历史，并使用同一份 Codex 数据继续原线程。GitHub 工作区可从目录树浏览远端目录和已推送的需求记录。
+
+仅监听本机回环地址时，可设置 `AGENT_WORKSPACE_DEFAULT_ROOT` 为本地 `digital-avatar` 的绝对路径，打开首页即可使用该工作区。
+
+`cpx workspace` 提供同样能力的 CLI 入口：
+
+```bash
+cpx workspace init ./my-workspace
+cpx workspace show ./my-workspace
+cpx workspace clone git@gitee.com:owner/workspace.git ./work-copy
+cpx workspace add notes git@gitee.com:owner/notes.git --root ./my-workspace --purpose 知识笔记
+```
+
+新工作区从 `main` 开始，包含 `README.md`、`AGENTS.md`、`repos.txt`、`code/`、`story/` 和 `archive/`。初始化和克隆接受空目录或其父目录下尚未存在的路径。已有工作区在 `main` 时可以直接查看，`show --json` 可列出本地项目和待克隆的项目。登记已放在 `code/<项目名>/` 下的独立 Git 仓库时，可省略克隆地址。
+
+项目登记更新根仓库的项目导航和远端清单，Git 克隆使用本机的 SSH 凭据或 Git 凭据助手。根仓库的模板与登记记录作为本地文件供用户检查、提交和推送。会话工作台使用服务所在机器的 Codex 登录和模型配置。
 
 ## 极空间 Docker 部署
 
@@ -309,13 +328,8 @@ Codex 可使用 `CODEX_API_KEY`，也可直接在页面完成官方 CLI 登录�
 | `GET /api/console/github`                    | 读取 Token 来源、连接状态和 PAT 创建引导       |
 | `POST /api/console/github/connect`           | 验证 GitHub Token，成功后写入配置并读取仓库    |
 | `GET /api/console/github/repositories`       | 使用已配置 Token 刷新全部可访问仓库            |
-| `GET /api/console/github/branches`           | 读取指定 `owner/repo` 的全部分支               |
-| `GET/POST /api/console/tasks`                | 列出任务或创建任务                             |
-| `GET /api/console/task?id=<id>`              | 读取单个任务及日志                             |
-| `POST /api/console/task/continue`            | 向已结束任务的原工作区追加 prompt              |
-| `POST /api/console/cancel`                   | 取消未结束任务                                 |
-
-仓库仅接受 `owner/repo`、GitHub HTTPS 或 GitHub SSH 地址。系统维护完整本地仓库缓存并从所选基础分支创建隔离的 `cpx/task-*` worktree；选择新建分支时使用用户提供的合法分支名。Coding Agent 可以提交并推送非主分支，cpx 通过受控认证和 pre-push hook 禁止直接推送基础分支以及 `main`、`master`、`production`；force push 仍然禁止。任务启用 `createPullRequest` 时，系统会提交尚未提交的改动、推送任务分支并调用 `gh pr create`；Agent 已自行提交或推送时也能正确创建或更新 PR。fine-grained PAT 一次只面向一个资源所有者；需要跨多个组织时，应分别部署/配置凭据或使用满足组织策略的其他 GitHub 鉴权方式。
+| `GET /api/console/workspace`                | 读取工作区访问方式                             |
+| `POST /api/console/workspace`               | 管理工作区，发起、查看或停止 Codex 会话         |
 
 ### POST /command
 
