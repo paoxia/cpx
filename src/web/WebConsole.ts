@@ -177,6 +177,10 @@ export class WebConsole {
     return connection;
   }
 
+  getStoryRunner(): StoryRunner {
+    return this.storyRunner;
+  }
+
   async getGitHubBranches(repository: string) {
     validateGitHubToken(this.githubToken);
     return listGitHubBranches(this.githubClientFactory(this.githubToken!), repository);

@@ -260,12 +260,14 @@ export interface DingTalkConfig {
   enabled: boolean;
   clientId?: string;
   clientSecret?: string;
+  workspaceUsers?: string[];
 }
 
 export interface FeishuConfig {
   enabled: boolean;
   appId?: string;
   appSecret?: string;
+  workspaceUsers?: string[];
 }
 
 export interface GitHubConfig {
@@ -296,6 +298,7 @@ export interface AppConfig {
   server: ServerConfig;
   dingtalk: DingTalkConfig;
   feishu: FeishuConfig;
+  messagingWorkspaceRoot?: string;
   github: GitHubConfig;
   skills: SkillsConfig;
   mcp: McpConfig;

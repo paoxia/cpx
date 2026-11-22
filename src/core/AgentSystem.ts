@@ -12,6 +12,7 @@ import { PermissionManager } from '../permissions/PermissionManager';
 import { PendingConfirmationStore } from '../permissions/PendingConfirmationStore';
 import { AuditLogger } from '../permissions/AuditLogger';
 import { MessagingIntegrationManager } from '../integrations/MessagingIntegrationManager';
+import { WorkspaceSessionMessages } from '../integrations/WorkspaceSessionMessages';
 import { GitHubClient } from '../github/GitHubClient';
 import { GitHubService } from '../github/GitHubService';
 import { SkillInstaller } from '../skills/SkillInstaller';
@@ -99,6 +100,7 @@ export class AgentSystem {
   private skillManager: SkillManager;
   private mcpManager: MCPManager;
   private webConsole: WebConsole;
+  private workspaceSessionMessages: WorkspaceSessionMessages;
   private messagingCoordinator: MessagingCoordinatorRunner;
   private messagingTaskOrigins = new Map<string, MessagingTaskOrigin>();
   private messagingCoordinatorConversations = new Map<string, MessagingCoordinatorConversation>();
@@ -167,7 +169,7 @@ export class AgentSystem {
       workspaceAccess: {
         host: this.config.server.host,
         token: process.env.AGENT_WORKSPACE_WEB_TOKEN,
-        defaultRoot: process.env.AGENT_WORKSPACE_DEFAULT_ROOT,
+        defaultRoot: this.messagingWorkspaceRoot(),
       },
       githubToken: this.config.github.token,
       githubTokenSource: process.env.AGENT_GITHUB_TOKEN?.trim()
@@ -201,6 +203,7 @@ export class AgentSystem {
         return this.messagingIntegrations.getPublicConfiguration();
       },
     });
+    this.workspaceSessionMessages = new WorkspaceSessionMessages(this.webConsole.getStoryRunner());
 
     this.skillManager = new SkillManager(
       this.skillLoader,
@@ -277,7 +280,7 @@ export class AgentSystem {
   async processCommand(rawText: string, userInfo: ParsedUserInfo): Promise<CommandResult> {
     let command: Command;
     try {
-      command = this.parser.parse(rawText, userInfo);
+      command = this.parser.parse(rawText, userInfo, Boolean(this.messagingWorkspaceRoot()));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`命令解析失败: ${message}`);
@@ -327,7 +330,31 @@ export class AgentSystem {
       }
     }
 
+    const data = result.data;
+    if (command.name === 'workspace_session' && result.success &&
+        data && typeof data === 'object' && 'runId' in data && typeof data.runId === 'string') {
+      void this.pushWorkspaceSessionResult(command, data.runId);
+    }
+
     return result;
+  }
+
+  private messagingWorkspaceRoot(): string | undefined {
+    return this.config.messagingWorkspaceRoot || process.env.AGENT_WORKSPACE_DEFAULT_ROOT?.trim() || undefined;
+  }
+
+  private async pushWorkspaceSessionResult(command: Command, runId: string): Promise<void> {
+    try {
+      const result = await this.workspaceSessionMessages.result(command.id, runId);
+      await this.resultPusher?.(
+        command.source,
+        command.userId,
+        this.formatter.format(result, command.source),
+        command.replyRouteId,
+      );
+    } catch (error) {
+      this.logger.error(`工作区会话结果推送失败: ${errorMessage(error)}`);
+    }
   }
 
   /** 启动系统 */
@@ -699,6 +726,11 @@ export class AgentSystem {
 
   /** 注册钉钉/飞书可用的 GitHub 查询与 Coding Agent 开发命令。 */
   private registerCodingAgentHandlers(): void {
+    this.router.register('workspace_session', (command) => this.workspaceSessionMessages.handle(
+      command,
+      this.messagingWorkspaceRoot(),
+      command.source === 'cli' ? [] : this.config[command.source].workspaceUsers ?? [],
+    ));
     this.router.register('github_overview', async (command) => {
       try {
         const connection = await this.webConsole.inspectGitHub();
@@ -1411,6 +1443,9 @@ export class AgentSystem {
         userName: payload.userName ?? 'Tester',
         source: payload.source ?? 'cli',
       };
+      if (this.messagingWorkspaceRoot() && userInfo.source !== 'cli') {
+        return { status: 403, body: { error: '工作区会话请通过平台机器人发送，HTTP 测试命令使用 cli 来源。' } };
+      }
       const result = await this.processCommand(payload.text, userInfo);
       return { status: 200, body: result };
     });
@@ -1418,6 +1453,16 @@ export class AgentSystem {
 
   private getHelpText(source: CommandSource): string {
     if (source === 'feishu' || source === 'dingtalk') {
+      if (this.messagingWorkspaceRoot()) {
+        return [
+          '直接发送消息即可继续当前 cpx 会话，首次发送会创建会话。',
+          '• /new [想法] · 新建会话',
+          '• /sessions [页码] · 查询工作区所有会话',
+          '• /switch <会话 ID> · 切换当前会话',
+          '• /resume <会话 ID> [消息] · 恢复会话并可直接发送一条消息',
+          '• /whoami · 查看自己的机器人用户 ID',
+        ].join('\n');
+      }
       return [
         '直接用自然语言告诉 Codex 你想完成什么，例如：',
         '“在 cpx 项目修复飞书重复回复的问题，补充测试并创建 PR。”',

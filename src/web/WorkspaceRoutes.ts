@@ -56,7 +56,12 @@ const payload = z.discriminatedUnion('operation', [
     id: story.optional(),
     description,
   }),
-  z.object({ operation: z.literal('latest-story-run'), path: workspacePath, id: story.optional() }),
+  z.object({
+    operation: z.literal('latest-story-run'),
+    path: workspacePath,
+    id: story.optional(),
+    knownRunId: runId.optional(),
+  }),
   z.object({ operation: z.literal('story-run'), id: runId, path: workspacePath.optional() }),
   z.object({ operation: z.literal('stop-story-run'), id: runId }),
   z.object({
@@ -222,7 +227,7 @@ async function runOperation(
       if (request.operation === 'run-story')
         return storyRunner.start(request.path, request.description, request.id);
       if (request.operation === 'latest-story-run')
-        return storyRunner.latest(request.path, request.id);
+        return storyRunner.latest(request.path, request.id, request.knownRunId);
       if (request.operation === 'stop-story-run') return storyRunner.cancel(request.id);
       return request.path
         ? storyRunner.getForWorkspace(request.path, request.id)

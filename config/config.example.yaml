@@ -5,14 +5,19 @@ server:
   port: 3000
   host: 0.0.0.0
 
+# 钉钉和飞书共用的数字分身工作区（服务端绝对路径）
+# messagingWorkspaceRoot: "/path/to/digital-avatar"
+
 # 钉钉 Stream 长连接机器人配置
 dingtalk:
+  workspaceUsers: []       # 通过机器人 /whoami 获取用户 ID，用引号写入此列表
   enabled: false
   clientId: ""             # Client ID / AppKey
   clientSecret: ""         # Client Secret / AppSecret
 
 # 飞书 WebSocket 长连接机器人配置
 feishu:
+  workspaceUsers: []       # 通过机器人 /whoami 获取用户 ID，用引号写入此列表
   enabled: false
   appId: ""                # cli_ 开头的 App ID
   appSecret: ""            # 应用 App Secret

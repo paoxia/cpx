@@ -33,7 +33,7 @@ export class WorkspaceSessions {
     })();
   }
 
-  reserve(turn: SessionTurn): void {
+  reserve(turn: SessionTurn, routeKey?: string): void {
     this.db
       .transaction(() => {
         this.recoverInterruptedTurn();
@@ -53,6 +53,7 @@ export class WorkspaceSessions {
             process.pid,
             turn.description,
           );
+        if (routeKey) this.saveMessagingSelection(routeKey, null, turn.id);
       })
       .immediate();
   }
@@ -94,6 +95,41 @@ export class WorkspaceSessions {
       )
       .all()
       .map(({ storyId }) => storyId);
+  }
+
+  currentMessagingStory(routeKey: string): string | undefined {
+    return this.db
+      .prepare<[string], { storyId: string }>(
+        `SELECT sessions.story_id AS storyId
+         FROM workspace_messaging_selections AS selection
+         LEFT JOIN workspace_session_turns AS turns ON turns.id = selection.run_id
+         JOIN workspace_sessions AS sessions ON sessions.story_id = COALESCE(selection.story_id, turns.story_id)
+         WHERE selection.route_key = ?`,
+      )
+      .get(routeKey)?.storyId;
+  }
+
+  selectMessagingStory(routeKey: string, storyId?: string): void {
+    if (storyId) {
+      this.saveMessagingSelection(routeKey, storyId, null);
+    } else {
+      this.db
+        .prepare('DELETE FROM workspace_messaging_selections WHERE route_key = ?')
+        .run(routeKey);
+    }
+  }
+
+  private saveMessagingSelection(
+    routeKey: string,
+    storyId: string | null,
+    runId: string | null,
+  ): void {
+    this.db
+      .prepare(
+        `INSERT INTO workspace_messaging_selections (route_key, story_id, run_id) VALUES (?, ?, ?)
+       ON CONFLICT(route_key) DO UPDATE SET story_id = excluded.story_id, run_id = excluded.run_id`,
+      )
+      .run(routeKey, storyId, runId);
   }
 
   latest(storyId?: string): SessionTurn | undefined {

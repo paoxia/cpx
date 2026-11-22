@@ -49,10 +49,20 @@ export class StoryRunner {
     mkdirSync(this.namingDirectory, { recursive: true });
   }
 
-  async start(path: string, description: string, storyId?: string) {
+  async start(
+    path: string,
+    description: string,
+    storyId?: string,
+    messaging?: { routeKey: string; startNew: boolean },
+  ) {
     const { root } = await inspectWorkspace(path);
     const store = await this.workspaceStore(root);
     if (this.stopped) throw new Error('Story 执行服务已停止');
+    if (messaging) {
+      if (!storyId && !messaging.startNew)
+        storyId = store.currentMessagingStory(messaging.routeKey);
+      if (storyId) this.requireMessagingStory(root, store, storyId);
+    }
     const run: StoryRun = {
       id: randomUUID(),
       path: root,
@@ -61,7 +71,7 @@ export class StoryRunner {
       description,
       storyId,
     };
-    store.reserve(run);
+    store.reserve(run, messaging?.routeKey);
     this.runs.set(run.id, run);
     this.executions.set(
       run.id,
@@ -75,16 +85,43 @@ export class StoryRunner {
     return this.snapshot(run);
   }
 
-  async latest(path: string, storyId?: string) {
-    const { root } = await inspectWorkspace(path);
-    const turn = (await this.workspaceStore(root)).latest(storyId);
-    return turn ? this.snapshot(this.runs.get(turn.id) ?? (await this.restore(root, turn))) : null;
+  async latest(path: string, storyId?: string, knownRunId?: string) {
+    const { root, store } = await this.openWorkspace(path);
+    const turn = store.latest(storyId);
+    if (!turn || turn.id === knownRunId) return null;
+    return this.snapshot(this.runs.get(turn.id) ?? (await this.restore(root, turn)));
   }
 
   async listSessions(path: string) {
-    const { root } = await inspectWorkspace(path);
-    const store = await this.workspaceStore(root);
+    const { root, store } = await this.openWorkspace(path);
     return localStorySummaries(root, store.storyIds());
+  }
+
+  async listMessagingSessions(path: string, routeKey: string) {
+    const { root, store } = await this.openWorkspace(path);
+    return {
+      sessions: localStorySummaries(root, store.storyIds()),
+      current: store.currentMessagingStory(routeKey),
+    };
+  }
+
+  async selectMessagingSession(path: string, routeKey: string, storyId?: string) {
+    const { root, store } = await this.openWorkspace(path);
+    const session = storyId ? this.requireMessagingStory(root, store, storyId) : undefined;
+    store.selectMessagingStory(routeKey, storyId);
+    return session;
+  }
+
+  async waitForRun(runId: string) {
+    this.requireRun(runId);
+    await this.executions.get(runId);
+    return this.get(runId);
+  }
+
+  private requireMessagingStory(root: string, store: WorkspaceSessions, storyId: string) {
+    const session = store.thread(storyId) && localStorySummaries(root, [storyId])[0];
+    if (!session) throw new Error('会话不存在或已归档。发送 /sessions 查看可用会话。');
+    return session;
   }
 
   get(runId: string) {
@@ -126,6 +163,13 @@ export class StoryRunner {
     const store = this.stores.get(root) ?? new WorkspaceSessions(directory);
     this.stores.set(root, store);
     return store;
+  }
+
+  private async openWorkspace(path: string): Promise<{ root: string; store: WorkspaceSessions }> {
+    const cached = this.stores.get(path);
+    if (cached) return { root: path, store: cached };
+    const { root } = await inspectWorkspace(path);
+    return { root, store: await this.workspaceStore(root) };
   }
 
   private async restore(path: string, turn: SessionTurn): Promise<StoryRun> {
@@ -175,6 +219,7 @@ export class StoryRunner {
           proposal.name,
           new Date(run.createdAt),
           proposal.title,
+          true,
         );
       }
       run.story = story;

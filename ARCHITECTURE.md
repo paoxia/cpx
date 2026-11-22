@@ -4,7 +4,7 @@
 
 ## 系统概览
 
-cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 `@paoxia/cpx` npm 包的全局 `cpx` 命令或 Docker 启动。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台；消息平台和工作区会话分别使用 `AgentTaskManager` 实例调用本机 Codex CLI，在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
+cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 `@paoxia/cpx` npm 包的全局 `cpx` 命令或 Docker 启动。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台。网页与消息平台可以共用工作区会话。工作区会话和独立 GitHub 任务使用各自的 `AgentTaskManager` 调用本机 Codex CLI，在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
 
 ```text
 钉钉 / 飞书 / HTTP
@@ -25,10 +25,11 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
                                     SQLite / 日志 / 平台回传
 ```
 
-浏览器会话和消息平台任务各有执行入口：
+工作区会话共用 `StoryRunner`。GitHub 任务使用自己的执行入口。
 
 ```text
 浏览器 → 工作区 API → StoryRunner → AgentTaskManager → 工作区 Codex / resume
+钉钉 / 飞书 → CommandRouter → WorkspaceSessionMessages → StoryRunner
 聊天 → CommandRouter → 协调 Codex → cpx_platform MCP → AgentTaskManager → worktree Codex → Git + gh
 原会话 ← MessagingIntegration ← 会话/任务专属 Token 校验的 HTTP 路由
 
@@ -58,9 +59,9 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 ## 请求流程
 
 1. `MessagingIntegrationManager` 主动建立钉钉 Stream 和飞书 WebSocket 连接；`HttpServer` 的 `/command` 仅用于本地测试与集成调试。
-2. `CommandParser` 去除平台前缀，将飞书和钉钉普通文本转换为 `agent_chat`；仅 `/new`、`/tasks`、`/status`、`/stop`、`/help` 和确认流程保留确定性入口。旧文本命令继续兼容；当会话已有任务时，`AgentSystem` 会把非生命周期文本改回 `agent_chat`，避免旧命令抢走 Codex 上下文。
+2. `CommandParser` 去除平台前缀。配置工作区时，普通文本与会话控制命令进入 `workspace_session`。独立 GitHub 任务流程使用 `agent_chat` 及原有任务控制命令。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
-4. 当前会话没有任务时，`MessagingCoordinator` 在独立非 Git 目录中用只读沙箱启动或恢复 Codex。协调 Codex 只能通过 `cpx_platform` 查询仓库/分支和管理当前用户任务；仓库明确后由工具创建异步开发任务。已有任务时，文本直接恢复 worktree 中的任务 Codex。
+4. `WorkspaceSessionMessages` 校验平台发送者，按平台、用户和聊天定位工作区内的会话选择。文本经过和浏览器相同的 `StoryRunner` 创建或恢复 Codex 线程。独立 GitHub 任务流程由 `MessagingCoordinator` 在只读目录协调，用 `cpx_platform` 查询仓库、分支和管理用户任务。
 5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
 控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，但强制使用 `--skip-git-repo-check` 与只读沙箱。创建聊天开发任务时，协调工具可通过 GitHub API 分页读取仓库分支。`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。

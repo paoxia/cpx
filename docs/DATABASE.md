@@ -33,5 +33,8 @@
 |---|---|---|---|
 | `workspace_sessions` | Story 与 Codex 线程的绑定 | `story_id` | `thread_id`（唯一） |
 | `workspace_session_turns` | 用户消息、回复和运行状态 | `id` | `story_id`, `status`, `created_at`, `owner_pid`, `description`, `response`, `error` |
+| `workspace_messaging_selections` | 各平台账号在对应聊天中的当前会话 | `route_key` | `story_id` 或 `run_id` |
 
 轮次表按 `story_id` 索引。部分唯一索引限制同一工作区同时只有一轮处于等待、命名、创建或执行状态。运行服务退出后，cpx 将遗留的运行轮次标为失败，已保存的线程可继续使用。
+
+显式切换记录 Story ID。发送文本时在写入轮次的同一事务中记录运行 ID，启动后由该轮次关联 Story 和 Codex 线程。

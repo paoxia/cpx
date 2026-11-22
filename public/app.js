@@ -9,6 +9,7 @@ const state = {
   story: null,
   storyRun: null,
   storyRunPolling: false,
+  sessionsPolling: false,
   sessionIndex: [],
   sessionTab: 'sessions',
   sessionSelection: 0,
@@ -231,6 +232,7 @@ async function init() {
       console.error(error);
     }
     window.setInterval(refreshStoryRun, 900);
+    window.setInterval(refreshWorkspaceSessions, 4000);
     window.setInterval(() => {
       if (state.activeView === 'codex' && state.codexAuth?.state === 'waiting') {
         void refreshCodexAuth();
@@ -915,17 +917,18 @@ function updateWorkspaceOptions(datalist, values) {
 function renderWorkspace(workspace) {
   const isGitHub = workspace.source === 'github';
   const previous = state.workspace;
-  if (previous?.root !== workspace.root || previous?.repository !== workspace.repository) {
+  const changed = previous?.root !== workspace.root || previous?.repository !== workspace.repository;
+  if (changed) {
     state.sessionSelection += 1;
     renderStoryRun(null);
     renderStory(null);
     state.workspaceFile = null;
     state.sessionIndex = [];
     elements.sessionSearch.value = '';
-    renderSessionList();
     workspaceFeedback(elements.storyFeedback, '');
   }
   state.workspace = workspace;
+  if (changed) renderSessionList();
   if (workspace.root && !previous?.root) state.sessionTab = 'sessions';
   selectSessionTab(state.sessionTab);
   renderFilePreview();
@@ -1191,16 +1194,46 @@ async function loadStories() {
   elements.storyForm.hidden = !workspace.root;
   if (!workspace.root) return;
   try {
-    const { sessions } = await callWorkspace({ operation: 'sessions', path: workspace.root });
+    await updateSessionIndex(workspace);
     if (state.workspace !== workspace) return;
-    state.sessionIndex = sessions.map(({ id, title }) => ({ id, title: title || id.slice(11).replace(/[-_]+/g, ' ') }));
-    renderSessionList();
     if (!state.storyRun) {
       const run = await callWorkspace({ operation: 'latest-story-run', path: workspace.root });
       if (state.workspace === workspace && !state.storyRun && run) renderStoryRun(run);
     }
   } catch (error) {
     workspaceFeedback(elements.storyFeedback, error.message, true);
+  }
+}
+
+async function updateSessionIndex(workspace) {
+  const { sessions } = await callWorkspace({ operation: 'sessions', path: workspace.root });
+  if (state.workspace !== workspace) return;
+  const index = sessions.map(({ id, title }) => ({ id, title: title || id.slice(11).replace(/[-_]+/g, ' ') }));
+  const unchanged = index.length === state.sessionIndex.length && index.every(({ id, title }, position) =>
+    state.sessionIndex[position].id === id && state.sessionIndex[position].title === title);
+  if (unchanged) return;
+  state.sessionIndex = index;
+  renderSessionList();
+}
+
+async function refreshWorkspaceSessions() {
+  const { workspace, story, storyRun, sessionSelection } = state;
+  if (!workspace?.root || state.activeView !== 'stories' || state.sessionTab !== 'sessions' ||
+      document.hidden || state.sessionsPolling) return;
+  state.sessionsPolling = true;
+  try {
+    await updateSessionIndex(workspace);
+    if (state.workspace !== workspace || state.sessionSelection !== sessionSelection ||
+        !story || storyRunActive(storyRun) || state.storyRun !== storyRun) return;
+    const run = await callWorkspace({
+      operation: 'latest-story-run', path: workspace.root, id: story.id, knownRunId: storyRun?.id,
+    });
+    if (run && state.workspace === workspace && state.sessionSelection === sessionSelection &&
+        state.storyRun === storyRun) renderStoryRun(run);
+  } catch {
+    // The next refresh will retry transient failures.
+  } finally {
+    state.sessionsPolling = false;
   }
 }
 

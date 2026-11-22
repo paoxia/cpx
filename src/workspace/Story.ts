@@ -70,6 +70,7 @@ export async function createLocalStory(
   requestedName?: string,
   now = new Date(),
   requestedTitle?: string,
+  uniqueName = false,
 ) {
   const title =
     (requestedTitle ?? description)
@@ -87,17 +88,21 @@ export async function createLocalStory(
   const date = [now.getFullYear(), now.getMonth() + 1, now.getDate()]
     .map((part) => String(part).padStart(2, '0'))
     .join('-');
-  const id = `${date}-${name}`;
   const parent = storyDirectory(root, 'story');
   mkdirSync(parent, { recursive: true });
-  const directory = join(parent, id);
-  try {
-    mkdirSync(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`Story ${id} 已存在，可从列表继续`);
+  let id: string;
+  let directory: string;
+  for (let index = 1; ; index += 1) {
+    const suffix = index === 1 ? '' : `-${index}`;
+    id = `${date}-${name.slice(0, 80 - suffix.length)}${suffix}`;
+    directory = join(parent, id);
+    try {
+      mkdirSync(directory);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      if (!uniqueName) throw new Error(`Story ${id} 已存在，可从列表继续`);
     }
-    throw error;
   }
   const file = storyDocuments[0];
   const content = `# ${title}\n\n## 需求\n\n${description}\n`;

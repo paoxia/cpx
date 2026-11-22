@@ -102,4 +102,9 @@ export const WORKSPACE_SESSION_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_workspace_turns_story ON workspace_session_turns(story_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_active_turn ON workspace_session_turns((1))
     WHERE status IN ('queued', 'naming', 'creating', 'running')`,
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_selections (
+    route_key TEXT PRIMARY KEY,
+    story_id TEXT,
+    run_id TEXT
+  )`,
 ];
