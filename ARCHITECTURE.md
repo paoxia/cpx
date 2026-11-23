@@ -74,6 +74,8 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `cpx workspace` 与控制台的 `/api/console/workspace` 共用工作区服务，直接读取用户指定的 Git 工作区目录。服务异步执行 Git 子进程，控制台可同时处理其他请求。`README.md` 和 `repos.txt` 分别维护项目导航与远端清单，`code/` 下是各自管理提交的独立仓库。工作区信息从文件系统重建。
 
+`AgentSystem` 通过 `WorkspaceWebToken` 为远程工作区入口解析访问令牌。环境变量优先；未设置时用加密随机数生成，独占创建数据库旁的 `workspace-web-token` 并在重启时读取。仅监听回环地址时保留原有本机访问检查。`WorkspaceRoutes` 继续对工作区请求校验 Bearer Token，公开状态 API 不返回令牌。
+
 `src/web/GitHubWorkspace.ts` 使用控制台的 GitHub 客户端读取 `main` 的固定提交，并复用本地项目清单解析。`src/workspace/Story.ts` 管理本地 Story 文件，控制台从这些文件恢复需求和后续补充记录。
 
 `src/workspace/StoryRunner.ts` 管理会话工作台的异步执行。它复用 `AgentTaskManager` 的模型配置和 Codex 进程，先在只读环境中为需求命名，再以 Story 目录为 Codex 工作目录启动执行。可写范围为所选工作区，Codex 按该工作区规约识别项目和执行位置。初始需求写入 Story 说明。工作区 Git 元数据中的 `cpx/sessions.db` 以 Story ID 为会话标识，保存 Codex 线程 ID 和各轮消息、回复及状态。第一次执行收到 Codex 的线程事件时保存绑定，之后通过 `codex exec resume <thread-id>` 继续。会话列表从数据库读取已绑定线程，按最近一轮的顺序排列。实时运行日志留在 cpx 进程中。

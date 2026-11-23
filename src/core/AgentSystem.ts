@@ -20,6 +20,7 @@ import { SkillLoader } from '../skills/SkillLoader';
 import { SkillManager } from '../skills/SkillManager';
 import { MCPManager } from '../mcp/MCPManager';
 import { WebConsole } from '../web/WebConsole';
+import { resolveWorkspaceWebToken } from '../web/WorkspaceWebToken';
 import type { AgentTask } from '../agents/AgentTaskManager';
 import { MessagingCoordinator, MessagingCoordinatorRunner } from '../agents/MessagingCoordinator';
 import type { AppConfig, Command, CommandResult, CommandSource } from './types';
@@ -168,7 +169,11 @@ export class AgentSystem {
     this.webConsole = new WebConsole(this.httpServer, this.config.storage.path, this.logger, {
       workspaceAccess: {
         host: this.config.server.host,
-        token: process.env.AGENT_WORKSPACE_WEB_TOKEN,
+        token: resolveWorkspaceWebToken(
+          this.config.server.host,
+          process.env.AGENT_WORKSPACE_WEB_TOKEN,
+          dirname(this.config.storage.path),
+        ),
         defaultRoot: this.messagingWorkspaceRoot(),
       },
       githubToken: this.config.github.token,

@@ -61,7 +61,7 @@ git archive --format=zip --output=cpx-source.zip dev
 4. 创建 `data/codex`、`data/repositories`、`data/workspaces`、`config` 和 `logs` 子目录；
 5. 将该目录访问权限限制为管理员或可信用户。
 
-源码包本身已经包含 `config/config.example.yaml` 和 `config/permissions.example.yaml`。不要删除整个 `config` 目录。
+源码包本身已经包含 `config/config.example.yaml` 和 `config/permissions.example.yaml`。首次部署时，在文件管理器中分别复制为同目录的 `config.yaml` 和 `permissions.yaml`；启动需要 `config.yaml`。已有实例保留原配置，不覆盖。不要删除整个 `config` 目录。
 
 ### 3. 在极空间创建 Compose 项目
 
@@ -93,6 +93,8 @@ RUN npm install -g @openai/codex@latest
 ### 5. 环境变量
 
 默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
+
+工作区访问密码也可留空：首次启动自动生成并保存到项目的 `data/workspace-web-token`。在极空间文件管理器打开该文件，复制全部内容，进入 cpx「工作区」页填入「工作区访问密码（令牌）」。它授权读取项目和运行 Codex，与 GitHub Token、Codex 登录分别管理。重建容器时保留 `data`，密码就会保持不变。也可在 Compose 环境变量界面设置至少 32 字符的随机 `AGENT_WORKSPACE_WEB_TOKEN`，此时页面使用该值；短于 32 字符会阻止启动。页面中的工作区目录填写容器路径，例如 `/app/data/workspaces/my-workspace`。
 
 推荐启动后通过 cpx Web 控制台连接 GitHub，并完成 Codex 登录。如果确实要通过环境变量提供密钥，可在极空间 Compose 项目的环境变量界面填写对应变量，再保存并重新创建容器：
 
@@ -229,7 +231,7 @@ scripts/docker-build.sh latest linux/arm64
 1. 通过文件管理器把 `cpx-latest.tar` 和 `docker-compose.image.yml` 上传到持久化目录；
 2. 打开“Docker → 镜像”，选择本地镜像导入，导入 `cpx-latest.tar`；
 3. 确认镜像列表中出现 `cpx:latest`；
-4. 在文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces`、`config` 和 `logs`；使用 Mihomo 方案时再创建 `data/mihomo`；
+4. 在文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces`、`config` 和 `logs`；首次部署将源码中的 `config/config.example.yaml` 和 `config/permissions.example.yaml` 分别上传为 `config/config.yaml`、`config/permissions.yaml`，已有实例保留原配置；使用 Mihomo 方案时再创建 `data/mihomo`；
 5. 打开“Docker → Compose → 新建项目”；
 6. 项目存储位置选择该持久化目录；
 7. 导入或粘贴 `docker-compose.image.yml` 的内容并创建项目。
@@ -404,6 +406,7 @@ Web 控制台在内网部署后即可使用，不需要公网入口。进入“�
 | 容器不断重启                 | 打开 `cpx` 容器日志，检查配置、目录挂载、目录权限和数据库错误                                                 |
 | 健康状态为 `unhealthy`       | 查看容器日志，并在浏览器访问 `http://<NAS-IP>:<端口>/health`                                                  |
 | NAS 页面可见但手机打不开     | 检查端口映射、防火墙、访客 Wi-Fi、AP 隔离、VLAN 和实际 NAS IP                                                 |
+| 工作区提示回环地址或无法接入 | 更新镜像并重新创建容器；用文件管理器读取 `data/workspace-web-token` 填入页面，已设置环境变量令牌时使用该值 |
 | 端口已被占用                 | 在 Compose 编辑器中修改映射左侧，例如 `13000:3000`，再重新创建项目                                            |
 | GitHub 页面验证失败          | 检查 Token 有效期、资源所有者、仓库范围、组织批准状态和权限                                                   |
 | 私有仓库返回 403             | 确认目标仓库已授权给控制台中验证的 Token，并使用 GitHub HTTPS 仓库地址                                        |

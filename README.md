@@ -57,6 +57,8 @@ cpx start --daemon
 
 浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
 
+在开发机上运行 `make nas-docker-build` 可构建并导出 Docker 镜像，默认版本为 `dev-nas-image`、平台为 `linux/amd64`。该入口清除大小写的 HTTP、HTTPS、ALL 代理环境变量，使用阿里云 apt 镜像和 npmmirror npm 源，并将 `~/.docker/bin` 加入 PATH。可用 `make nas-docker-build VERSION=<版本> PLATFORM=<平台>` 覆盖版本与平台。
+
 从源码开发时使用：
 
 ```bash
@@ -117,9 +119,9 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 ## digital-avatar 工作区
 
-控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、通过通用 Git 地址克隆根仓库，以及登记本地或远端子项目。页面填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。通过 HTTPS 代理访问部署实例时，在服务端设置至少 32 字符的随机 `AGENT_WORKSPACE_WEB_TOKEN`，进入页面时填写该令牌。页面使用运行 cpx 的系统用户所配置的 Git 凭据。
+控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、通过通用 Git 地址克隆根仓库，以及登记本地或远端子项目。页面填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。远程实例首次启动会自动生成工作区访问密码（令牌），保存在数据库同目录的 `workspace-web-token` 文件中，进入页面时填写。也可通过至少 32 字符的 `AGENT_WORKSPACE_WEB_TOKEN` 覆盖；无效的短令牌会阻止启动。页面使用运行 cpx 的系统用户所配置的 Git 凭据。
 
-Docker 部署时，在 Compose 项目环境变量中设置工作区令牌。页面路径使用容器内路径，持久化工作区可以放在已挂载的 `/app/data/` 内。
+Docker/NAS 部署时，默认无需手动配置令牌。在极空间文件管理器中打开项目的 `data/workspace-web-token`，复制内容到「工作区访问密码（令牌）」；重建容器会复用此文件。已设置环境变量令牌时使用该值。该密码只用于工作区访问，与 GitHub Token 和 Codex 登录分别管理。页面路径使用容器内路径，持久化工作区可以放在已挂载的 `/app/data/` 内。
 
 选择「读取 GitHub 工作区」，可输入 `owner/repo` 或 GitHub 仓库主页，也可从已连接账号的授权仓库中选择。cpx 实时读取 `main` 上的项目清单和 Story。私有仓库使用 GitHub 页已连接的凭据。
 
@@ -149,7 +151,7 @@ cpx workspace add notes git@gitee.com:owner/notes.git --root ./my-workspace --pu
 源码部署快速步骤：
 
 1. 在电脑获取仓库源码，把完整 `cpx` 文件夹上传到 NAS 持久化目录
-2. 在极空间文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces` 和 `logs` 子目录
+2. 在极空间文件管理器中创建 `data/codex`、`data/repositories`、`data/workspaces` 和 `logs` 子目录；首次部署把 `config/*.example.yaml` 分别复制为同目录的 `config.yaml` 和 `permissions.yaml`
 3. 打开“Docker → Compose → 新建项目”，项目存储位置选择上传后的 `cpx` 目录
 4. 导入或粘贴根目录 `docker-compose.yml`，确认后由极空间自动构建并启动
 5. 浏览器访问 `http://<NAS-IP>:3000`，在控制台连接 GitHub、Codex 和所需消息平台

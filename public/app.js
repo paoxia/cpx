@@ -867,7 +867,7 @@ async function loadWorkspaceMode() {
     workspaceFeedback(
       elements.workspaceFeedback,
       mode === 'disabled'
-        ? '请从绑定到本机回环地址的 cpx 打开此页，或在服务端配置 AGENT_WORKSPACE_WEB_TOKEN。'
+        ? '当前连接无法访问工作区。NAS 部署请更新镜像并重新创建容器，或在 Compose 环境变量中设置至少 32 字符的 AGENT_WORKSPACE_WEB_TOKEN；本机调试请直接访问仅监听 127.0.0.1 的实例。'
         : '',
     );
     updateWorkspaceForm();

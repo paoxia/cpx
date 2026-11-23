@@ -85,6 +85,7 @@ cpx-*.tar.gz
 
 # Runtime data (SQLite database and WAL files)
 /data/console-settings.json
+/data/workspace-web-token
 /data/codex/
 /data/claude/
 /data/mihomo/

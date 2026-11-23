@@ -43,7 +43,7 @@
 
 `/command` 和常规 `/api/console/*` 路由没有通用认证。`/health` 公开返回进程状态。`/api/internal/agent-platform-tool` 要求任务 ID 和该任务的随机 Bearer Token。设置接口应部署在受保护的管理入口后。若监听 `0.0.0.0`，必须由防火墙或带认证的反向代理限制访问。
 
-`POST /api/console/workspace` 允许在 cpx 进程有权限的目录打开、创建或克隆工作区，并发起工作区 Codex 会话。仅监听回环时，直接访问需要满足回环连接和同源检查。远程部署需要 `AGENT_WORKSPACE_WEB_TOKEN`，建议通过 HTTPS 及带认证的反向代理访问。该令牌只控制工作区入口，管理员仍需保护整个控制台。`GET /api/console/workspace` 返回访问方式，向直连回环客户端提供已配置的默认工作区路径。
+`POST /api/console/workspace` 允许在 cpx 进程有权限的目录打开、创建或克隆工作区，并发起工作区 Codex 会话。仅监听回环时，直接访问需要满足回环连接和同源检查。远程实例未配置 `AGENT_WORKSPACE_WEB_TOKEN` 时，启动自动生成 32 字节随机令牌，以 `0600` 权限保存在数据库旁的 `workspace-web-token`，重启复用；环境变量优先，少于 32 字符的配置或损坏文件阻止启动。令牌不由页面 API 返回，也不写入日志。NAS 管理员通过文件管理器读取 `data/workspace-web-token` 并填入页面。建议通过 HTTPS 及带认证的反向代理访问。该令牌只控制工作区入口，管理员仍需保护整个控制台。`GET /api/console/workspace` 返回访问方式，向直连回环客户端提供已配置的默认工作区路径。
 
 文件预览使用同一工作区权限。预览限制在工作区内的普通文件，忽略 Git 元数据并拒绝穿过符号链接的本地路径。浏览器以纯文本或栅格图片展示文件内容。
 

@@ -139,8 +139,9 @@
             <section class="workspace-card" aria-labelledby="workspace-connect-title">
               <h2 id="workspace-connect-title">接入工作区</h2>
               <label class="field" id="workspace-access-field" hidden>
-                <span>工作区访问令牌</span>
+                <span>工作区访问密码（令牌）</span>
                 <input id="workspace-access" type="password" autocomplete="off" />
+                <small>这是工作区的访问密码，用于授权读取文件和运行 Codex。NAS 部署未手动设置时，请在极空间文件管理器打开项目的 data/workspace-web-token，复制其中内容；已设置 AGENT_WORKSPACE_WEB_TOKEN 时使用该值。</small>
               </label>
               <form id="workspace-form" class="workspace-form" hidden>
                 <label class="field">
