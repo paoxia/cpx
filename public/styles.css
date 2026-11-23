@@ -288,7 +288,8 @@ select:focus-visible {
   gap: 9px;
 }
 
-.field > span {
+.field > span,
+.field > label {
   color: var(--soft);
   font-size: 12px;
   font-weight: 560;
@@ -417,6 +418,86 @@ select:focus-visible {
 .workspace-form {
   display: grid;
   gap: 14px;
+}
+
+.workspace-directory-input {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.workspace-directory-input input {
+  flex: 1;
+  min-width: 0;
+}
+
+.workspace-directory-input .secondary-button {
+  flex-shrink: 0;
+  padding-inline: 14px;
+}
+
+.directory-picker {
+  width: min(660px, calc(100vw - 32px));
+  max-height: calc(100dvh - 40px);
+  padding: 24px;
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--panel);
+}
+
+.directory-picker[open] {
+  display: grid;
+  gap: 16px;
+}
+
+.directory-picker::backdrop {
+  background: rgba(3, 3, 4, 0.76);
+  backdrop-filter: blur(8px);
+}
+
+.directory-picker-toolbar,
+.directory-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.directory-picker-actions {
+  justify-content: flex-end;
+}
+
+.directory-picker-path {
+  margin: 0;
+  color: var(--soft);
+  font: 12px/1.5 var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.directory-picker-list {
+  display: grid;
+  gap: 4px;
+  max-height: min(42dvh, 360px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.directory-picker-list button {
+  width: 100%;
+  padding: 12px 14px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.directory-picker-list button:hover {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .workspace-card [hidden] {

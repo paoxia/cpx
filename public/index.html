@@ -148,7 +148,7 @@
                   <span>接入方式</span>
                   <select id="workspace-operation">
                     <option value="show">打开已有工作区</option>
-                    <option value="clone-github">Clone GitHub</option>
+                    <option value="clone-github">GitHub</option>
                     <option value="init">新建本地工作区</option>
                   </select>
                 </label>
@@ -159,12 +159,19 @@
                   <small>选择仓库或填写 owner/repo、GitHub 地址，将克隆到本地持久化工作区目录。私有仓库使用已连接的 GitHub 账号凭据。</small>
                 </label>
                 <button class="text-button" id="workspace-github-connect" type="button" data-view="github" hidden>连接 GitHub</button>
-                <label class="field" id="workspace-path-field">
-                  <span>服务器上的目录</span>
-                  <input id="workspace-path" type="text" list="workspace-recent-paths" autocomplete="off" placeholder="/path/to/digital-avatar" required />
-                  <datalist id="workspace-recent-paths"></datalist>
-                  <small id="workspace-path-hint">填写 cpx 服务所在机器上的绝对路径。</small>
+                <label class="field" id="workspace-recent-field" hidden>
+                  <span>已保存的本地工作区</span>
+                  <select id="workspace-recent" disabled><option value="">暂无已保存的工作区</option></select>
                 </label>
+                <div class="field" id="workspace-path-field">
+                  <label for="workspace-path">服务器上的目录</label>
+                  <div class="workspace-directory-input">
+                    <input id="workspace-path" type="text" list="workspace-recent-paths" autocomplete="off" placeholder="/app/data/workspaces/paoxia/digital-avatar" required />
+                    <button class="secondary-button" id="workspace-browse" type="button">选择目录</button>
+                  </div>
+                  <datalist id="workspace-recent-paths"></datalist>
+                  <small id="workspace-path-hint">选择服务器目录，或填写绝对路径。</small>
+                </div>
                 <button class="save-button" id="workspace-submit" type="submit">打开工作区</button>
               </form>
               <p id="workspace-feedback" class="workspace-feedback" role="status" aria-live="polite">正在读取工作区访问方式…</p>
@@ -659,6 +666,24 @@
       </main>
     </div>
 
+    <dialog class="directory-picker" id="directory-picker" aria-labelledby="directory-picker-title">
+      <div class="modal-heading">
+        <h2 id="directory-picker-title">选择服务器目录</h2>
+        <button class="icon-button" id="directory-picker-close" type="button" aria-label="关闭目录选择器">×</button>
+      </div>
+      <div class="directory-picker-toolbar">
+        <button class="secondary-button" id="directory-picker-home" type="button">工作区目录</button>
+        <button class="secondary-button" id="directory-picker-root" type="button" disabled>根目录</button>
+        <button class="secondary-button" id="directory-picker-up" type="button" disabled>上一级</button>
+      </div>
+      <p class="directory-picker-path" id="directory-picker-path"></p>
+      <ul class="directory-picker-list" id="directory-picker-list" aria-label="子文件夹"></ul>
+      <p class="workspace-feedback" id="directory-picker-status" role="status" aria-live="polite"></p>
+      <div class="directory-picker-actions">
+        <button class="secondary-button" id="directory-picker-cancel" type="button">取消</button>
+        <button class="save-button" id="directory-picker-select" type="button" disabled>使用此目录</button>
+      </div>
+    </dialog>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/app.js" defer></script>
   </body>

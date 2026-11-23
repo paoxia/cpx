@@ -25,6 +25,7 @@ import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelC
 import { registerWorkspaceRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
 import { GitHubWorkspaceClone } from './GitHubWorkspaceClone';
 import { StoryRunner } from '../workspace/StoryRunner';
+import { WorkspaceHistory } from '../workspace/WorkspaceHistory';
 import {
   isMessagingPlatform,
   MessagingPlatform,
@@ -172,7 +173,11 @@ export class WebConsole {
     );
     registerWorkspaceRoutes(httpServer, options.workspaceAccess, () =>
       this.githubClientFactory(this.githubToken ?? ''), this.storyRunner,
-      (repository) => githubWorkspace.clone(repository),
+      {
+        cloneGitHub: (repository) => githubWorkspace.clone(repository),
+        directoryRoot: join(dataDir, 'workspaces'),
+        history: new WorkspaceHistory(dataDir),
+      },
     );
   }
 

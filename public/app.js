@@ -5,6 +5,9 @@ const state = {
   workspace: null,
   workspacePaths: new Set(),
   workspaceBusy: false,
+  recentWorkspaces: [],
+  directoryBrowser: null,
+  directoryBrowserRequest: 0,
   workspaceFile: null,
   story: null,
   storyRun: null,
@@ -39,6 +42,19 @@ const elements = {
   workspacePath: document.querySelector('#workspace-path'),
   workspacePathHint: document.querySelector('#workspace-path-hint'),
   workspacePaths: document.querySelector('#workspace-recent-paths'),
+  workspaceRecentField: document.querySelector('#workspace-recent-field'),
+  workspaceRecent: document.querySelector('#workspace-recent'),
+  workspaceBrowse: document.querySelector('#workspace-browse'),
+  directoryPicker: document.querySelector('#directory-picker'),
+  directoryPickerClose: document.querySelector('#directory-picker-close'),
+  directoryPickerCancel: document.querySelector('#directory-picker-cancel'),
+  directoryPickerHome: document.querySelector('#directory-picker-home'),
+  directoryPickerRoot: document.querySelector('#directory-picker-root'),
+  directoryPickerUp: document.querySelector('#directory-picker-up'),
+  directoryPickerPath: document.querySelector('#directory-picker-path'),
+  directoryPickerList: document.querySelector('#directory-picker-list'),
+  directoryPickerStatus: document.querySelector('#directory-picker-status'),
+  directoryPickerSelect: document.querySelector('#directory-picker-select'),
   workspaceSubmit: document.querySelector('#workspace-submit'),
   workspaceFeedback: document.querySelector('#workspace-feedback'),
   workspaceSummary: document.querySelector('#workspace-summary'),
@@ -162,6 +178,24 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 });
 
 elements.workspaceOperation.addEventListener('change', updateWorkspaceForm);
+elements.workspaceAccess.addEventListener('change', () => void loadRecentWorkspaces());
+elements.workspaceRecent.addEventListener('change', () => {
+  if (elements.workspaceRecent.value) elements.workspacePath.value = elements.workspaceRecent.value;
+});
+elements.workspacePath.addEventListener('input', () => { elements.workspaceRecent.value = ''; });
+elements.workspaceBrowse.addEventListener('click', () => void openDirectoryPicker());
+elements.directoryPickerClose.addEventListener('click', () => elements.directoryPicker.close());
+elements.directoryPickerCancel.addEventListener('click', () => elements.directoryPicker.close());
+elements.directoryPicker.addEventListener('close', () => { state.directoryBrowserRequest += 1; });
+elements.directoryPickerHome.addEventListener('click', () => void browseServerDirectory());
+elements.directoryPickerRoot.addEventListener('click', () => void browseServerDirectory(state.directoryBrowser?.root));
+elements.directoryPickerUp.addEventListener('click', () => void browseServerDirectory(state.directoryBrowser?.parent));
+elements.directoryPickerSelect.addEventListener('click', () => {
+  if (!state.directoryBrowser) return;
+  elements.workspacePath.value = state.directoryBrowser.path;
+  elements.workspaceRecent.value = state.directoryBrowser.path;
+  elements.directoryPicker.close();
+});
 elements.workspaceForm.addEventListener('submit', submitWorkspace);
 elements.workspaceProjectForm.addEventListener('submit', submitWorkspaceProject);
 elements.sessionSearch.addEventListener('input', renderSessionList);
@@ -869,6 +903,7 @@ async function loadWorkspaceMode() {
         : '',
     );
     updateWorkspaceForm();
+    await loadRecentWorkspaces();
     if (defaultRoot && !state.workspace) {
       const workspace = await callWorkspace({ operation: 'show', path: defaultRoot });
       if (!state.workspace) {
@@ -890,14 +925,95 @@ function updateWorkspaceForm() {
   elements.workspaceGitHubConnect.hidden = !fromGitHub || Boolean(state.githubStatus?.connected);
   elements.workspacePathField.hidden = fromGitHub;
   elements.workspacePath.required = !fromGitHub;
+  elements.workspaceRecentField.hidden = operation !== 'show';
   elements.workspaceSubmit.textContent = {
     show: '打开工作区',
-    'clone-github': 'Clone GitHub',
+    'clone-github': '克隆并打开工作区',
     init: '创建工作区',
   }[operation];
   elements.workspacePathHint.textContent = operation === 'show'
-    ? '填写 cpx 服务所在机器上的绝对路径。'
-    : '填写服务端的新目录或空目录的绝对路径。';
+    ? '选择已保存的工作区或服务器目录，也可以填写绝对路径。'
+    : '选择空目录，或选择父目录后填写新的文件夹名称。';
+}
+
+function renderRecentWorkspaces(workspaces) {
+  state.recentWorkspaces = workspaces;
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = workspaces.length ? '选择已保存的本地工作区' : '暂无已保存的工作区';
+  elements.workspaceRecent.replaceChildren(placeholder, ...workspaces.map((workspace) => {
+    const option = document.createElement('option');
+    option.value = workspace.path;
+    option.textContent = `${workspace.name} · ${workspace.path}${workspace.available ? '' : '（目录暂不可用）'}`;
+    option.disabled = !workspace.available;
+    return option;
+  }));
+  elements.workspaceRecent.disabled = workspaces.length === 0;
+  elements.workspaceRecent.value = elements.workspacePath.value;
+  for (const workspace of workspaces) state.workspacePaths.add(workspace.path);
+  updateWorkspaceOptions(elements.workspacePaths, state.workspacePaths);
+}
+
+async function loadRecentWorkspaces() {
+  if (state.workspaceMode === 'disabled') return;
+  if (state.workspaceMode === 'token' && !elements.workspaceAccess.value.trim()) {
+    elements.workspaceRecent.replaceChildren(new Option('填写访问密码后加载已保存的工作区', ''));
+    elements.workspaceRecent.disabled = true;
+    return;
+  }
+  try {
+    const { workspaces } = await callWorkspace({ operation: 'recent-workspaces' });
+    renderRecentWorkspaces(workspaces);
+    if (!state.workspaceBusy) workspaceFeedback(elements.workspaceFeedback, '');
+  } catch (error) {
+    workspaceFeedback(elements.workspaceFeedback, error.message, true);
+  }
+}
+
+async function openDirectoryPicker() {
+  if (state.workspaceMode === 'token' && !elements.workspaceAccess.value.trim()) {
+    workspaceFeedback(elements.workspaceFeedback, '请先填写工作区访问密码。', true);
+    elements.workspaceAccess.focus();
+    return;
+  }
+  state.directoryBrowser = null;
+  elements.directoryPickerPath.textContent = '';
+  elements.directoryPickerRoot.disabled = true;
+  elements.directoryPickerUp.disabled = true;
+  elements.directoryPicker.showModal();
+  await browseServerDirectory(elements.workspacePath.value.trim() || undefined);
+}
+
+async function browseServerDirectory(path) {
+  const request = ++state.directoryBrowserRequest;
+  elements.directoryPickerSelect.disabled = true;
+  elements.directoryPickerList.replaceChildren();
+  workspaceFeedback(elements.directoryPickerStatus, '正在读取服务器目录…');
+  try {
+    const result = await callWorkspace({ operation: 'server-directories', ...(path ? { path } : {}) });
+    if (request !== state.directoryBrowserRequest || !elements.directoryPicker.open) return;
+    state.directoryBrowser = result;
+    elements.directoryPickerPath.textContent = result.path;
+    elements.directoryPickerList.replaceChildren(...result.directories.map((directory) => {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = `▸ ${directory.name}`;
+      button.addEventListener('click', () => void browseServerDirectory(directory.path));
+      row.append(button);
+      return row;
+    }));
+    workspaceFeedback(elements.directoryPickerStatus, result.directories.length ? '' : '此目录没有子文件夹，可以直接选择。');
+  } catch (error) {
+    if (request !== state.directoryBrowserRequest || !elements.directoryPicker.open) return;
+    workspaceFeedback(elements.directoryPickerStatus, error.message, true);
+  } finally {
+    if (request === state.directoryBrowserRequest && elements.directoryPicker.open) {
+      elements.directoryPickerSelect.disabled = !state.directoryBrowser;
+      elements.directoryPickerRoot.disabled = !state.directoryBrowser;
+      elements.directoryPickerUp.disabled = !state.directoryBrowser?.parent;
+    }
+  }
 }
 
 function updateWorkspaceOptions(datalist, values) {
@@ -909,6 +1025,8 @@ function updateWorkspaceOptions(datalist, values) {
 }
 
 function renderWorkspace(workspace) {
+  if (Array.isArray(workspace.recentWorkspaces)) renderRecentWorkspaces(workspace.recentWorkspaces);
+  if (workspace.historyWarning) showToast(workspace.historyWarning, true);
   const isGitHub = workspace.source === 'github';
   const previous = state.workspace;
   const changed = previous?.root !== workspace.root || previous?.repository !== workspace.repository;

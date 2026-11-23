@@ -76,7 +76,9 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `AgentSystem` 通过 `WorkspaceWebToken` 为远程工作区入口解析访问令牌。环境变量优先；未设置时用加密随机数生成，独占创建数据库旁的 `workspace-web-token` 并在重启时读取。仅监听回环地址时保留原有本机访问检查。`WorkspaceRoutes` 继续对工作区请求校验 Bearer Token，公开状态 API 不返回令牌。
 
-工作区页的 Clone GitHub 调用 `clone-github` 操作。`WebConsole` 将当前 GitHub Token 及数据库旁的 `workspaces` 目录交给 `GitHubWorkspaceClone`：统一转为 GitHub HTTPS 地址，按账号和仓库名创建本地目录，复用同源已有工作区并保护本地改动。`GitHubGitCredentials` 通过临时 AskPass 和子进程环境提供认证，完成后清理 helper，不把 Token 写入 Git URL 或仓库配置。克隆得到的本地工作区共用目录预览、Story 和会话服务；原 GitHub 只读 API 保留兼容，页面不再提供只读接入选项。
+`server-directories` 在相同鉴权后调用 `ServerDirectories` 列举服务端子目录，返回规范化绝对路径供目录选择器填写。`WorkspaceHistory` 将最近 30 个成功打开的本地工作区原子写入数据库旁的 `workspace-history.json`，并合并受管 `workspaces/<owner>/<repo>` 中已有的克隆目录；`recent-workspaces` 提供本地选择列表。历史不保存访问凭据，重启可恢复，损坏记录保留并报告错误。
+
+工作区页的 GitHub 调用 `clone-github` 操作。`WebConsole` 将当前 GitHub Token 及数据库旁的 `workspaces` 目录交给 `GitHubWorkspaceClone`：统一转为 GitHub HTTPS 地址，按账号和仓库名创建本地目录，复用同源已有工作区并保护本地改动。`GitHubGitCredentials` 通过临时 AskPass 和子进程环境提供认证，完成后清理 helper，不把 Token 写入 Git URL 或仓库配置。克隆得到的本地工作区共用目录预览、Story 和会话服务；原 GitHub 只读 API 保留兼容，页面不再提供只读接入选项。
 
 `src/web/GitHubWorkspace.ts` 使用控制台的 GitHub 客户端读取 `main` 的固定提交，并复用本地项目清单解析。`src/workspace/Story.ts` 管理本地 Story 文件，控制台从这些文件恢复需求和后续补充记录。
 

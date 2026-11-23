@@ -4,6 +4,7 @@ import { join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pathToFileURL } from 'url';
 import { initializeWorkspace } from '../../../src/workspace/Workspace';
+import { WorkspaceHistory } from '../../../src/workspace/WorkspaceHistory';
 import type { RequestHandler } from '../../../src/core/HttpServer';
 import { WebConsole } from '../../../src/web/WebConsole';
 import { registerWorkspaceRoutes } from '../../../src/web/WorkspaceRoutes';
@@ -66,7 +67,10 @@ describe('WebConsole', () => {
     expect(html).toContain('id="github-tab"');
     expect(html).toContain('id="workspace-tab"');
     expect(html).toContain('id="workspace-project-form"');
-    expect(html).toContain('<option value="clone-github">Clone GitHub</option>');
+    expect(html).toContain('<option value="clone-github">GitHub</option>');
+    expect(html).toContain('id="workspace-browse"');
+    expect(html).toContain('id="directory-picker"');
+    expect(html).toContain('id="workspace-recent"');
     expect(html).not.toContain('<option value="clone">');
     expect(html).not.toContain('读取 GitHub 工作区');
     expect(html).not.toContain('id="workspace-remote"');
@@ -150,7 +154,7 @@ describe('WebConsole', () => {
     const input = Buffer.from(JSON.stringify({ operation: 'init', path }));
     expect((await submit(input, { ...headers, authorization: 'Bearer wrong' }, {}, '192.0.2.1')).status).toBe(401);
     const authorized = { ...headers, authorization: `Bearer ${token}` };
-    expect((await submit(Buffer.from('{"operation":"init","path":"relative"}'), authorized, {}, '192.0.2.1')).status).toBe(400);
+    expect(await submit(Buffer.from('{"operation":"init","path":"relative"}'), authorized, {}, '192.0.2.1')).toMatchObject({ status: 400, body: { error: expect.stringContaining('绝对路径') } });
     expect((await submit(input, authorized, {}, '192.0.2.1')).body).toMatchObject({ root: path, branch: 'main' });
     const show = Buffer.from(JSON.stringify({ operation: 'show', path }));
     expect((await submit(show, authorized, {}, '192.0.2.1')).status).toBe(200);
@@ -218,6 +222,35 @@ describe('WebConsole', () => {
     expect(await submit('github')).toMatchObject({ status: 400, body: { error: expect.stringContaining('AGENTS.md') } });
   });
 
+  it('服务器目录与已保存工作区仅向持有正确令牌的客户端开放', async () => {
+    const token = 'workspace-browser-access-token-0123456789';
+    const parent = join(realpathSync(TMP_DIR), 'directories');
+    const workspace = (await initializeWorkspace(join(realpathSync(TMP_DIR), 'saved-workspace'))).root;
+    mkdirSync(parent);
+    mkdirSync(join(parent, 'folder'));
+    const history = new WorkspaceHistory(TMP_DIR);
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      { host: '0.0.0.0', token }, undefined, undefined, { directoryRoot: parent, history });
+    const submit = (body: object, access?: string) => server.handler('POST', '/api/console/workspace')(
+      Buffer.from(JSON.stringify(body)),
+      { 'content-type': 'application/json', ...(access ? { authorization: `Bearer ${access}` } : {}) },
+      {}, '192.0.2.1');
+    for (const operation of ['server-directories', 'recent-workspaces']) {
+      expect((await submit({ operation })).status).toBe(401);
+      expect((await submit({ operation }, 'wrong')).status).toBe(401);
+    }
+    expect(await submit({ operation: 'server-directories' }, token)).toMatchObject({ status: 200, body: {
+      path: parent, directories: [{ name: 'folder', path: join(parent, 'folder') }],
+    } });
+    expect(await submit({ operation: 'recent-workspaces' }, token)).toMatchObject({ status: 200, body: { workspaces: [] } });
+    expect(await submit({ operation: 'show', path: workspace }, token)).toMatchObject({ status: 200, body: {
+      root: workspace, recentWorkspaces: [{ path: workspace, available: true }],
+    } });
+    expect(await submit({ operation: 'recent-workspaces' }, token)).toMatchObject({ status: 200, body: { workspaces: [{ path: workspace }] } });
+    expect(await submit({ operation: 'show', path: '/not/a/workspace' }, token)).toMatchObject({ status: 400 });
+    expect(history.list()).toHaveLength(1);
+  });
+
   it('Clone GitHub 接口直接返回可创建会话的持久化本地工作区', async () => {
     const source = (await initializeWorkspace(join(realpathSync(TMP_DIR), 'fixture'))).root;
     execFileSync('git', ['add', '.'], { cwd: source });
@@ -243,6 +276,12 @@ describe('WebConsole', () => {
     expect(await submit({ operation: 'create-story', path: destination, description: '在本地工作区继续开发', name: 'local-clone' })).toMatchObject({ status: 200 });
     expect(await submit({ operation: 'sessions', path: destination })).toMatchObject({ status: 200, body: { sessions: [] } });
     expect(await submit({ operation: 'clone-github', repository: 'octocat/workspace' })).toMatchObject({ status: 200, body: { root: destination } });
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { workspaceAccess: { host: '127.0.0.1' } });
+    expect(await submit({ operation: 'recent-workspaces' })).toMatchObject({ status: 200, body: {
+      workspaces: [{ path: destination, name: 'workspace', available: true }],
+    } });
   });
 
   it('在独立目录创建和读取 Story，无需选择项目', async () => {

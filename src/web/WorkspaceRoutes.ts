@@ -7,6 +7,8 @@ import { createLocalStory, listLocalStories, readLocalStory, storyId } from '../
 import type { StoryRunner } from '../workspace/StoryRunner';
 import { readLocalWorkspaceFile } from '../workspace/WorkspaceFile';
 import { listWorkspaceDirectory } from '../workspace/WorkspaceTree';
+import { listServerDirectories } from '../workspace/ServerDirectories';
+import { WorkspaceHistory } from '../workspace/WorkspaceHistory';
 import {
   addWorkspaceProject,
   cloneWorkspace,
@@ -28,10 +30,16 @@ export interface WorkspaceWebAccess {
   defaultRoot?: string;
 }
 
+interface WorkspaceRouteServices {
+  cloneGitHub?: (repository: string) => Promise<Workspace>;
+  directoryRoot?: string;
+  history?: WorkspaceHistory;
+}
+
 const endpoint = '/api/console/workspace';
 const responseHeaders = { 'Cache-Control': 'no-store' };
 const localAddresses = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
-const workspacePath = z.string().trim().min(1).max(4096).refine(isAbsolute);
+const workspacePath = z.string().trim().min(1).max(4096).refine(isAbsolute, '工作区目录必须使用服务器上的绝对路径，请点击“选择目录”填写');
 const remote = z.string().trim().min(1).max(2048);
 const description = z.string().trim().min(1).max(20000);
 const story = z.string().regex(storyId);
@@ -39,6 +47,8 @@ const runId = z.string().uuid();
 const directory = z.string().max(4096).default('');
 const file = z.string().min(1).max(4096);
 const payload = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('server-directories'), path: z.string().trim().min(1).max(4096).optional() }),
+  z.object({ operation: z.literal('recent-workspaces') }),
   z.object({ operation: z.literal('show'), path: workspacePath }),
   z.object({ operation: z.literal('workspace-tree'), path: workspacePath, directory }),
   z.object({ operation: z.literal('github-tree'), repository: remote, directory }),
@@ -102,7 +112,7 @@ export function registerWorkspaceRoutes(
   access: WorkspaceWebAccess = {},
   github?: () => GitHubApiClient,
   storyRunner?: StoryRunner,
-  cloneGitHub?: (repository: string) => Promise<Workspace>,
+  services: WorkspaceRouteServices = {},
 ): void {
   const secret = access.token?.trim();
   const token = secret && secret.length >= 32 ? Buffer.from(secret) : undefined;
@@ -146,20 +156,24 @@ export function registerWorkspaceRoutes(
     }
 
     let operation: z.infer<typeof payload>;
+    let validationMessage = '请检查填写的工作区、仓库或 Story 信息';
     try {
       const parsed = payload.safeParse(JSON.parse(body.toString('utf8')));
-      if (!parsed.success) throw new Error();
+      if (!parsed.success) {
+        validationMessage = parsed.error.issues.find((issue) => issue.code === 'custom' && issue.path[0] === 'path')?.message || validationMessage;
+        throw new Error();
+      }
       operation = parsed.data;
     } catch {
       return {
         status: 400,
-        body: { error: '请检查填写的工作区、仓库或 Story 信息' },
+        body: { error: validationMessage },
         headers: responseHeaders,
       };
     }
 
     try {
-      const result = await runOperation(operation, github, storyRunner, cloneGitHub);
+      const result = await runOperation(operation, github, storyRunner, services);
       return {
         status: operation.operation === 'run-story' ? 202 : 200,
         body: result,
@@ -176,22 +190,26 @@ async function runOperation(
   request: z.infer<typeof payload>,
   github?: () => GitHubApiClient,
   storyRunner?: StoryRunner,
-  cloneGitHub?: (repository: string) => Promise<Workspace>,
+  services: WorkspaceRouteServices = {},
 ) {
   switch (request.operation) {
+    case 'server-directories':
+      return listServerDirectories(request.path ?? services.directoryRoot ?? process.cwd());
+    case 'recent-workspaces':
+      return { workspaces: services.history?.list() ?? [] };
     case 'clone-github':
-      if (!cloneGitHub) throw new Error('GitHub 克隆服务不可用');
-      return cloneGitHub(request.repository);
+      if (!services.cloneGitHub) throw new Error('GitHub 克隆服务不可用');
+      return rememberWorkspace(await services.cloneGitHub(request.repository), services.history);
     case 'show':
-      return inspectWorkspace(request.path);
+      return rememberWorkspace(await inspectWorkspace(request.path), services.history);
     case 'workspace-tree':
       return { entries: await listWorkspaceDirectory(request.path, request.directory) };
     case 'workspace-file':
       return readLocalWorkspaceFile(request.path, request.file);
     case 'init':
-      return initializeWorkspace(request.path);
+      return rememberWorkspace(await initializeWorkspace(request.path), services.history);
     case 'clone':
-      return cloneWorkspace(request.remote, request.path);
+      return rememberWorkspace(await cloneWorkspace(request.remote, request.path), services.history);
     case 'github':
     case 'github-story':
     case 'github-file':
@@ -244,5 +262,14 @@ async function runOperation(
     case 'add':
       await addWorkspaceProject(request.path, request.name, request.purpose, request.remote);
       return inspectWorkspace(request.path);
+  }
+}
+
+function rememberWorkspace(workspace: Workspace, history?: WorkspaceHistory) {
+  if (!history) return workspace;
+  try {
+    return { ...workspace, recentWorkspaces: history.remember(workspace.root) };
+  } catch {
+    return { ...workspace, historyWarning: '工作区已打开，但无法保存到最近列表，请检查实例数据目录和工作区记录文件' };
   }
 }

@@ -119,11 +119,13 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 ## digital-avatar 工作区
 
-控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、Clone GitHub，以及登记本地或远端子项目。打开或新建时填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。远程实例首次启动会自动生成工作区访问密码（令牌），保存在数据库同目录的 `workspace-web-token` 文件中，进入页面时填写。也可通过至少 32 字符的 `AGENT_WORKSPACE_WEB_TOKEN` 覆盖；无效的短令牌会阻止启动。
+控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、GitHub，以及登记本地或远端子项目。打开或新建时填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。远程实例首次启动会自动生成工作区访问密码（令牌），保存在数据库同目录的 `workspace-web-token` 文件中，进入页面时填写。也可通过至少 32 字符的 `AGENT_WORKSPACE_WEB_TOKEN` 覆盖；无效的短令牌会阻止启动。
 
 Docker/NAS 部署时，默认无需手动配置令牌。在极空间文件管理器中打开项目的 `data/workspace-web-token`，复制内容到「工作区访问密码（令牌）」；重建容器会复用此文件。已设置环境变量令牌时使用该值。该密码只用于工作区访问，与 GitHub Token 和 Codex 登录分别管理。页面路径使用容器内路径，持久化工作区可以放在已挂载的 `/app/data/` 内。
 
-选择「Clone GitHub」，输入 `owner/repo`、GitHub HTTPS/SSH 地址，或从已连接账号的授权仓库中选择。cpx 使用 HTTPS 和 GitHub 页已连接的凭据，将根仓库的 `main` 克隆到数据库旁的 `workspaces/<owner>/<repo>`（NAS 默认 `/app/data/workspaces/<owner>/<repo>`），然后直接进入本地会话工作台。无需为容器配置 GitHub SSH Key。再次选择同一仓库时复用已有目录并保留未提交改动；同名目录属于其他仓库时拒绝覆盖。项目清单中的子仓库继续按工作区规约初始化或逐项接入。通用 Git 克隆保留在 CLI 的 `workspace clone` 中。
+「服务器上的目录」支持点击「选择目录」浏览服务端文件夹、返回上一级或切换根目录，确认后自动填写绝对路径。选择的是运行 cpx 的机器上的目录。已成功打开、新建和从 GitHub 克隆的工作区会保存在数据库旁的 `workspace-history.json`，刷新页面或重启后可从「已保存的本地工作区」再次选择；旧版本已经克隆到受管 `workspaces/<owner>/<repo>` 的工作区也会自动显示。远程实例填写访问密码后加载列表，暂时不可用的目录保留记录并标记。打开工作区仍需要绝对路径，例如 `/app/data/workspaces/paoxia/digital-avatar`。
+
+选择「GitHub」，输入 `owner/repo`、GitHub HTTPS/SSH 地址，或从已连接账号的授权仓库中选择。cpx 使用 HTTPS 和 GitHub 页已连接的凭据，将根仓库的 `main` 克隆到数据库旁的 `workspaces/<owner>/<repo>`（NAS 默认 `/app/data/workspaces/<owner>/<repo>`），然后直接进入本地会话工作台。无需为容器配置 GitHub SSH Key。再次选择同一仓库时复用已有目录并保留未提交改动；同名目录属于其他仓库时拒绝覆盖。项目清单中的子仓库继续按工作区规约初始化或逐项接入。通用 Git 克隆保留在 CLI 的 `workspace clone` 中。
 
 首页是「会话工作台」。左侧可在「会话」和「目录结构」之间切换。在「目录结构」中展开 `code/`、`story/` 或 `archive/`，点击文件在右侧预览。预览支持不超过 1 MiB 的文本、PNG、JPEG、GIF 和 WebP，适用于本地和 GitHub 工作区。切回「会话」即可继续当前对话和草稿。
 
