@@ -39,8 +39,6 @@ const elements = {
   workspacePath: document.querySelector('#workspace-path'),
   workspacePathHint: document.querySelector('#workspace-path-hint'),
   workspacePaths: document.querySelector('#workspace-recent-paths'),
-  workspaceRemoteField: document.querySelector('#workspace-remote-field'),
-  workspaceRemote: document.querySelector('#workspace-remote'),
   workspaceSubmit: document.querySelector('#workspace-submit'),
   workspaceFeedback: document.querySelector('#workspace-feedback'),
   workspaceSummary: document.querySelector('#workspace-summary'),
@@ -886,20 +884,16 @@ async function loadWorkspaceMode() {
 
 function updateWorkspaceForm() {
   const operation = elements.workspaceOperation.value;
-  const needsRemote = operation === 'clone';
-  const fromGitHub = operation === 'github';
+  const fromGitHub = operation === 'clone-github';
   elements.workspaceGitHubField.hidden = !fromGitHub;
   elements.workspaceGitHubRepository.required = fromGitHub;
   elements.workspaceGitHubConnect.hidden = !fromGitHub || Boolean(state.githubStatus?.connected);
   elements.workspacePathField.hidden = fromGitHub;
   elements.workspacePath.required = !fromGitHub;
-  elements.workspaceRemoteField.hidden = !needsRemote;
-  elements.workspaceRemote.required = needsRemote;
   elements.workspaceSubmit.textContent = {
     show: '打开工作区',
-    github: '读取 GitHub 工作区',
+    'clone-github': 'Clone GitHub',
     init: '创建工作区',
-    clone: '克隆工作区',
   }[operation];
   elements.workspacePathHint.textContent = operation === 'show'
     ? '填写 cpx 服务所在机器上的绝对路径。'
@@ -1127,7 +1121,7 @@ async function requestWorkspace(payload, feedback, successMessage) {
   state.workspaceBusy = true;
   elements.workspaceSubmit.disabled = true;
   elements.workspaceProjectSubmit.disabled = true;
-  workspaceFeedback(feedback, '正在处理…');
+  workspaceFeedback(feedback, payload.operation === 'clone-github' ? '正在克隆 GitHub 仓库到本地工作区…' : '正在处理…');
   try {
     const workspace = await callWorkspace(payload);
     renderWorkspace(workspace);
@@ -1147,18 +1141,18 @@ async function submitWorkspace(event) {
   event.preventDefault();
   const operation = elements.workspaceOperation.value;
   const opened = await requestWorkspace(
-    operation === 'github' ? { operation, repository: elements.workspaceGitHubRepository.value.trim() } : {
+    operation === 'clone-github' ? { operation, repository: elements.workspaceGitHubRepository.value.trim() } : {
       operation,
       path: elements.workspacePath.value.trim(),
-      ...(operation === 'clone' ? { remote: elements.workspaceRemote.value.trim() } : {}),
     },
     elements.workspaceFeedback,
-    { show: '已打开工作区。', github: '已读取 GitHub 工作区。', init: '已创建工作区。', clone: '已克隆工作区。' }[operation],
+    { show: '已打开工作区。', 'clone-github': 'GitHub 仓库已准备完成，已打开本地工作区。', init: '已创建工作区。' }[operation],
   );
   if (opened) {
     if (state.workspace.root) elements.workspacePath.value = state.workspace.root;
     elements.workspaceProjectForm.reset();
     workspaceFeedback(elements.workspaceProjectFeedback, '');
+    if (operation === 'clone-github') await switchView('stories');
   }
 }
 

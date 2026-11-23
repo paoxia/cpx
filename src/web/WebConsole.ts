@@ -23,6 +23,7 @@ import {
 } from './GitHubExplorer';
 import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
 import { registerWorkspaceRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
+import { GitHubWorkspaceClone } from './GitHubWorkspaceClone';
 import { StoryRunner } from '../workspace/StoryRunner';
 import {
   isMessagingPlatform,
@@ -165,8 +166,13 @@ export class WebConsole {
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
+    const githubWorkspace = new GitHubWorkspaceClone(
+      join(dataDir, 'workspaces'),
+      () => this.githubToken,
+    );
     registerWorkspaceRoutes(httpServer, options.workspaceAccess, () =>
       this.githubClientFactory(this.githubToken ?? ''), this.storyRunner,
+      (repository) => githubWorkspace.clone(repository),
     );
   }
 

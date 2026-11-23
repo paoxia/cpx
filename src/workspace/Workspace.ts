@@ -55,9 +55,19 @@ const GUIDELINES = `# 工作区规约
 const execFileAsync = promisify(execFile);
 
 async function git(args: string[], cwd: string): Promise<string | undefined>;
-async function git(args: string[], cwd: string, failure: string): Promise<string>;
-async function git(args: string[], cwd: string, failure?: string): Promise<string | undefined> {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: '0' };
+async function git(
+  args: string[],
+  cwd: string,
+  failure: string,
+  environment?: NodeJS.ProcessEnv,
+): Promise<string>;
+async function git(
+  args: string[],
+  cwd: string,
+  failure?: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+  const env: NodeJS.ProcessEnv = { ...environment, GIT_TERMINAL_PROMPT: '0' };
   for (const key of [
     'GIT_DIR',
     'GIT_WORK_TREE',
@@ -249,13 +259,18 @@ export async function initializeWorkspace(path: string): Promise<Workspace> {
   return inspectWorkspace(root);
 }
 
-export async function cloneWorkspace(remote: string, path: string): Promise<Workspace> {
+export async function cloneWorkspace(
+  remote: string,
+  path: string,
+  environment?: NodeJS.ProcessEnv,
+): Promise<Workspace> {
   requireRemote(remote);
   const root = await prepareDirectory(path, async (staging) => {
     await git(
       ['clone', '--branch', 'main', '--', remote, '.'],
       staging,
       '克隆工作区失败，请检查地址、凭据和 main 分支',
+      environment,
     );
     await inspectWorkspace(staging);
   });

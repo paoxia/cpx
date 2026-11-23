@@ -17,8 +17,11 @@ interface GitHubContent {
   content?: string;
 }
 
-function normalizeRepository(value: string): string {
+export function normalizeGitHubRepository(value: string): string {
   const address = value
+    .trim()
+    .replace(/^git@github\.com:/i, '')
+    .replace(/^ssh:\/\/git@github\.com\//i, '')
     .replace(/^https:\/\/github\.com\//i, '')
     .replace(/\/$/, '')
     .replace(/\.git$/i, '');
@@ -67,7 +70,7 @@ export async function listGitHubWorkspaceDirectory(
   value: string,
   directory: string,
 ): Promise<WorkspaceTreeEntry[]> {
-  const repository = normalizeRepository(value);
+  const repository = normalizeGitHubRepository(value);
   const revision = await mainRevision(client, repository);
   const parts = workspaceDirectoryParts(directory);
   const base = `https://github.com/${repository}`;
@@ -119,7 +122,7 @@ function fileText(data: GitHubContent | GitHubContent[] | undefined): string | u
 }
 
 export async function readGitHubWorkspace(client: GitHubApiClient, value: string) {
-  const repository = normalizeRepository(value);
+  const repository = normalizeGitHubRepository(value);
   const revision = await mainRevision(client, repository);
   const paths = ['README.md', 'AGENTS.md', 'repos.txt', 'story'];
   const [readme, agents, manifest, directory] = await Promise.all(
@@ -155,7 +158,7 @@ export async function readGitHubWorkspace(client: GitHubApiClient, value: string
 }
 
 export async function readGitHubStory(client: GitHubApiClient, value: string, id: string) {
-  const repository = normalizeRepository(value);
+  const repository = normalizeGitHubRepository(value);
   const revision = await mainRevision(client, repository);
   const directory = `story/${encodeURIComponent(id)}`;
   const files = await readContent(client, repository, revision, directory);
@@ -184,7 +187,7 @@ export async function readGitHubWorkspaceFile(
 ) {
   const parts = workspaceDirectoryParts(file);
   if (!parts.length) throw new Error('请选择文件');
-  const repository = normalizeRepository(value);
+  const repository = normalizeGitHubRepository(value);
   const revision = await mainRevision(client, repository);
   const path = parts.map(encodeURIComponent).join('/');
   const data = await readContent(client, repository, revision, path);

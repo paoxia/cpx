@@ -161,7 +161,7 @@ cpx
 3. 浏览器访问 `http://<NAS-IP>:3000/health`，预期返回包含 `"status":"ok"` 的 JSON；
 4. 浏览器访问 `http://<NAS-IP>:3000`；
 5. 用极空间文件管理器打开项目的 `data/workspace-web-token`，复制内容到 cpx「工作区」页的访问密码输入框；若在 Compose 中设置过 `AGENT_WORKSPACE_WEB_TOKEN`，使用该值；
-6. 新建或打开工作区，路径使用容器内的持久化目录，例如 `/app/data/workspaces/my-workspace`；
+6. 选择「Clone GitHub」，选择或填写工作区根仓库；自动使用 HTTPS 克隆到 `/app/data/workspaces/<owner>/<repo>` 并进入本地会话工作台。私有仓库先在 GitHub 页连接有权限的 Token，无需容器 SSH Key。也可新建或打开已有工作区，路径使用容器内的持久化目录，例如 `/app/data/workspaces/my-workspace`；
 7. 在“Agent 设置”中连接 Codex，完成设备码登录并执行一条简短测试；
 8. 首个开发任务使用测试仓库，不创建 Pull Request，先验证读取型任务。
 

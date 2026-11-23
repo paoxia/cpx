@@ -148,22 +148,17 @@
                   <span>接入方式</span>
                   <select id="workspace-operation">
                     <option value="show">打开已有工作区</option>
-                    <option value="github">读取 GitHub 工作区</option>
+                    <option value="clone-github">Clone GitHub</option>
                     <option value="init">新建本地工作区</option>
-                    <option value="clone">克隆远端工作区</option>
                   </select>
                 </label>
                 <label class="field" id="workspace-github-field" hidden>
                   <span>GitHub 仓库</span>
                   <input id="workspace-github-repository" list="workspace-github-repositories" type="text" autocomplete="off" placeholder="owner/repo 或 GitHub 仓库地址" />
                   <datalist id="workspace-github-repositories"></datalist>
-                  <small>可以直接填写公开仓库，或选择 GitHub 账号已授权的仓库。</small>
+                  <small>选择仓库或填写 owner/repo、GitHub 地址，将克隆到本地持久化工作区目录。私有仓库使用已连接的 GitHub 账号凭据。</small>
                 </label>
                 <button class="text-button" id="workspace-github-connect" type="button" data-view="github" hidden>连接 GitHub</button>
-                <label class="field" id="workspace-remote-field" hidden>
-                  <span>工作区 Git 地址</span>
-                  <input id="workspace-remote" type="text" autocomplete="off" placeholder="git@gitee.com:owner/workspace.git" />
-                </label>
                 <label class="field" id="workspace-path-field">
                   <span>服务器上的目录</span>
                   <input id="workspace-path" type="text" list="workspace-recent-paths" autocomplete="off" placeholder="/path/to/digital-avatar" required />

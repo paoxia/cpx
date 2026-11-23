@@ -96,6 +96,8 @@ RUN npm install -g @openai/codex@latest
 
 工作区访问密码也可留空：首次启动自动生成并保存到项目的 `data/workspace-web-token`。在极空间文件管理器打开该文件，复制全部内容，进入 cpx「工作区」页填入「工作区访问密码（令牌）」。它授权读取项目和运行 Codex，与 GitHub Token、Codex 登录分别管理。重建容器时保留 `data`，密码就会保持不变。也可在 Compose 环境变量界面设置至少 32 字符的随机 `AGENT_WORKSPACE_WEB_TOKEN`，此时页面使用该值；短于 32 字符会阻止启动。页面中的工作区目录填写容器路径，例如 `/app/data/workspaces/my-workspace`。
 
+接入 GitHub 根仓库时选择「Clone GitHub」，填写或选择仓库后，cpx 自动经 HTTPS 克隆到 `/app/data/workspaces/<owner>/<repo>`，直接打开可编辑的本地会话工作台。私有仓库使用 GitHub 页已连接的 Token，不要求在 NAS 或容器配置 SSH Key。项目目录保存在挂载的 `data/workspaces` 中，更新容器时继续保留。
+
 推荐启动后通过 cpx Web 控制台连接 GitHub，并完成 Codex 登录。如果确实要通过环境变量提供密钥，可在极空间 Compose 项目的环境变量界面填写对应变量，再保存并重新创建容器：
 
 ```dotenv

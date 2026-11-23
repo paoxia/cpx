@@ -12,6 +12,7 @@ import {
   cloneWorkspace,
   initializeWorkspace,
   inspectWorkspace,
+  Workspace,
 } from '../workspace/Workspace';
 import type { GitHubApiClient } from './GitHubExplorer';
 import {
@@ -46,6 +47,7 @@ const payload = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('init'), path: workspacePath }),
   z.object({ operation: z.literal('clone'), path: workspacePath, remote }),
   z.object({ operation: z.literal('github'), repository: remote }),
+  z.object({ operation: z.literal('clone-github'), repository: remote }),
   z.object({ operation: z.literal('github-story'), repository: remote, id: story }),
   z.object({ operation: z.literal('stories'), path: workspacePath }),
   z.object({ operation: z.literal('sessions'), path: workspacePath }),
@@ -100,6 +102,7 @@ export function registerWorkspaceRoutes(
   access: WorkspaceWebAccess = {},
   github?: () => GitHubApiClient,
   storyRunner?: StoryRunner,
+  cloneGitHub?: (repository: string) => Promise<Workspace>,
 ): void {
   const secret = access.token?.trim();
   const token = secret && secret.length >= 32 ? Buffer.from(secret) : undefined;
@@ -156,7 +159,7 @@ export function registerWorkspaceRoutes(
     }
 
     try {
-      const result = await runOperation(operation, github, storyRunner);
+      const result = await runOperation(operation, github, storyRunner, cloneGitHub);
       return {
         status: operation.operation === 'run-story' ? 202 : 200,
         body: result,
@@ -173,8 +176,12 @@ async function runOperation(
   request: z.infer<typeof payload>,
   github?: () => GitHubApiClient,
   storyRunner?: StoryRunner,
+  cloneGitHub?: (repository: string) => Promise<Workspace>,
 ) {
   switch (request.operation) {
+    case 'clone-github':
+      if (!cloneGitHub) throw new Error('GitHub 克隆服务不可用');
+      return cloneGitHub(request.repository);
     case 'show':
       return inspectWorkspace(request.path);
     case 'workspace-tree':

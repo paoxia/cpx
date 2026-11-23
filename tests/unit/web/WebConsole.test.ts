@@ -1,7 +1,9 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pathToFileURL } from 'url';
+import { initializeWorkspace } from '../../../src/workspace/Workspace';
 import type { RequestHandler } from '../../../src/core/HttpServer';
 import { WebConsole } from '../../../src/web/WebConsole';
 import { registerWorkspaceRoutes } from '../../../src/web/WorkspaceRoutes';
@@ -47,6 +49,7 @@ describe('WebConsole', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await webConsole.stop();
     rmSync(TMP_DIR, { recursive: true, force: true });
   });
@@ -63,6 +66,10 @@ describe('WebConsole', () => {
     expect(html).toContain('id="github-tab"');
     expect(html).toContain('id="workspace-tab"');
     expect(html).toContain('id="workspace-project-form"');
+    expect(html).toContain('<option value="clone-github">Clone GitHub</option>');
+    expect(html).not.toContain('<option value="clone">');
+    expect(html).not.toContain('读取 GitHub 工作区');
+    expect(html).not.toContain('id="workspace-remote"');
     expect(html).toContain('id="stories-view">');
     expect(html).toContain('id="session-search"');
     expect(html).toContain('id="story-description"');
@@ -209,6 +216,33 @@ describe('WebConsole', () => {
     expect(requests).toHaveLength(count);
     delete contents['AGENTS.md'];
     expect(await submit('github')).toMatchObject({ status: 400, body: { error: expect.stringContaining('AGENTS.md') } });
+  });
+
+  it('Clone GitHub 接口直接返回可创建会话的持久化本地工作区', async () => {
+    const source = (await initializeWorkspace(join(realpathSync(TMP_DIR), 'fixture'))).root;
+    execFileSync('git', ['add', '.'], { cwd: source });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com',
+      '-c', 'commit.gpgSign=false', 'commit', '-m', 'Fixture'], { cwd: source });
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', `url.${pathToFileURL(source).href}.insteadOf`);
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'https://github.com/octocat/workspace.git');
+    const endpoint = '/api/console/workspace';
+    const input = Buffer.from(JSON.stringify({ operation: 'clone-github', repository: 'octocat/workspace' }));
+    const headers = { host: '127.0.0.1:3000', 'content-type': 'application/json' };
+    const destination = join(realpathSync(TMP_DIR), 'workspaces/octocat/workspace');
+    expect((await server.handler('POST', endpoint)(input, headers, {}, '127.0.0.1')).status).toBe(403);
+    expect(existsSync(destination)).toBe(false);
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { workspaceAccess: { host: '127.0.0.1' } });
+    const submit = (body: object) => server.handler('POST', endpoint)(Buffer.from(JSON.stringify(body)), headers, {}, '127.0.0.1');
+    expect(await submit({ operation: 'clone-github', repository: 'octocat/workspace' })).toMatchObject({
+      status: 200, body: { root: destination, branch: 'main', projects: [] },
+    });
+    expect(readFileSync(join(destination, 'README.md'), 'utf8')).toContain('工作区');
+    expect(await submit({ operation: 'create-story', path: destination, description: '在本地工作区继续开发', name: 'local-clone' })).toMatchObject({ status: 200 });
+    expect(await submit({ operation: 'sessions', path: destination })).toMatchObject({ status: 200, body: { sessions: [] } });
+    expect(await submit({ operation: 'clone-github', repository: 'octocat/workspace' })).toMatchObject({ status: 200, body: { root: destination } });
   });
 
   it('在独立目录创建和读取 Story，无需选择项目', async () => {
