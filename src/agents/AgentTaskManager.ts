@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
 import { AgentServiceTier, normalizeServiceTier } from './CodexSpeed';
+import { CodexSandboxMode, configuredCodexSandbox, effectiveCodexSandbox } from './CodexSandbox';
 import {
   AgentErrorKind,
   AgentProcessError,
@@ -165,7 +166,12 @@ export class AgentTaskManager {
   private repositoryLocks = new Map<string, Promise<void>>();
   private stopped = false;
 
-  constructor(workspaceRoot: string, logger: Logger, repositoryRoot?: string) {
+  constructor(
+    workspaceRoot: string,
+    logger: Logger,
+    repositoryRoot?: string,
+    private readonly sandboxMode: () => CodexSandboxMode = configuredCodexSandbox,
+  ) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.repositoryRoot = resolve(
       repositoryRoot ?? join(dirname(this.workspaceRoot), 'repositories'),
@@ -616,9 +622,9 @@ export class AgentTaskManager {
         );
     const platformTools = this.platformToolContexts.get(task.id);
     if (prepared) {
-      const sandbox = prepared.readOnly ? 'read-only' : 'workspace-write';
+      const sandbox = effectiveCodexSandbox(this.sandboxMode(), prepared.readOnly);
       const options = ['--skip-git-repo-check', '--config', `sandbox_mode=${JSON.stringify(sandbox)}`, '--config', 'approval_policy="never"'];
-      if (prepared.writableRoot) {
+      if (sandbox === 'workspace-write' && prepared.writableRoot) {
         options.push('--config', `sandbox_workspace_write.writable_roots=[${JSON.stringify(prepared.writableRoot)}]`);
       }
       if (prepared.readOnly) options.push('--ephemeral');

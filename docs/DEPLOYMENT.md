@@ -122,7 +122,13 @@ NPM_REGISTRY=https://registry.npmjs.org
 
 #### Codex 沙箱执行权限
 
-`bwrap: No permissions to create a new namespace` 表示 Docker 外层安全策略或宿主机内核阻止了 Codex 的 Linux 沙箱，不能通过更换 GitHub Token 或改文件权限解决。三份 Compose 的 cpx 服务都包含以下配置，用于允许 Codex 创建内部沙箱：
+`bwrap: No permissions to create a new namespace` 表示 Docker 外层安全策略或宿主机内核阻止了 Codex 的 Linux 沙箱，与 GitHub Token 和目录文件权限无关。
+
+若希望在 Docker 中直接执行命令，在「Agent 设置 → 执行沙箱」选择「完全访问（不创建沙箱）」并保存，再点击「检查执行权限」。对应配置是 `sandbox_mode = "danger-full-access"`；cpx 的工作区任务、命名和协调会话从下一轮起都使用该值，无需重启 cpx。已在运行中的任务保持原模式。cpx 的工作区任务使用 `approval_policy = "never"` 进行非交互执行。
+
+完全访问模式不启动 Bubblewrap，因此不需要为 Codex 配置下面的 `security_opt`；可在极空间 Compose 编辑器删除原来为 Codex 增加的两项并重新创建容器，恢复 Docker 默认安全策略。命令仍受容器权限与挂载范围限制，但不再限制到单个工作区，能够访问 cpx 配置和其他可见挂载。在开发机直接运行 cpx 时，访问范围是开发机服务用户的权限范围。
+
+需要保留 Codex 内部沙箱时，选择工作区内可写或只读。命名和协调仍采用只读。项目的三份 Compose 提供以下兼容配置，用于允许创建内部沙箱：
 
 ```yaml
 security_opt:
@@ -130,9 +136,7 @@ security_opt:
   - apparmor=unconfined
 ```
 
-这会放开容器外层的 seccomp/AppArmor 限制，Codex 自身仍使用工作区写入沙箱。只修改 cpx 服务，保留原镜像标签、环境变量、目录挂载与 Mihomo 设置。在极空间 Compose 编辑器同步这两项，保存并重新创建 cpx 容器，随后在「Agent 设置 → 检查执行权限」确认结果。只重新导入镜像不会应用安全选项。
-
-不要在 NAS 终端调整内核参数。若同步 Compose 后检查仍提示内核不允许用户命名空间，应先确认 NAS 固件和 Docker 对该能力的支持；cpx 不会自动降级为无沙箱执行。CLI 默认沙箱设置不覆盖 cpx 工作区会话的 `workspace-write` 及命名/协调的 `read-only`。
+这会放开容器外层对应限制，Codex 内部沙箱继续启用。在极空间 Compose 编辑器同步后重新创建 cpx 容器，再执行权限检查。只修改 cpx 服务，保留原镜像标签、环境变量、挂载和 Mihomo 设置。仅导入新镜像不会改变容器安全选项。不要在 NAS 终端调整内核参数；保留内部沙箱时仍依赖 NAS 内核的用户命名空间支持。检查失败不会自动切换完全访问模式。
 
 #### 出站代理
 

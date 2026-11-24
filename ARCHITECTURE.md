@@ -64,13 +64,13 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 4. `WorkspaceSessionMessages` 校验平台发送者，按平台、用户和聊天定位工作区内的会话选择。文本经过和浏览器相同的 `StoryRunner` 创建或恢复 Codex 线程。独立 GitHub 任务流程由 `MessagingCoordinator` 在只读目录协调，用 `cpx_platform` 查询仓库、分支和管理用户任务。
 5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
-控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，但强制使用 `--skip-git-repo-check` 与只读沙箱。创建聊天开发任务时，协调工具可通过 GitHub API 分页读取仓库分支。`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
+控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，使用 `--skip-git-repo-check`，除显式完全访问外采用只读沙箱。创建聊天开发任务时，协调工具可通过 GitHub API 分页读取仓库分支。`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
 
 GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新。消息平台查询分支时使用分页的 `/repos/{owner}/{repo}/branches`。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
 
 `AgentAuthManager` 使用 `codex login --device-auth`、`codex login --with-api-key` 与 `codex login status` 管理官方 CLI 登录。管理器只在内存中保留受长度限制的终端输出、验证地址和一次性设备码；授权进程退出后再次调用 status 命令复核。凭据的落盘和刷新由 Codex CLI 管理。服务停止或用户取消时会终止仍在等待的登录进程。
 
-`CodexModelCatalog` 保留模型的 Fast 能力；模型配置可选的 `serviceTier` 由 `CodexSpeed` 校验并生成 CLI 参数。缺失字段不覆盖 CLI；`fast` 同时启用 Fast 功能，`default` 显式恢复标准。适配器在模型测试、任务启动、续接和协调会话中共用这条传递路径，速度不影响推理强度。`CodexSandboxProbe` 通过固定 `codex sandbox` 命令检查执行环境，不使用模型或自动扩大 Codex 权限。
+`CodexModelCatalog` 保留模型的 Fast 能力；模型配置可选的 `serviceTier` 由 `CodexSpeed` 校验并生成 CLI 参数。缺失字段不覆盖 CLI；`fast` 同时启用 Fast 功能，`default` 显式恢复标准。适配器在模型测试、任务启动、续接和协调会话中共用这条传递路径，速度不影响推理强度。`CodexConfigManager` 在 agents 层提供共享的 CLI 配置读写，Web 入口保留兼容导出。`CodexSandbox` 为任务、命名和协调在每轮读取已保存的沙箱模式；完全访问取消内部沙箱，其余模式保持相应限制且命名/协调只读。`CodexSandboxProbe` 按保存的模式通过 `codex sandbox` 或直接固定 Node 命令检查执行环境，不使用模型或自动扩大权限。
 
 ## 配置与状态
 

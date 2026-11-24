@@ -53,19 +53,19 @@ GitHub 同样受工作区令牌保护，只接受 GitHub 仓库标识与地址�
 
 HTTP 请求体上限为 10 MB，但当前服务没有内置 TLS、速率限制或通用身份认证。公网部署需要由可信网关提供这些能力。
 
-`POST /api/console/codex-sandbox` 与其他设置检查一样由部署环境保护，只运行固定的 `workspace-write` 沙箱探测命令，检查失败不会改用无沙箱执行。Docker Compose 为兼容 Codex 的 Bubblewrap 命名空间，给 cpx 配置 `seccomp=unconfined` 和 `apparmor=unconfined`，放开外层相应限制；Codex 进程自身的文件系统与 seccomp 沙箱继续生效。该配置只在重新创建容器时应用，并依赖宿主机内核支持用户命名空间。
+`POST /api/console/codex-sandbox` 与其他设置检查一样由部署环境保护，只执行固定命令。启用沙箱时通过 `codex sandbox` 检查，完全访问时直接执行固定 Node 命令，不调用模型，也不在失败后降级权限。显式保存 `danger-full-access` 后，工作区任务、命名及消息协调从下一轮起不创建 Codex 内部沙箱，文件和网络访问范围扩大为服务进程的权限；Docker 仅提供外层容器权限和挂载边界，工作区之间、cpx 配置和凭据之间不再有 Codex 沙箱边界。其他模式保留对应工作区/只读限制。Docker Compose 提供 `seccomp=unconfined` 和 `apparmor=unconfined` 以兼容内部沙箱，只在重新创建容器时应用；关闭内部沙箱后可以移除这两项，使用 Docker 默认安全策略。
 
 控制台静态资源设置了 CSP、禁止 MIME 嗅探并拒绝被其他页面嵌入，但这些响应头不能替代访问认证。
 
 ### Coding Agent 执行
 
 - GitHub 仓库完整缓存位于数据库相邻的 `repositories/<owner>/<repo>`；每个任务在独立 Git worktree 中执行，不直接修改缓存的主工作树或 cpx 自身工作区。
-- Codex 使用页面保存的审批和沙箱配置。这些是 CLI 执行约束，不是容器或操作系统级隔离。
+- Codex 使用页面保存的审批和沙箱配置。沙箱模式控制 Codex 的操作系统执行边界；完全访问会取消这层限制。工作区任务采用 never 审批策略进行非交互执行。
 - Agent 会继承服务进程环境并使用 Codex CLI 的凭据。Web 设置保存配置名称、登录账号模型目录中的模型和该模型支持的推理强度，不保存 API Key；任务输出仍可能包含 Agent 或工具主动打印的敏感信息。
 - 每条 Agent 关联项内的测试区会启动一次短生命周期 CLI 子进程并产生真实模型请求。用户输入和提取后的 Agent 文本回复通过无缓存 API 返回但不持久化，回复限制为 16 KiB。不要在测试内容中提交无关敏感数据，也不要假定模型回复天然可信。
 - Codex 登录在服务进程用户下执行，长期凭据由官方 CLI 写入其凭据目录，不写入项目配置。Docker 将该目录映射到宿主机 `data/codex`，必须按密钥材料保护。一次性设备码和登录输出会经无缓存控制台 API 返回或短暂保存在内存中，因此控制台访问者等同于能够发起或观察该用户的授权；必须通过可信网络和访问控制保护。
 - 未选择创建 Pull Request 时不执行提交和推送。选择后系统会暂存工作区全部改动并使用当前 Git/`gh` 身份推送，因此必须在提交前审查目标仓库、提示和运行日志。
-- 独立 GitHub 任务模式在空目录启动只读协调 Codex，协调 Agent 通过受限工具查询 GitHub 和管理当前用户任务。代码修改进入独立 Git worktree。聊天开发任务默认创建 Pull Request，并使用当前配置的 GitHub Token 与 Codex CLI 身份。
+- 独立 GitHub 任务模式在空目录启动协调 Codex（除完全访问模式外使用只读沙箱），协调 Agent 通过受限工具查询 GitHub 和管理当前用户任务。代码修改进入独立 Git worktree。聊天开发任务默认创建 Pull Request，并使用当前配置的 GitHub Token 与 Codex CLI 身份。
 - 协调会话和消息任务都会向 Codex 子进程环境注入随机范围 Token 和本机回调地址，用于 `cpx_platform` MCP 工具。Token 不写入任务快照、命令参数或日志；服务端同时校验 Token、范围 ID、平台和用户归属。平台工具不接受目标用户或会话参数，可查询仓库/分支、创建或管理当前用户任务、向绑定原会话发送最多 6000 字符文本；调用写入 `agent_platform_tool` 审计。该 Token 仍属于运行时能力，获得 Codex 子进程环境读取权限的代码可以使用它，因此不应把不可信仓库视为强隔离输入。
 - 任务状态、Codex `thread_id` 与日志没有写入 SQLite，重启即丢失；完整仓库缓存、worktree 和未提交改动会继续保留在磁盘。
 

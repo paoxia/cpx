@@ -152,8 +152,10 @@ export class WebConsole {
     const dataDir = resolve(dirname(storagePath));
     this.settingsPath = join(dataDir, 'console-settings.json');
     this.settings = this.loadSettings();
-    this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger);
-    this.storyRunner = new StoryRunner(dataDir, logger, () => this.executionConfigurations(true));
+    this.codexConfig = options.codexConfig ?? new CodexConfigManager();
+    const sandboxMode = () => this.codexConfig.getConfig().sandboxMode;
+    this.taskManager = new AgentTaskManager(join(dataDir, 'workspaces'), logger, undefined, sandboxMode);
+    this.storyRunner = new StoryRunner(dataDir, logger, () => this.executionConfigurations(true), sandboxMode);
     this.githubToken = options.githubToken?.trim() || undefined;
     this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
     if (this.githubToken) {
@@ -164,7 +166,6 @@ export class WebConsole {
     this.persistGitHubToken = options.persistGitHubToken;
     this.onGitHubTokenConnected = options.onGitHubTokenConnected;
     this.agentAuth = options.agentAuth ?? new AgentAuthManager(this.logger);
-    this.codexConfig = options.codexConfig ?? new CodexConfigManager();
     this.codexModels = options.codexModels ?? new CodexModelCatalog();
     this.getMessagingConfiguration = options.getMessagingConfiguration;
     this.saveMessagingConfiguration = options.saveMessagingConfiguration;
@@ -174,7 +175,7 @@ export class WebConsole {
     const sandboxProbe = new CodexSandboxProbe(dataDir);
     httpServer.register('POST', '/api/console/codex-sandbox', async () => ({
       status: 200,
-      body: await sandboxProbe.test(),
+      body: await sandboxProbe.test(sandboxMode()),
       headers: API_HEADERS,
     }));
     const githubWorkspace = new GitHubWorkspaceClone(

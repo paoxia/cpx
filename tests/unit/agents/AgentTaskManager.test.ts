@@ -105,6 +105,38 @@ describe('AgentTaskManager', () => {
     rmSync(TMP_DIR, { recursive: true, force: true });
   });
 
+  it('工作区、命名和续接尊重完全访问设置，并在下一轮恢复工作区沙箱', async () => {
+    let mode: 'danger-full-access' | 'workspace-write' = 'danger-full-access';
+    const manager = new AgentTaskManager(join(TMP_DIR, 'workspaces'), new Logger('error'), undefined, () => mode);
+    try {
+      const prepared = { directory: TMP_DIR, writableRoot: TMP_DIR };
+      const config = [{ id: 'default', provider: 'codex' as const }];
+      const first = manager.createPreparedTask(prepared, '执行命令', config);
+      await manager.waitForTerminal(first.id);
+      manager.continueTask(first.id, { prompt: '继续' });
+      await manager.waitForTerminal(first.id);
+      const naming = manager.createPreparedTask({ ...prepared, readOnly: true }, '命名', config);
+      await manager.waitForTerminal(naming.id);
+      let calls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+      expect(calls).toHaveLength(3);
+      for (const [, args] of calls) {
+        expect(args).toContain('sandbox_mode="danger-full-access"');
+        expect(args).not.toContain('sandbox_mode="read-only"');
+        expect(args.join(' ')).not.toContain('sandbox_workspace_write.writable_roots');
+      }
+      expect(calls[1][1]).toContain('resume');
+      mode = 'workspace-write';
+      manager.continueTask(first.id, { prompt: '重新启用沙箱' });
+      await manager.waitForTerminal(first.id);
+      const readonly = manager.createPreparedTask({ ...prepared, readOnly: true }, '命名', config);
+      await manager.waitForTerminal(readonly.id);
+      calls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+      expect(calls[3][1]).toContain('sandbox_mode="workspace-write"');
+      expect(calls[3][1].join(' ')).toContain('sandbox_workspace_write.writable_roots');
+      expect(calls[4][1]).toContain('sandbox_mode="read-only"');
+    } finally { await manager.stop(); }
+  });
+
   it('应规范化受支持的 GitHub 仓库地址', () => {
     expect(normalizeRepository('acme/repo')).toBe('https://github.com/acme/repo.git');
     expect(normalizeRepository('https://github.com/acme/repo')).toBe(

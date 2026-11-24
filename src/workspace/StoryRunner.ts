@@ -3,6 +3,7 @@ import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { z } from 'zod';
 import { AgentModelConfiguration, AgentTask, AgentTaskManager } from '../agents/AgentTaskManager';
+import { CodexSandboxMode, configuredCodexSandbox } from '../agents/CodexSandbox';
 import { Logger } from '../utils/Logger';
 import { createLocalStory, localStorySummaries, readLocalStory } from './Story';
 import { inspectWorkspace, workspaceGitDirectory } from './Workspace';
@@ -42,9 +43,10 @@ export class StoryRunner {
     dataDirectory: string,
     logger: Logger,
     private readonly configurations: () => AgentModelConfiguration[],
+    sandboxMode: () => CodexSandboxMode = configuredCodexSandbox,
   ) {
     const runtime = join(dataDirectory, 'story-runs');
-    this.tasks = new AgentTaskManager(join(runtime, 'tasks'), logger);
+    this.tasks = new AgentTaskManager(join(runtime, 'tasks'), logger, undefined, sandboxMode);
     this.namingDirectory = join(runtime, 'naming');
     mkdirSync(this.namingDirectory, { recursive: true });
   }

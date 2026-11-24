@@ -252,7 +252,7 @@ elements.modelsRefresh.addEventListener('click', () => loadCodexModels(true));
 elements.profileModel.addEventListener('change', updateProfileEffortOptions);
 elements.codexSandboxCheck.addEventListener('click', async () => {
   elements.codexSandboxCheck.disabled = true;
-  workspaceFeedback(elements.codexSandboxStatus, '正在检查 Codex 沙箱能否执行命令…');
+  workspaceFeedback(elements.codexSandboxStatus, '正在按已保存的模式检查执行权限…');
   try {
     const result = await api('/api/console/codex-sandbox', { method: 'POST', body: '{}' });
     workspaceFeedback(elements.codexSandboxStatus, result.message, !result.success);

@@ -594,12 +594,12 @@
                   </select></label
                 >
                 <label class="field"
-                  ><span>CLI 默认沙箱</span
+                  ><span>执行沙箱</span
                   ><select id="codex-sandbox">
-                    <option value="read-only">read-only</option>
-                    <option value="workspace-write">workspace-write</option>
-                    <option value="danger-full-access">danger-full-access</option>
-                  </select><small>工作区会话固定使用 workspace-write，命名和协调使用 read-only；此项不覆盖工作区会话的隔离规则。</small></label
+                    <option value="read-only">只读</option>
+                    <option value="workspace-write">工作区内可写</option>
+                    <option value="danger-full-access">完全访问（不创建沙箱）</option>
+                  </select><small>保存后从下一轮任务生效。完全访问适用于全部 Codex 会话，可访问服务进程有权限的文件和网络；Docker 中仍受容器权限与挂载范围限制。</small></label
                 >
                 <label class="field"
                   ><span>网页搜索</span
