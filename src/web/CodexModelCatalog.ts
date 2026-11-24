@@ -1,5 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import type { AgentReasoningEffort } from '../agents/AgentTaskManager';
+import type { AgentServiceTier } from '../agents/CodexSpeed';
 
 export interface CodexCatalogModel {
   id: string;
@@ -7,6 +8,7 @@ export interface CodexCatalogModel {
   description: string;
   defaultReasoningEffort: AgentReasoningEffort;
   supportedReasoningEfforts: AgentReasoningEffort[];
+  supportedServiceTiers?: AgentServiceTier[];
 }
 
 export interface CodexModelCatalogSnapshot {
@@ -117,6 +119,9 @@ function normalizeCatalog(value: unknown): CodexCatalogModel[] {
             )
         : [];
       const configuredDefault = model.default_reasoning_level;
+      const supportsFast = Array.isArray(model.service_tiers)
+        ? model.service_tiers.some((tier) => isRecord(tier) && (tier.id === 'priority' || tier.id === 'fast'))
+        : Array.isArray(model.additional_speed_tiers) && model.additional_speed_tiers.includes('fast');
       const defaultReasoningEffort =
         typeof configuredDefault === 'string' && EFFORTS.has(configuredDefault as AgentReasoningEffort)
           ? (configuredDefault as AgentReasoningEffort)
@@ -130,6 +135,7 @@ function normalizeCatalog(value: unknown): CodexCatalogModel[] {
         description: typeof model.description === 'string' ? model.description : '',
         defaultReasoningEffort,
         supportedReasoningEfforts: supported.length ? supported : [defaultReasoningEffort],
+        supportedServiceTiers: ['default', ...(supportsFast ? ['fast' as const] : [])],
       };
     });
 }

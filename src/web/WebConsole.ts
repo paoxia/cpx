@@ -25,7 +25,9 @@ import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelC
 import { registerWorkspaceRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
 import { GitHubWorkspaceClone } from './GitHubWorkspaceClone';
 import { StoryRunner } from '../workspace/StoryRunner';
+import { AgentServiceTier, normalizeServiceTier } from '../agents/CodexSpeed';
 import { WorkspaceHistory } from '../workspace/WorkspaceHistory';
+import { CodexSandboxProbe } from './CodexSandboxProbe';
 import {
   isMessagingPlatform,
   MessagingPlatform,
@@ -39,6 +41,7 @@ interface StoredModelConfiguration {
   provider: CodingAgentProvider;
   model?: string;
   reasoningEffort: AgentReasoningEffort;
+  serviceTier?: AgentServiceTier;
 }
 
 interface ConsoleSettings {
@@ -53,6 +56,7 @@ interface ModelConfigurationPayload {
   provider?: CodingAgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  serviceTier?: AgentServiceTier;
   prompt?: string;
 }
 
@@ -167,6 +171,12 @@ export class WebConsole {
     this.modelTester = options.modelTester ?? new ModelConfigurationTester(dataDir, this.logger);
     this.registerAssets(httpServer);
     this.registerApi(httpServer);
+    const sandboxProbe = new CodexSandboxProbe(dataDir);
+    httpServer.register('POST', '/api/console/codex-sandbox', async () => ({
+      status: 200,
+      body: await sandboxProbe.test(),
+      headers: API_HEADERS,
+    }));
     const githubWorkspace = new GitHubWorkspaceClone(
       join(dataDir, 'workspaces'),
       () => this.githubToken,
@@ -314,6 +324,7 @@ export class WebConsole {
             provider: configuration.provider,
             ...(configuration.model ? { model: configuration.model } : {}),
             reasoningEffort: configuration.reasoningEffort,
+            ...(configuration.serviceTier ? { serviceTier: configuration.serviceTier } : {}),
             ...(prompt ? { prompt } : {}),
           }),
           headers: API_HEADERS,
@@ -668,6 +679,7 @@ function normalizeModelConfigurationPayloads(
       throw new Error(`第 ${index + 1} 条模型名称无效`);
     }
     const reasoningEffort = payload.reasoningEffort ?? 'high';
+    const serviceTier = normalizeServiceTier(payload.serviceTier);
     if (!VALID_REASONING_EFFORTS.includes(reasoningEffort)) {
       throw new Error(`第 ${index + 1} 条推理强度无效`);
     }
@@ -677,6 +689,7 @@ function normalizeModelConfigurationPayloads(
       provider: payload.provider,
       ...(model ? { model } : {}),
       reasoningEffort,
+      ...(serviceTier ? { serviceTier } : {}),
     };
   });
 }

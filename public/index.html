@@ -479,6 +479,14 @@
                       <option value="high">high</option></select
                     ><small>只显示当前模型支持的强度</small></label
                   >
+                  <label class="field">
+                    <span>推理速度</span>
+                    <select id="profile-speed">
+                      <option value="">跟随 CLI</option>
+                      <option value="default">标准</option>
+                    </select>
+                    <small id="profile-speed-hint">速度与推理强度分别设置；Fast 使用更高额度。</small>
+                  </label>
                   <div class="profile-form-actions profile-editor-actions">
                     <button
                       class="secondary-button profile-delete-button"
@@ -586,12 +594,12 @@
                   </select></label
                 >
                 <label class="field"
-                  ><span>沙箱模式</span
+                  ><span>CLI 默认沙箱</span
                   ><select id="codex-sandbox">
                     <option value="read-only">read-only</option>
                     <option value="workspace-write">workspace-write</option>
                     <option value="danger-full-access">danger-full-access</option>
-                  </select></label
+                  </select><small>工作区会话固定使用 workspace-write，命名和协调使用 read-only；此项不覆盖工作区会话的隔离规则。</small></label
                 >
                 <label class="field"
                   ><span>网页搜索</span
@@ -613,6 +621,10 @@
                     >
                   </div>
                 </div>
+                <div class="profile-form-actions">
+                  <button class="secondary-button" id="codex-sandbox-check" type="button">检查执行权限</button>
+                </div>
+                <p class="workspace-feedback" id="codex-sandbox-status" role="status" aria-live="polite" hidden></p>
                 <div class="model-config-test-input">
                   <textarea
                     id="codex-test-prompt"

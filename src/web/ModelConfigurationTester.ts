@@ -1,6 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import { AgentReasoningEffort, CodingAgentProvider } from '../agents/AgentTaskManager';
 import { AGENT_ADAPTERS } from '../agents/agentAdapters';
+import type { AgentServiceTier } from '../agents/CodexSpeed';
 import { AgentProcessError, classifyAgentError } from '../agents/errorClassifier';
 import { Logger } from '../utils/Logger';
 
@@ -8,6 +9,7 @@ export interface ModelTestConfiguration {
   provider: CodingAgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  serviceTier?: AgentServiceTier;
   baseUrl?: string;
   apiKey?: string;
   prompt?: string;
@@ -60,6 +62,7 @@ export class ModelConfigurationTester implements ModelConfigurationTestRunner {
       configuration.model,
       configuration.baseUrl,
       configuration.reasoningEffort,
+      configuration.serviceTier,
     );
     args.splice(1, 0, ...(MODEL_TEST_EXTRA_ARGS[configuration.provider] ?? []));
     const sensitiveValues = Array.from(

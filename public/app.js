@@ -158,6 +158,10 @@ const elements = {
   profileName: document.querySelector('#profile-name'),
   profileModel: document.querySelector('#profile-model'),
   profileReasoning: document.querySelector('#profile-reasoning'),
+  profileSpeed: document.querySelector('#profile-speed'),
+  profileSpeedHint: document.querySelector('#profile-speed-hint'),
+  codexSandboxCheck: document.querySelector('#codex-sandbox-check'),
+  codexSandboxStatus: document.querySelector('#codex-sandbox-status'),
   profileNew: document.querySelector('#profile-new'),
   profileDelete: document.querySelector('#profile-delete'),
   modelsRefresh: document.querySelector('#models-refresh'),
@@ -246,6 +250,18 @@ elements.profileNew.addEventListener('click', () => editAgentProfile());
 elements.profileDelete.addEventListener('click', deleteAgentProfile);
 elements.modelsRefresh.addEventListener('click', () => loadCodexModels(true));
 elements.profileModel.addEventListener('change', updateProfileEffortOptions);
+elements.codexSandboxCheck.addEventListener('click', async () => {
+  elements.codexSandboxCheck.disabled = true;
+  workspaceFeedback(elements.codexSandboxStatus, '正在检查 Codex 沙箱能否执行命令…');
+  try {
+    const result = await api('/api/console/codex-sandbox', { method: 'POST', body: '{}' });
+    workspaceFeedback(elements.codexSandboxStatus, result.message, !result.success);
+  } catch (error) {
+    workspaceFeedback(elements.codexSandboxStatus, error.message, true);
+  } finally {
+    elements.codexSandboxCheck.disabled = false;
+  }
+});
 elements.codexConfigForm.addEventListener('submit', saveCodexConfig);
 elements.codexTestSubmit.addEventListener('click', testCodex);
 elements.githubForm.addEventListener('submit', connectGitHub);
@@ -779,7 +795,7 @@ function renderAgentProfiles() {
   elements.profileList.innerHTML = state.settings.modelConfigs
     .map((profile) => {
       const active = profile.id === state.settings.activeConfigurationId;
-      return `<button class="agent-profile-item ${active ? 'active' : ''}" data-profile-id="${escapeHtml(profile.id)}" type="button"><span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(providerLabel(profile.provider))} · ${escapeHtml(profile.model || 'CLI 默认模型')} · ${escapeHtml(profile.reasoningEffort)}</small></span><em>${active ? '当前' : '切换'}</em></button>`;
+      return `<button class="agent-profile-item ${active ? 'active' : ''}" data-profile-id="${escapeHtml(profile.id)}" type="button"><span><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(providerLabel(profile.provider))} · ${escapeHtml(profile.model || 'CLI 默认模型')} · ${escapeHtml(profile.reasoningEffort)} · ${profileSpeedLabel(profile.serviceTier)}</small></span><em>${active ? '当前' : '切换'}</em></button>`;
     })
     .join('');
   elements.profileList.querySelectorAll('[data-profile-id]').forEach((button) => {
@@ -796,7 +812,7 @@ function renderAgentProfiles() {
   });
   const active = activeAgentProfile();
   elements.activeProfileLabel.textContent = active
-    ? `${active.name} · ${providerLabel(active.provider)} · ${active.model || 'CLI 默认模型'} · ${active.reasoningEffort}`
+    ? `${active.name} · ${providerLabel(active.provider)} · ${active.model || 'CLI 默认模型'} · ${active.reasoningEffort} · ${profileSpeedLabel(active.serviceTier)}`
     : '请选择配置';
   if (!elements.profileId.value && active) editAgentProfile(active.id);
 }
@@ -817,6 +833,7 @@ function editAgentProfile(id) {
   }
   elements.profileModel.value = modelId;
   elements.profileReasoning.dataset.savedValue = profile?.reasoningEffort || '';
+  elements.profileSpeed.dataset.savedValue = profile?.serviceTier || '';
   elements.profileDelete.disabled = !profile || state.settings.modelConfigs.length === 1;
   updateProfileEffortOptions();
 }
@@ -832,6 +849,25 @@ function updateProfileEffortOptions() {
     ? saved
     : model?.defaultReasoningEffort || efforts[0];
   elements.profileReasoning.dataset.savedValue = '';
+  updateProfileSpeedOptions();
+}
+
+function profileSpeedLabel(tier) {
+  return tier === 'fast' ? 'Fast' : tier === 'default' ? '标准' : 'CLI 速度';
+}
+
+function updateProfileSpeedOptions() {
+  const model = state.codexModels.find((item) => item.id === elements.profileModel.value);
+  const saved = elements.profileSpeed.dataset.savedValue ?? elements.profileSpeed.value;
+  const supportsFast = model?.supportedServiceTiers?.includes('fast');
+  const options = [new Option('跟随 CLI', ''), new Option('标准', 'default')];
+  if (supportsFast || (!model && saved === 'fast')) options.push(new Option('Fast', 'fast'));
+  elements.profileSpeed.replaceChildren(...options);
+  elements.profileSpeed.value = saved === 'fast' && model && !supportsFast ? '' : saved;
+  delete elements.profileSpeed.dataset.savedValue;
+  elements.profileSpeedHint.textContent = supportsFast
+    ? 'Fast 使用更高额度，推理强度保持独立设置。'
+    : model ? '当前账号的此模型未提供 Fast 速度档位。' : '登录并刷新模型目录后显示支持的速度；跟随 CLI 会保留原有配置。';
 }
 
 async function saveAgentProfile(event) {
@@ -843,6 +879,7 @@ async function saveAgentProfile(event) {
     provider: 'codex',
     model: elements.profileModel.value || undefined,
     reasoningEffort: elements.profileReasoning.value,
+    ...(elements.profileSpeed.value ? { serviceTier: elements.profileSpeed.value } : {}),
   };
   const profiles = state.settings.modelConfigs.some((item) => item.id === id)
     ? state.settings.modelConfigs.map((item) => (item.id === id ? next : item))

@@ -120,6 +120,20 @@ NPM_REGISTRY=https://registry.npmjs.org
 
 `APT_MIRROR` 和 `NPM_REGISTRY` 只在源码镜像构建阶段使用。它们默认分别使用 Debian 和 npm 官方源；国内开发或构建环境可分别设置为 `http://mirrors.aliyun.com` 和 `https://registry.npmmirror.com`。APT 仓库元数据和软件包由 Debian 签名验证；使用 HTTP 可避免基础镜像尚未安装 CA 证书时的循环依赖。`NPM_REGISTRY` 会同时用于项目依赖和 Codex CLI 的 npm 包下载。两个变量都不会写入最终容器环境，也不能代理运行时模型请求。
 
+#### Codex 沙箱执行权限
+
+`bwrap: No permissions to create a new namespace` 表示 Docker 外层安全策略或宿主机内核阻止了 Codex 的 Linux 沙箱，不能通过更换 GitHub Token 或改文件权限解决。三份 Compose 的 cpx 服务都包含以下配置，用于允许 Codex 创建内部沙箱：
+
+```yaml
+security_opt:
+  - seccomp=unconfined
+  - apparmor=unconfined
+```
+
+这会放开容器外层的 seccomp/AppArmor 限制，Codex 自身仍使用工作区写入沙箱。只修改 cpx 服务，保留原镜像标签、环境变量、目录挂载与 Mihomo 设置。在极空间 Compose 编辑器同步这两项，保存并重新创建 cpx 容器，随后在「Agent 设置 → 检查执行权限」确认结果。只重新导入镜像不会应用安全选项。
+
+不要在 NAS 终端调整内核参数。若同步 Compose 后检查仍提示内核不允许用户命名空间，应先确认 NAS 固件和 Docker 对该能力的支持；cpx 不会自动降级为无沙箱执行。CLI 默认沙箱设置不覆盖 cpx 工作区会话的 `workspace-write` 及命名/协调的 `read-only`。
+
 #### 出站代理
 
 如果 NAS 所在网络不能直接连接 Codex、GitHub、npm 或 Debian 软件源，可以在极空间 Compose 项目的环境变量界面增加标准代理变量：

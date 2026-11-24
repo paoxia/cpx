@@ -164,6 +164,10 @@ cpx workspace add notes git@gitee.com:owner/notes.git --root ./my-workspace --pu
 
 Codex CLI 不需要在 NAS 上单独安装。`Dockerfile` 会安装 `@openai/codex`，离线镜像包也包含它。容器启动后进入“Agent 设置”完成登录、刷新账号模型目录、保存多套配置并测试。认证资料通过 `./data/codex:/root/.codex` 持久化，重新构建容器不会主动删除。
 
+每套模型配置可分别选择推理强度和推理速度：跟随 CLI、标准、Fast。Fast 只在当前账号的模型目录声明支持时提供，使用更高额度；旧配置继续跟随 CLI。保存的速度用于模型测试、工作区与消息平台任务及会话续接，显式选“标准”可覆盖上一轮 Fast。cpx 通过 CLI 的 `service_tier="fast"` 和 `features.fast_mode=true` 请求 Fast，不修改全局 Codex 速度设置。[官方速度说明](https://learn.chatgpt.com/docs/agent-configuration/speed)
+
+“Agent 设置 → 测试当前配置”提供「检查执行权限」，使用固定命令检查 Codex 沙箱能否启动，不调用模型。NAS 中出现 `bwrap` 命名空间权限错误时，需要同步新版 Compose 的 `security_opt` 并重新创建容器；仅导入新镜像不会改变容器权限。工作区会话仍使用 `workspace-write`，命名及协调使用 `read-only`；CLI 默认沙箱设置不覆盖这些规则。详见 [沙箱执行权限](docs/DEPLOYMENT.md#codex-沙箱执行权限)。
+
 NAS 网络不能直接连接 Codex 或构建软件源时，在极空间 Compose 环境变量界面配置 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`。代理地址必须使用容器可访问的局域网 IP，不能使用 `127.0.0.1`；基础镜像无法拉取时改用开发机构建、极空间图形界面导入镜像的方案。具体填写方式和构建/运行阶段的区别见 [部署文档的“出站代理”章节](docs/DEPLOYMENT.md#出站代理)。
 
 镜像构建阶段可通过 `APT_MIRROR` 选择 Debian 软件源，通过 `NPM_REGISTRY` 选择 npm 源。国内开发机可分别设置为 `http://mirrors.aliyun.com` 和 `https://registry.npmmirror.com`。这两个变量只影响构建中的依赖下载，不改变运行中 Agent 的模型服务地址。

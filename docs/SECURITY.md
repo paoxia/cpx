@@ -53,6 +53,8 @@ GitHub 同样受工作区令牌保护，只接受 GitHub 仓库标识与地址�
 
 HTTP 请求体上限为 10 MB，但当前服务没有内置 TLS、速率限制或通用身份认证。公网部署需要由可信网关提供这些能力。
 
+`POST /api/console/codex-sandbox` 与其他设置检查一样由部署环境保护，只运行固定的 `workspace-write` 沙箱探测命令，检查失败不会改用无沙箱执行。Docker Compose 为兼容 Codex 的 Bubblewrap 命名空间，给 cpx 配置 `seccomp=unconfined` 和 `apparmor=unconfined`，放开外层相应限制；Codex 进程自身的文件系统与 seccomp 沙箱继续生效。该配置只在重新创建容器时应用，并依赖宿主机内核支持用户命名空间。
+
 控制台静态资源设置了 CSP、禁止 MIME 嗅探并拒绝被其他页面嵌入，但这些响应头不能替代访问认证。
 
 ### Coding Agent 执行

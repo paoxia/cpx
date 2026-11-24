@@ -29,7 +29,7 @@ describe('MessagingCoordinator', () => {
     const resultPromise = coordinator.run({
       scopeId: 'scope-1',
       prompt: '帮我在 cpx 修复登录问题',
-      configurations: [{ id: 'default', provider: 'codex', model: 'gpt-test' }],
+      configurations: [{ id: 'default', provider: 'codex', model: 'gpt-test', serviceTier: 'fast' }],
       platformTools: {
         endpoint: 'http://127.0.0.1:3000/internal',
         token: 'scope-token',
@@ -59,6 +59,7 @@ describe('MessagingCoordinator', () => {
       ]),
     );
     expect(args.join(' ')).toContain('mcp_servers.cpx_platform.command');
+    expect(args).toContain('service_tier="fast"');
     const stdin = child.stdin.read()?.toString() ?? '';
     expect(stdin).toContain('协调 Agent');
     expect(stdin).not.toContain('scope-token');
@@ -73,7 +74,7 @@ describe('MessagingCoordinator', () => {
       scopeId: 'scope-2',
       prompt: '就用第一个仓库',
       threadId: 'thread-existing',
-      configurations: [{ id: 'default', provider: 'codex' }],
+      configurations: [{ id: 'default', provider: 'codex', serviceTier: 'default' }],
       platformTools: {
         endpoint: 'http://127.0.0.1:3000/internal',
         token: 'scope-token',
@@ -98,6 +99,7 @@ describe('MessagingCoordinator', () => {
     ]);
     expect(args.indexOf('--sandbox')).toBeLessThan(args.indexOf('resume'));
     expect(args).toContain('thread-existing');
+    expect(args).toContain('service_tier="default"');
     expect(child.stdin.read()?.toString()).toBe('就用第一个仓库');
   });
 

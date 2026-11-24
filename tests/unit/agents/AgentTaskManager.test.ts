@@ -305,6 +305,7 @@ describe('AgentTaskManager', () => {
       repository: 'acme/repo',
       baseBranch: 'main',
       prompt: '先完成第一轮',
+      configurations: [{ id: 'speed-profile', provider: 'codex', serviceTier: 'fast' }],
     });
     const first = await manager.waitForTerminal(created.id);
     expect(first.threadId).toBe('thread-1');
@@ -313,7 +314,10 @@ describe('AgentTaskManager', () => {
       ([command, args]) => command === 'git' && args[0] === 'clone',
     ).length;
 
-    const continued = manager.continueTask(created.id, { prompt: '继续补充测试' });
+    const continued = manager.continueTask(created.id, {
+      prompt: '继续补充测试',
+      configurations: [{ id: 'speed-profile', provider: 'codex', serviceTier: 'default' }],
+    });
     expect(continued.status).toBe('queued');
     const second = await manager.waitForTerminal(created.id);
 
@@ -330,6 +334,11 @@ describe('AgentTaskManager', () => {
       expect.objectContaining({ cwd: first.workspace }),
     );
     expect(agentInput).toContain('用户任务：继续补充测试');
+    const speedCalls = spawnMock.mock.calls.filter(([command]) => command === 'codex');
+    expect(speedCalls[0][1]).toContain('service_tier="fast"');
+    expect(speedCalls[0][1]).toContain('features.fast_mode=true');
+    expect(speedCalls[1][1]).toContain('service_tier="default"');
+    expect(speedCalls[1][1]).not.toContain('service_tier="fast"');
     await manager.stop();
   });
 
@@ -585,6 +594,7 @@ describe('AgentTaskManager', () => {
           reasoningEffort: 'low',
           baseUrl: 'https://gateway.example.com/v1/',
           apiKey: 'key-fast',
+          serviceTier: 'fast',
         },
         {
           id: 'codex-deep',
@@ -607,6 +617,7 @@ describe('AgentTaskManager', () => {
         model: 'gpt-fast',
         reasoningEffort: 'low',
         baseUrl: 'https://gateway.example.com/v1',
+        serviceTier: 'fast',
       },
       {
         id: 'codex-deep',

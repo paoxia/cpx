@@ -11,6 +11,10 @@ services:
         NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
         APT_MIRROR: ${APT_MIRROR:-http://deb.debian.org}
     container_name: cpx
+    # Allow Codex to create its inner workspace sandbox.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     restart: unless-stopped
     ports:
       - "3000:3000"

@@ -70,6 +70,8 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `AgentAuthManager` 使用 `codex login --device-auth`、`codex login --with-api-key` 与 `codex login status` 管理官方 CLI 登录。管理器只在内存中保留受长度限制的终端输出、验证地址和一次性设备码；授权进程退出后再次调用 status 命令复核。凭据的落盘和刷新由 Codex CLI 管理。服务停止或用户取消时会终止仍在等待的登录进程。
 
+`CodexModelCatalog` 保留模型的 Fast 能力；模型配置可选的 `serviceTier` 由 `CodexSpeed` 校验并生成 CLI 参数。缺失字段不覆盖 CLI；`fast` 同时启用 Fast 功能，`default` 显式恢复标准。适配器在模型测试、任务启动、续接和协调会话中共用这条传递路径，速度不影响推理强度。`CodexSandboxProbe` 通过固定 `codex sandbox` 命令检查执行环境，不使用模型或自动扩大 Codex 权限。
+
 ## 配置与状态
 
 `cpx workspace` 与控制台的 `/api/console/workspace` 共用工作区服务，直接读取用户指定的 Git 工作区目录。服务异步执行 Git 子进程，控制台可同时处理其他请求。`README.md` 和 `repos.txt` 分别维护项目导航与远端清单，`code/` 下是各自管理提交的独立仓库。工作区信息从文件系统重建。

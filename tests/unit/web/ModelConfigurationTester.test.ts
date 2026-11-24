@@ -32,6 +32,7 @@ describe('ModelConfigurationTester', () => {
       baseUrl: 'https://gateway.example.com/v1',
       apiKey: 'secret-test-key',
       prompt: '请回复：测试成功',
+      serviceTier: 'fast',
     });
     child.stdout.write('{"type":"message","text":"CPX_MODEL_OK"}\n');
     child.emit('close', 0);
@@ -50,6 +51,8 @@ describe('ModelConfigurationTester', () => {
         'gpt-test',
         '--config',
         'openai_base_url="https://gateway.example.com/v1"',
+        'features.fast_mode=true',
+        'service_tier="fast"',
       ]),
       expect.objectContaining({
         cwd: process.cwd(),

@@ -92,11 +92,13 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         )
       : adapter.buildArgs(
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         );
     if (resume) {
       // `--sandbox` belongs to `codex exec`, while `--skip-git-repo-check` is

@@ -9,6 +9,7 @@
  */
 
 import type { CodingAgentProvider } from './AgentTaskManager';
+import { AgentServiceTier, codexSpeedArgs } from './CodexSpeed';
 
 export interface AgentAdapter {
   /** CLI 可执行文件名 */
@@ -18,13 +19,14 @@ export interface AgentAdapter {
   /** API key 注入到子进程的环境变量名 */
   readonly apiKeyEnvVar: 'CODEX_API_KEY';
   /** 构造 CLI 参数(不含 prompt,prompt 通过 stdin 传入) */
-  buildArgs(model: string | undefined, baseUrl?: string, reasoningEffort?: string): string[];
+  buildArgs(model: string | undefined, baseUrl?: string, reasoningEffort?: string, serviceTier?: AgentServiceTier): string[];
   /** 构造继续既有 Coding Agent 会话的 CLI 参数。 */
   buildResumeArgs(
     sessionId: string,
     model: string | undefined,
     baseUrl?: string,
     reasoningEffort?: string,
+    serviceTier?: AgentServiceTier,
   ): string[];
   /** 将 API Key 与网关地址注入当前子进程。 */
   configureEnvironment(
@@ -40,7 +42,7 @@ const codexAdapter: AgentAdapter = {
   command: 'codex',
   displayName: 'Codex',
   apiKeyEnvVar: 'CODEX_API_KEY',
-  buildArgs: (model, baseUrl, reasoningEffort) => {
+  buildArgs: (model, baseUrl, reasoningEffort, serviceTier) => {
     const args = ['exec', '--json', '--color', 'never'];
     if (model) {
       args.push('--model', model);
@@ -51,10 +53,10 @@ const codexAdapter: AgentAdapter = {
     if (reasoningEffort) {
       args.push('--config', `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
     }
-    args.push('-');
+    args.push(...codexSpeedArgs(serviceTier), '-');
     return args;
   },
-  buildResumeArgs: (sessionId, model, baseUrl, reasoningEffort) => {
+  buildResumeArgs: (sessionId, model, baseUrl, reasoningEffort, serviceTier) => {
     const args = ['exec', 'resume', '--json'];
     if (model) {
       args.push('--model', model);
@@ -65,7 +67,7 @@ const codexAdapter: AgentAdapter = {
     if (reasoningEffort) {
       args.push('--config', `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
     }
-    args.push(sessionId, '-');
+    args.push(...codexSpeedArgs(serviceTier), sessionId, '-');
     return args;
   },
   configureEnvironment: (env, apiKey) => {

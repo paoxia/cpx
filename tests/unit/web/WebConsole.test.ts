@@ -71,6 +71,8 @@ describe('WebConsole', () => {
     expect(html).toContain('id="workspace-browse"');
     expect(html).toContain('id="directory-picker"');
     expect(html).toContain('id="workspace-recent"');
+    expect(html).toContain('id="profile-speed"');
+    expect(html).toContain('id="codex-sandbox-check"');
     expect(html).not.toContain('<option value="clone">');
     expect(html).not.toContain('读取 GitHub 工作区');
     expect(html).not.toContain('id="workspace-remote"');
@@ -545,6 +547,27 @@ describe('WebConsole', () => {
     expect(response).toMatchObject({ status: 200, body: { success: false } });
     expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', reasoningEffort: 'high' }]);
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
+  });
+
+  it('速度配置可持久化并用于模型测试，无效档位不能覆盖已有配置', async () => {
+    await webConsole.stop();
+    const tested: ModelTestConfiguration[] = [];
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { modelTester: { test: async (config) => {
+        tested.push(config);
+        return { success: true, provider: 'codex', message: 'ok', durationMs: 1 };
+      } } });
+    const configuration = { id: 'speed', name: 'Fast', provider: 'codex', model: 'gpt-test', reasoningEffort: 'high', serviceTier: 'fast' };
+    const save = (value: object) => server.handler('POST', '/api/console/settings')(
+      Buffer.from(JSON.stringify({ modelConfigs: [value] })), {}, {});
+    expect(await save(configuration)).toMatchObject({ status: 200, body: { modelConfigs: [{ serviceTier: 'fast', reasoningEffort: 'high' }] } });
+    expect(await save({ ...configuration, serviceTier: 'invalid' })).toMatchObject({ status: 400 });
+    expect(await server.handler('POST', '/api/console/model-test')(Buffer.from(JSON.stringify(configuration)), {}, {})).toMatchObject({ status: 200 });
+    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', reasoningEffort: 'high', serviceTier: 'fast' }]);
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer, join(TMP_DIR, 'agent.db'), new Logger('error'));
+    expect(await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {})).toMatchObject({ body: { modelConfigs: [{ serviceTier: 'fast' }] } });
+    expect(await save({ ...configuration, serviceTier: 'default' })).toMatchObject({ status: 200, body: { modelConfigs: [{ serviceTier: 'default' }] } });
   });
 
   it('应对错误设置返回 400', async () => {

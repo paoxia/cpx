@@ -4,6 +4,7 @@ import { dirname, join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
+import { AgentServiceTier, normalizeServiceTier } from './CodexSpeed';
 import {
   AgentErrorKind,
   AgentProcessError,
@@ -24,6 +25,7 @@ export interface AgentModelConfiguration {
   provider: CodingAgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  serviceTier?: AgentServiceTier;
   baseUrl?: string;
   apiKey?: string;
 }
@@ -604,11 +606,13 @@ export class AgentTaskManager {
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         )
       : adapter.buildArgs(
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         );
     const platformTools = this.platformToolContexts.get(task.id);
     if (prepared) {
@@ -1173,12 +1177,14 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
         throw new Error('配置名称格式无效');
       }
       const reasoningEffort = normalizeReasoningEffort(configuration.reasoningEffort);
+      const serviceTier = normalizeServiceTier(configuration.serviceTier);
       return {
         id,
         ...(name ? { name } : {}),
         provider: configuration.provider,
         model,
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         apiKey,
       };
