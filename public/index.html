@@ -429,6 +429,21 @@
               </ol>
             </form>
           </section>
+          <form class="integration-card" id="messaging-pair-form">
+            <h2>绑定工作区</h2>
+            <label class="field"><span>消息平台</span>
+              <select id="messaging-pair-platform">
+                <option value="feishu">飞书</option>
+                <option value="dingtalk">钉钉</option>
+              </select>
+            </label>
+            <label class="field"><span>工作区</span><select id="messaging-pair-root" required></select></label>
+            <button id="messaging-pair-submit" class="save-button" type="submit">生成绑定码</button>
+            <button id="messaging-pair-refresh" type="button" class="secondary-button">检查绑定</button>
+            <input id="messaging-pair-code" readonly aria-label="在机器人私聊发送的绑定消息" hidden />
+            <p class="workspace-feedback" id="messaging-pair-feedback" role="status" aria-live="polite" hidden></p>
+            <ul id="messaging-bindings" aria-label="已绑定账号"></ul>
+          </form>
           <footer class="page-footer">
             <span>凭据保存在本地 <code>config/config.yaml</code>，接口只返回是否已配置</span>
             <span>无需公网 IP、域名或端口转发</span>

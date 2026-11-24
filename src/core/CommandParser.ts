@@ -7,6 +7,9 @@ export interface ParsedUserInfo {
   userName: string;
   source: CommandSource;
   replyRouteId?: string;
+  privateChat?: boolean;
+  platformMessageId?: string;
+  platformAppId?: string;
 }
 
 /**
@@ -44,6 +47,9 @@ export class CommandParser {
       userId: userInfo.userId,
       userName: userInfo.userName,
       ...(userInfo.replyRouteId ? { replyRouteId: userInfo.replyRouteId } : {}),
+      privateChat: userInfo.privateChat,
+      platformMessageId: userInfo.platformMessageId,
+      platformAppId: userInfo.platformAppId,
       rawText,
       name,
       args,
@@ -86,7 +92,14 @@ export class CommandParser {
     }
 
     if (source === 'feishu' || source === 'dingtalk') {
+      const pairing = text.match(/^绑定\s+([0-9a-f]{18})$/i);
+      if (pairing) return { name: 'workspace_session', args: { action: 'pair', code: pairing[1] } };
       const workspaceArgs = matchWorkspaceSession(text);
+      if (workspaceSessions && workspaceArgs && !text.startsWith('/') &&
+        ['resume', 'switch'].includes(String(workspaceArgs.action)) &&
+        !/^(?:session-[0-9a-f-]{36}|\d{4}-\d{2}-\d{2}-.+)$/u.test(String(workspaceArgs.id ?? ''))) {
+        return { name: 'workspace_session', args: { action: 'send', prompt: text } };
+      }
       const legacyNew = !workspaceSessions && /^\/(?:new|新建)$/i.test(text);
       if (workspaceArgs && !legacyNew) {
         return { name: 'workspace_session', args: workspaceArgs };
@@ -100,9 +113,13 @@ export class CommandParser {
         };
       }
       control = text.match(/^\/(?:status|状态)(?:\s+([a-f0-9-]{6,36}))?$/i);
-      if (control) return { name: 'agent_task_status', args: { id: control[1] } };
+      if (control) return workspaceSessions && !control[1]
+        ? { name: 'workspace_session', args: { action: 'status' } }
+        : { name: 'agent_task_status', args: { id: control[1] } };
       control = text.match(/^\/(?:stop|停止)(?:\s+([a-f0-9-]{6,36}))?$/i);
-      if (control) return { name: 'agent_task_cancel', args: { id: control[1] } };
+      if (control) return workspaceSessions && !control[1]
+        ? { name: 'workspace_session', args: { action: 'stop' } }
+        : { name: 'agent_task_cancel', args: { id: control[1] } };
       control = text.match(/^\/(?:confirm|确认)\s+(cf_[a-f0-9]+)$/i);
       if (control) return { name: 'confirm', args: { id: control[1] } };
       control = text.match(/^\/(?:cancel|取消)\s+(cf_[a-f0-9]+)$/i);

@@ -22,7 +22,7 @@ import {
   listGitHubBranches,
 } from './GitHubExplorer';
 import { ModelConfigurationTester, ModelConfigurationTestRunner } from './ModelConfigurationTester';
-import { registerWorkspaceRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
+import { registerWorkspaceRoutes, WorkspaceMessagingRoutes, WorkspaceWebAccess } from './WorkspaceRoutes';
 import { GitHubWorkspaceClone } from './GitHubWorkspaceClone';
 import { StoryRunner } from '../workspace/StoryRunner';
 import { AgentServiceTier, normalizeServiceTier } from '../agents/CodexSpeed';
@@ -111,6 +111,7 @@ export interface WebConsoleOptions {
   ) => Promise<PublicMessagingConfiguration>;
   modelTester?: ModelConfigurationTestRunner;
   workspaceAccess?: WorkspaceWebAccess;
+  workspaceMessaging?: WorkspaceMessagingRoutes;
 }
 
 export interface ConsoleCodingTaskRequest {
@@ -189,6 +190,7 @@ export class WebConsole {
         cloneGitHub: (repository) => githubWorkspace.clone(repository),
         directoryRoot: join(dataDir, 'workspaces'),
         history: new WorkspaceHistory(dataDir),
+        messaging: options.workspaceMessaging,
       },
     );
   }

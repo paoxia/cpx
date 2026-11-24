@@ -62,6 +62,9 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 2. `CommandParser` 去除平台前缀。配置工作区时，普通文本与会话控制命令进入 `workspace_session`。独立 GitHub 任务流程使用 `agent_chat` 及原有任务控制命令。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
 4. `WorkspaceSessionMessages` 校验平台发送者，按平台、用户和聊天定位工作区内的会话选择。文本经过和浏览器相同的 `StoryRunner` 创建或恢复 Codex 线程。独立 GitHub 任务流程由 `MessagingCoordinator` 在只读目录协调，用 `cpx_platform` 查询仓库、分支和管理用户任务。
+
+机器人绑定由服务 SQLite 按平台应用和用户保存，绑定管理复用工作区 API 的访问控制。消息路由先检查真实平台身份和当前绑定，之后把近期和相关会话的短标题交给临时 Codex 分类进程。该进程禁用 shell 和网页搜索，返回的操作与候选编号经服务端校验。会话切换沿用工作区 SQLite，旧线程无需迁移。GitHub 清单克隆确认与待消歧选项按聊天短期保存，授权后的 Git 操作由服务端固定入口处理。
+
 5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
 控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，使用 `--skip-git-repo-check`，除显式完全访问外采用只读沙箱。创建聊天开发任务时，协调工具可通过 GitHub API 分页读取仓库分支。`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。

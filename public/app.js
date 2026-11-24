@@ -1,6 +1,15 @@
 const loadingWorkspaceFolders = new WeakSet();
 const storyGitHubPreferenceKey = 'cpx.story.useGitHub';
 
+function sessionFromLocation() {
+  const params = new URLSearchParams(window.location.hash.slice(1));
+  const path = params.get('workspace');
+  const id = params.get('session');
+  return path && id ? { path, id } : null;
+}
+
+let pendingSessionLink = sessionFromLocation();
+
 const state = {
   settings: null,
   activeView: 'stories',
@@ -117,6 +126,14 @@ const elements = {
   storyRunStop: document.querySelector('#story-run-stop'),
   githubView: document.querySelector('#github-view'),
   integrationsView: document.querySelector('#integrations-view'),
+  messagingPairForm: document.querySelector('#messaging-pair-form'),
+  messagingPairPlatform: document.querySelector('#messaging-pair-platform'),
+  messagingPairRoot: document.querySelector('#messaging-pair-root'),
+  messagingPairSubmit: document.querySelector('#messaging-pair-submit'),
+  messagingPairRefresh: document.querySelector('#messaging-pair-refresh'),
+  messagingPairCode: document.querySelector('#messaging-pair-code'),
+  messagingPairFeedback: document.querySelector('#messaging-pair-feedback'),
+  messagingBindings: document.querySelector('#messaging-bindings'),
   codexView: document.querySelector('#codex-view'),
   githubForm: document.querySelector('#github-form'),
   githubTokenSetup: document.querySelector('#github-token-setup'),
@@ -262,6 +279,10 @@ elements.storyDescription.addEventListener('keydown', (event) => {
   }
 });
 elements.storyRunStop.addEventListener('click', stopStoryRun);
+elements.messagingPairForm.addEventListener('submit', pairMessagingAccount);
+elements.messagingPairPlatform.addEventListener('change', () => void loadMessagingBindings());
+elements.messagingPairRefresh.addEventListener('click', () => void loadMessagingBindings());
+elements.messagingPairCode.addEventListener('click', () => elements.messagingPairCode.select());
 elements.feishuForm.addEventListener('submit', (event) => saveIntegration(event, 'feishu'));
 elements.dingtalkForm.addEventListener('submit', (event) => saveIntegration(event, 'dingtalk'));
 elements.codexDeviceLogin.addEventListener('click', startCodexDeviceLogin);
@@ -293,10 +314,18 @@ elements.githubExistingToken.addEventListener('click', () => openGitHubTokenEntr
 elements.githubRefresh.addEventListener('click', refreshGitHubRepositories);
 elements.repositorySearch.addEventListener('input', renderRepositories);
 
+window.addEventListener('hashchange', () => {
+  const target = sessionFromLocation();
+  if (!target) return;
+  pendingSessionLink = target;
+  void openLinkedSession().catch(error => showToast(error.message, true));
+});
+
 async function init() {
   try {
     await loadSettings();
-    await switchView(window.location.hash.slice(1));
+    if (pendingSessionLink) await openLinkedSession();
+    else await switchView(window.location.hash.slice(1));
     try {
       if (!state.githubStatus) await loadGitHubStatus();
     } catch (error) {
@@ -561,6 +590,88 @@ async function testCodex() {
 async function loadIntegrations() {
   state.integrations = await api('/api/console/integrations');
   renderIntegrations();
+  if (!state.workspaceMode) await loadWorkspaceMode();
+  else await loadRecentWorkspaces();
+  const workspaces = new Map(state.recentWorkspaces.filter(item => item.available !== false).map(item => [item.path, item.name]));
+  if (state.workspace?.root) workspaces.set(state.workspace.root, state.workspace.root.split(/[\\/]/).at(-1));
+  const options = [...workspaces].map(([path, name]) => {
+    const option = document.createElement('option');
+    option.value = path;
+    option.textContent = name ? `${name} · ${path}` : path;
+    return option;
+  });
+  elements.messagingPairRoot.replaceChildren(...options);
+  if (state.workspace?.root) elements.messagingPairRoot.value = state.workspace.root;
+  await loadMessagingBindings();
+}
+
+async function loadMessagingBindings() {
+  const platform = elements.messagingPairPlatform.value;
+  const feedback = elements.messagingPairFeedback;
+  elements.messagingBindings.replaceChildren();
+  elements.messagingPairCode.value = '';
+  elements.messagingPairCode.hidden = true;
+  const canAccess = state.workspaceMode === 'local' ||
+    (state.workspaceMode === 'token' && elements.workspaceAccess.value.trim());
+  elements.messagingPairSubmit.disabled = true;
+  if (!canAccess) {
+    workspaceFeedback(feedback, '请先在工作区页填写访问密码并打开一个工作区。');
+    return;
+  }
+  workspaceFeedback(feedback, '');
+  try {
+    const { bindings } = await callWorkspace({ operation: 'list-messaging-bindings', platform });
+    if (elements.messagingPairPlatform.value !== platform) return;
+    for (const binding of bindings) {
+      const row = document.createElement('li');
+      row.textContent = `${binding.userId} · ${binding.root} `;
+      const revoke = document.createElement('button');
+      revoke.type = 'button';
+      revoke.className = 'secondary-button';
+      revoke.textContent = '撤销绑定';
+      revoke.addEventListener('click', async () => {
+        revoke.disabled = true;
+        try {
+          await callWorkspace({ operation: 'revoke-messaging-binding', platform, userId: binding.userId });
+          await loadMessagingBindings();
+        } catch (error) {
+          revoke.disabled = false;
+          workspaceFeedback(feedback, error.message, true);
+        }
+      });
+      row.append(revoke);
+      elements.messagingBindings.append(row);
+    }
+    if (!elements.messagingPairRoot.options.length) workspaceFeedback(feedback, '请先打开需要绑定的工作区。');
+    else if (!state.integrations?.[platform]?.configured) workspaceFeedback(feedback, '请先保存并连接此平台的机器人。');
+    else {
+      elements.messagingPairSubmit.disabled = false;
+      if (!bindings.length) workspaceFeedback(feedback, '账号待绑定。生成绑定码后，在机器人私聊发送。');
+    }
+  } catch (error) {
+    if (elements.messagingPairPlatform.value === platform) workspaceFeedback(feedback, error.message, true);
+  }
+}
+
+async function pairMessagingAccount(event) {
+  event.preventDefault();
+  const platform = elements.messagingPairPlatform.value;
+  elements.messagingPairSubmit.disabled = true;
+  try {
+    const { message } = await callWorkspace({
+      operation: 'pair-messaging', platform, path: elements.messagingPairRoot.value,
+    });
+    if (elements.messagingPairPlatform.value === platform) {
+      elements.messagingPairCode.value = message;
+      elements.messagingPairCode.hidden = false;
+      elements.messagingPairCode.select();
+      workspaceFeedback(elements.messagingPairFeedback, '复制上方消息并发给机器人私聊。绑定成功后可点「检查绑定」。');
+    }
+  } catch (error) {
+    workspaceFeedback(elements.messagingPairFeedback, error.message, true);
+  } finally {
+    if (elements.messagingPairPlatform.value === platform) elements.messagingPairSubmit.disabled = false;
+  }
 }
 
 function renderIntegrations() {
@@ -611,6 +722,7 @@ async function saveIntegration(event, platform) {
     elements.dingtalkClientId.value = '';
     elements.dingtalkClientSecret.value = '';
     renderIntegrations();
+    await loadMessagingBindings();
     const status = state.integrations[platform];
     showToast(
       status.state === 'connected' || status.state === 'disabled'
@@ -1383,6 +1495,34 @@ async function requestWorkspace(payload, feedback, successMessage) {
   }
 }
 
+async function openLinkedSession() {
+  const target = pendingSessionLink;
+  if (!target) return;
+  if (!state.workspaceMode) await loadWorkspaceMode();
+  if (state.workspace?.root !== target.path) {
+    if (state.workspaceMode !== 'local' && !elements.workspaceAccess.value.trim()) {
+      await switchView('workspace');
+      elements.workspaceOperation.value = 'show';
+      updateWorkspaceForm();
+      elements.workspacePath.value = target.path;
+      workspaceFeedback(elements.workspaceFeedback, '输入工作区访问密码并打开，即可查看机器人链接的会话。');
+      return;
+    }
+    const opened = await requestWorkspace(
+      { operation: 'show', path: target.path }, elements.workspaceFeedback, '已打开工作区。',
+    );
+    if (!opened) {
+      await switchView('workspace');
+      return;
+    }
+  }
+  if (pendingSessionLink !== target) return;
+  pendingSessionLink = null;
+  await switchView('stories');
+  selectSessionTab('sessions');
+  await openStory(target.id, { allowActive: true });
+}
+
 async function submitWorkspace(event) {
   event.preventDefault();
   const operation = elements.workspaceOperation.value;
@@ -1398,7 +1538,8 @@ async function submitWorkspace(event) {
     if (state.workspace.root) elements.workspacePath.value = state.workspace.root;
     elements.workspaceProjectForm.reset();
     workspaceFeedback(elements.workspaceProjectFeedback, '');
-    if (operation === 'clone-github') await switchView('stories');
+    if (pendingSessionLink?.path === state.workspace.root) await openLinkedSession();
+    else if (operation === 'clone-github') await switchView('stories');
   }
 }
 
@@ -1548,9 +1689,9 @@ function renderStory(story) {
   if (changed) renderSessionList();
 }
 
-async function openStory(id) {
+async function openStory(id, { allowActive = false } = {}) {
   const workspace = state.workspace;
-  if (!workspace || storyRunActive(state.storyRun)) return;
+  if (!workspace || (!allowActive && storyRunActive(state.storyRun))) return;
   const selection = ++state.sessionSelection;
   const payload = workspace.root
     ? { operation: 'session', path: workspace.root, id }

@@ -1,5 +1,7 @@
+import { WorkspaceMessagingAccess, WorkspaceMessagingPlatform } from '../integrations/WorkspaceMessagingAccess';
+import { cloneGitHubProjects, missingGitHubProjects } from '../workspace/WorkspaceGitHubProjects';
 import { randomUUID } from 'crypto';
-import { dirname, join, resolve } from 'path';
+import { basename, dirname, join, resolve } from 'path';
 import { ConfigManager } from '../config/ConfigManager';
 import { Logger } from '../utils/Logger';
 import { EventBus } from './EventBus';
@@ -102,6 +104,7 @@ export class AgentSystem {
   private mcpManager: MCPManager;
   private webConsole: WebConsole;
   private workspaceSessionMessages: WorkspaceSessionMessages;
+  private workspaceMessagingAccess: WorkspaceMessagingAccess;
   private messagingCoordinator: MessagingCoordinatorRunner;
   private messagingTaskOrigins = new Map<string, MessagingTaskOrigin>();
   private messagingCoordinatorConversations = new Map<string, MessagingCoordinatorConversation>();
@@ -131,6 +134,7 @@ export class AgentSystem {
 
     // 存储与权限
     this.database = new DatabaseService(this.config.storage.path, this.logger);
+    this.workspaceMessagingAccess = new WorkspaceMessagingAccess(this.database);
     this.confirmationStore = new PendingConfirmationStore(
       this.database,
       this.config.permissions.confirmationTtl,
@@ -184,6 +188,15 @@ export class AgentSystem {
           : 'none',
       persistGitHubToken: (token) => this.configManager.saveGitHubToken(token),
       onGitHubTokenConnected: (token) => this.activateGitHubToken(token),
+      workspaceMessaging: {
+        list: (platform) => this.workspaceMessagingAccess.list(platform, this.messagingAppId(platform)),
+        pair: (platform, root) => {
+          const app = this.messagingAppId(platform);
+          if (!app) throw new Error('请先连接对应的机器人。');
+          return this.workspaceMessagingAccess.issue(platform, app, root);
+        },
+        revoke: (platform, userId) => this.workspaceMessagingAccess.revoke(platform, this.messagingAppId(platform), userId),
+      },
       getMessagingConfiguration: () => this.messagingIntegrations.getPublicConfiguration(),
       saveMessagingConfiguration: async (platform, next) => {
         if (platform === 'dingtalk') {
@@ -208,7 +221,13 @@ export class AgentSystem {
         return this.messagingIntegrations.getPublicConfiguration();
       },
     });
-    this.workspaceSessionMessages = new WorkspaceSessionMessages(this.webConsole.getStoryRunner());
+    this.workspaceSessionMessages = new WorkspaceSessionMessages(this.webConsole.getStoryRunner(), {
+      interpret: (prompt) => this.messagingCoordinator.classify?.(prompt, this.webConsole.getAgentExecutionConfigurations())
+        ?? Promise.resolve(undefined),
+      missingGitHubProjects: async (root) => this.config.github.token?.trim() ? missingGitHubProjects(root) : undefined,
+      cloneGitHubProjects: (root, targets) => cloneGitHubProjects(this.config.github.token, root, targets),
+      sessionLink: workspaceSessionLink,
+    });
 
     this.skillManager = new SkillManager(
       this.skillLoader,
@@ -285,7 +304,9 @@ export class AgentSystem {
   async processCommand(rawText: string, userInfo: ParsedUserInfo): Promise<CommandResult> {
     let command: Command;
     try {
-      command = this.parser.parse(rawText, userInfo, Boolean(this.messagingWorkspaceRoot()));
+      const boundRoot = userInfo.source === 'cli' ? undefined
+        : this.workspaceMessagingAccess.root(userInfo.source, this.messagingAppId(userInfo.source), userInfo.userId);
+      command = this.parser.parse(rawText, userInfo, boundRoot !== undefined || Boolean(this.messagingWorkspaceRoot()));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`命令解析失败: ${message}`);
@@ -307,6 +328,9 @@ export class AgentSystem {
     });
 
     this.eventBus.emit('command:parsed', command);
+    const deliveryScope = command.name === 'workspace_session' && command.args.action !== 'pair'
+      ? this.workspaceDeliveryScope(command)
+      : undefined;
     const result = await this.router.dispatch(command);
 
     this.auditLogger.record({
@@ -326,7 +350,7 @@ export class AgentSystem {
     }
 
     // 推送结果到来源平台
-    if (userInfo.source !== 'cli' && this.resultPusher) {
+    if (userInfo.source !== 'cli' && this.resultPusher && !(result.data as { suppressReply?: boolean } | undefined)?.suppressReply) {
       try {
         const formatted = this.formatter.format(result, userInfo.source);
         await this.resultPusher(userInfo.source, userInfo.userId, formatted, userInfo.replyRouteId);
@@ -338,19 +362,68 @@ export class AgentSystem {
     const data = result.data;
     if (command.name === 'workspace_session' && result.success &&
         data && typeof data === 'object' && 'runId' in data && typeof data.runId === 'string') {
-      void this.pushWorkspaceSessionResult(command, data.runId);
+      void this.pushWorkspaceSessionResult(command, data.runId, deliveryScope);
     }
 
     return result;
+  }
+
+  private messagingAppId(platform: WorkspaceMessagingPlatform): string {
+    return (platform === 'feishu' ? this.config.feishu.appId : this.config.dingtalk.clientId) ?? '';
+  }
+
+  private async handleWorkspaceMessage(command: Command): Promise<CommandResult> {
+    const { id: commandId, source, userId, privateChat, platformMessageId, replyRouteId } = command;
+    const reply = (message: string, success = true): CommandResult => ({ commandId, success, message });
+    if (source === 'cli' || !replyRouteId) return reply('请在机器人聊天中使用。', false);
+    const app = this.messagingAppId(source);
+    if (command.platformAppId !== undefined && command.platformAppId !== app) return reply('机器人配置已更新，请重新发送。', false);
+
+    if (command.args.action === 'pair') {
+      if (!privateChat || !app || !userId) return reply('请在已连接机器人的私聊中发送绑定码。', false);
+      const root = this.workspaceMessagingAccess.redeem(source, app, userId, String(command.args.code ?? ''));
+      return root ? reply(`已绑定工作区「${basename(root)}」。直接说「查看会话」或「继续」加上电脑里的会话标题。`)
+        : reply('绑定码无效或已使用，请在 cpx 网页重新生成。', false);
+    }
+    if (command.args.action === 'identity') return reply(`你的机器人用户 ID：${userId}`);
+
+    const boundRoot = this.workspaceMessagingAccess.root(source, app, userId);
+    const allowedUsers = this.config[source].workspaceUsers ?? [];
+    if (boundRoot === '') return reply('此账号的绑定已撤销，请在 cpx 网页重新绑定。', false);
+    if (boundRoot && privateChat !== true) return reply('已绑定的个人工作区请在机器人私聊中使用。', false);
+    if (!boundRoot && !allowedUsers.includes(userId)) {
+      return reply('此账号尚未获准访问工作区会话，请先在 cpx「消息平台」绑定。', false);
+    }
+    if (platformMessageId && !this.workspaceMessagingAccess.accept(source, app, platformMessageId)) {
+      return { ...reply('这条消息已接收。'), data: { suppressReply: true } };
+    }
+    const scope = this.workspaceDeliveryScope(command);
+    return this.workspaceSessionMessages.handle(
+      command, boundRoot ?? this.messagingWorkspaceRoot(), boundRoot ? [userId] : allowedUsers,
+      () => Boolean(scope && scope === this.workspaceDeliveryScope(command)),
+    );
+  }
+
+  private workspaceDeliveryScope(command: Command): string | undefined {
+    const { source, userId, privateChat, platformAppId } = command;
+    if (source === 'cli') return undefined;
+    const app = this.messagingAppId(source);
+    if (platformAppId !== undefined && platformAppId !== app) return undefined;
+    const boundRoot = this.workspaceMessagingAccess.root(source, app, userId);
+    if (boundRoot === '') return undefined;
+    const root = boundRoot ? (privateChat === true ? boundRoot : undefined)
+      : (this.config[source].workspaceUsers ?? []).includes(userId) ? this.messagingWorkspaceRoot() : undefined;
+    return root ? JSON.stringify([app, root]) : undefined;
   }
 
   private messagingWorkspaceRoot(): string | undefined {
     return this.config.messagingWorkspaceRoot || process.env.AGENT_WORKSPACE_DEFAULT_ROOT?.trim() || undefined;
   }
 
-  private async pushWorkspaceSessionResult(command: Command, runId: string): Promise<void> {
+  private async pushWorkspaceSessionResult(command: Command, runId: string, scope?: string): Promise<void> {
     try {
       const result = await this.workspaceSessionMessages.result(command.id, runId);
+      if (!scope || !this.running || scope !== this.workspaceDeliveryScope(command)) return;
       await this.resultPusher?.(
         command.source,
         command.userId,
@@ -731,11 +804,7 @@ export class AgentSystem {
 
   /** 注册钉钉/飞书可用的 GitHub 查询与 Coding Agent 开发命令。 */
   private registerCodingAgentHandlers(): void {
-    this.router.register('workspace_session', (command) => this.workspaceSessionMessages.handle(
-      command,
-      this.messagingWorkspaceRoot(),
-      command.source === 'cli' ? [] : this.config[command.source].workspaceUsers ?? [],
-    ));
+    this.router.register('workspace_session', (command) => this.handleWorkspaceMessage(command));
     this.router.register('github_overview', async (command) => {
       try {
         const connection = await this.webConsole.inspectGitHub();
@@ -1458,9 +1527,10 @@ export class AgentSystem {
 
   private getHelpText(source: CommandSource): string {
     if (source === 'feishu' || source === 'dingtalk') {
-      if (this.messagingWorkspaceRoot()) {
+      if (this.messagingWorkspaceRoot() || this.messagingAppId(source)) {
         return [
-          '直接发送消息即可继续当前 cpx 会话，首次发送会创建会话。',
+          '在 cpx 网页绑定后，直接发送消息即可继续当前会话。',
+          '可以说「查看会话」「继续昨天 NAS 的那条」「看看进度」「停掉当前任务」。',
           '• /new [想法] · 新建会话',
           '• /sessions [页码] · 查询工作区所有会话',
           '• /switch <会话 ID> · 切换当前会话',
@@ -1631,4 +1701,18 @@ function formatCodingTask(task: AgentTask, completion = false): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+
+function workspaceSessionLink(root: string, id: string): string | undefined {
+  const origin = process.env.AGENT_WORKSPACE_CONSOLE_URL?.trim();
+  if (!origin) return undefined;
+  try {
+    const url = new URL(origin);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return undefined;
+    url.hash = new URLSearchParams({ workspace: root, session: id }).toString();
+    return url.toString();
+  } catch {
+    return undefined;
+  }
 }

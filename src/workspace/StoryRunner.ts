@@ -22,6 +22,7 @@ export class StoryRunner {
   private readonly stores = new Map<string, WorkspaceSessions>();
   private readonly executions = new Map<string, Promise<void>>();
   private stopped = false;
+  private readonly maintenance = new Set<string>();
 
   constructor(
     dataDirectory: string,
@@ -65,6 +66,7 @@ export class StoryRunner {
       storyId: session.id,
       session: { id: session.id, title: session.title },
     };
+    if (this.maintenance.has(root)) throw new Error('工作区正在初始化 GitHub 项目，请等克隆结束再发送。');
     store.reserve(run, messaging?.routeKey, storyId ? undefined : session.title);
     this.runs.set(run.id, run);
     this.executions.set(
@@ -94,8 +96,11 @@ export class StoryRunner {
   async listMessagingSessions(path: string, routeKey: string) {
     const { root, store } = await this.openWorkspace(path);
     return {
-      sessions: this.sessionSummaries(root, store),
+      sessions: this.sessionSummaries(root, store).map(session => ({
+        ...session, updatedAt: store.lastActivity(session.id),
+      })),
       current: store.currentMessagingStory(routeKey),
+      previous: store.previousMessagingStory(routeKey),
     };
   }
 
@@ -104,6 +109,31 @@ export class StoryRunner {
     const session = storyId ? this.requireMessagingStory(root, store, storyId) : undefined;
     store.selectMessagingStory(routeKey, storyId);
     return session;
+  }
+
+  async runMaintenance<T>(path: string, operation: () => Promise<T>): Promise<T> {
+    const { root, store } = await this.openWorkspace(path);
+    if (this.stopped || this.maintenance.has(root) || store.latest()) {
+      throw new Error('当前工作区有任务正在运行，请稍后重新确认克隆。');
+    }
+    this.maintenance.add(root);
+    try {
+      return await operation();
+    } finally {
+      this.maintenance.delete(root);
+    }
+  }
+
+  async messagingRun(path: string, storyId: string, cancel = false) {
+    const { root, store } = await this.openWorkspace(path);
+    const session = this.requireMessagingStory(root, store, storyId);
+    const run = store.latest(storyId);
+    if (cancel && run && !terminalStatuses.has(run.status)) {
+      const running = this.runs.get(run.id);
+      if (!running || running.path !== root) throw new Error('这轮正在另一个 cpx 进程中运行。');
+      this.cancel(run.id);
+    }
+    return { title: session.title, run: run && (this.runs.get(run.id) ?? run) };
   }
 
   async session(path: string, id: string) {

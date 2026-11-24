@@ -82,9 +82,36 @@ export const MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_confirmations_status ON pending_confirmations(status)`,
   `CREATE INDEX IF NOT EXISTS idx_confirmations_expires ON pending_confirmations(expires_at)`,
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_pairings (
+    platform TEXT NOT NULL,
+    app TEXT NOT NULL,
+    code_hash TEXT NOT NULL,
+    root TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (platform, app)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_bindings (
+    platform TEXT NOT NULL,
+    app TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    root TEXT NOT NULL,
+    PRIMARY KEY (platform, app, user_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_receipts (
+    platform TEXT NOT NULL,
+    app TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    received_at INTEGER NOT NULL,
+    PRIMARY KEY (platform, app, message_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workspace_messaging_receipts_received ON workspace_messaging_receipts(received_at)`,
 ];
 
 export const WORKSPACE_SESSION_MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_previous (
+    route_key TEXT PRIMARY KEY,
+    story_id TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS workspace_session_metadata (
     session_id TEXT PRIMARY KEY,
     title TEXT NOT NULL

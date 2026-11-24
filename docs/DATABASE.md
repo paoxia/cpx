@@ -25,6 +25,9 @@
 - 业务层负责状态值和 JSON 结构的校验，SQLite 表本身未声明外键或 `CHECK` 约束。
 - 当前只有初始化式迁移，没有版本表和增量迁移记录；修改现有结构前需要先建立兼容迁移策略。
 
+
+服务数据库还保存机器人管理数据。`workspace_messaging_pairings` 按平台和应用保存一次性绑定码的哈希、根目录和到期时间。`workspace_messaging_bindings` 按平台、应用和用户保存工作区绑定，空路径表示已撤销。`workspace_messaging_receipts` 按平台、应用和消息标识登记 24 小时去重记录。
+
 ## 工作区会话数据库
 
 每个本地工作区在其 Git 目录下独立保存 `cpx/sessions.db`。cpx 打开工作区会话时初始化数据库。
@@ -35,6 +38,7 @@
 | `workspace_sessions` | 会话与 Codex 线程的绑定 | `story_id` | `thread_id`（唯一） |
 | `workspace_session_turns` | 用户消息、回复和运行状态 | `id` | `story_id`, `status`, `created_at`, `owner_pid`, `description`, `response`, `error` |
 | `workspace_messaging_selections` | 各平台账号在对应聊天中的当前会话 | `route_key` | `story_id` 或 `run_id` |
+| `workspace_messaging_previous` | 各平台账号在对应聊天中的上一条会话 | `route_key` | `story_id` |
 
 轮次表按 `story_id` 索引。部分唯一索引限制同一工作区同时只有一轮处于等待、命名、创建或执行状态。运行服务退出后，cpx 将遗留的运行轮次标为失败，已保存的线程可继续使用。
 

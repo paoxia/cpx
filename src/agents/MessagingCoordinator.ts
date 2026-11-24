@@ -1,5 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'child_process';
 import { existsSync, mkdirSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { join, resolve } from 'path';
 import { AgentModelConfiguration, AgentPlatformToolContext } from './AgentTaskManager';
 import { AGENT_ADAPTERS } from './agentAdapters';
@@ -20,8 +21,13 @@ export interface MessagingCoordinatorResult {
   threadId?: string;
 }
 
+type ExecutionRequest = Omit<MessagingCoordinatorRequest, 'platformTools'> & {
+  platformTools?: AgentPlatformToolContext;
+};
+
 export interface MessagingCoordinatorRunner {
   run(request: MessagingCoordinatorRequest): Promise<MessagingCoordinatorResult>;
+  classify?(prompt: string, configurations: AgentModelConfiguration[]): Promise<string>;
   stop(): Promise<void>;
 }
 
@@ -60,7 +66,16 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
     mkdirSync(this.workingDirectory, { recursive: true, mode: 0o700 });
   }
 
-  async run(request: MessagingCoordinatorRequest): Promise<MessagingCoordinatorResult> {
+  run(request: MessagingCoordinatorRequest): Promise<MessagingCoordinatorResult> {
+    return this.execute(request);
+  }
+
+  async classify(prompt: string, configurations: AgentModelConfiguration[]): Promise<string> {
+    const result = await this.execute({ scopeId: randomUUID(), prompt, configurations });
+    return result.response;
+  }
+
+  private async execute(request: ExecutionRequest): Promise<MessagingCoordinatorResult> {
     let lastError: unknown;
     for (const configuration of request.configurations) {
       try {
@@ -83,7 +98,7 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
   }
 
   private runConfiguration(
-    request: MessagingCoordinatorRequest,
+    request: ExecutionRequest,
     configuration: AgentModelConfiguration,
   ): Promise<MessagingCoordinatorResult> {
     const adapter = AGENT_ADAPTERS[configuration.provider];
@@ -102,7 +117,12 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
           configuration.reasoningEffort,
           configuration.serviceTier,
         );
-    const sandbox = effectiveCodexSandbox(this.sandboxMode(), true);
+    const routing = !request.platformTools;
+    const sandbox = routing ? 'read-only' : effectiveCodexSandbox(this.sandboxMode(), true);
+    if (routing) {
+      args.splice(1, 0, '--ephemeral', '--ignore-user-config', '--ignore-rules',
+        '--disable', 'shell_tool', '--config', 'web_search="disabled"', '--config', 'approval_policy="never"');
+    }
     if (resume) {
       // `--sandbox` belongs to `codex exec`, while `--skip-git-repo-check` is
       // accepted by the `resume` subcommand. Keep each option before the
@@ -116,7 +136,12 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
 
     const env: NodeJS.ProcessEnv = { ...process.env };
     adapter.configureEnvironment(env, configuration.apiKey, configuration.baseUrl);
-    configurePlatformTools(args, env, request.platformTools, resume);
+    if (request.platformTools) configurePlatformTools(args, env, request.platformTools, resume);
+    else {
+      for (const key of Object.keys(env)) {
+        if (/^(?:GH_|GITHUB_|CPX_|AGENT_|DINGTALK_|FEISHU_)/.test(key)) delete env[key];
+      }
+    }
 
     return new Promise((resolvePromise, reject) => {
       let child: ChildProcessWithoutNullStreams;
@@ -162,7 +187,7 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
       const timeout = setTimeout(() => {
         child.kill();
         finish(new Error('Codex 协调会话超时'));
-      }, this.timeoutMs);
+      }, routing ? Math.min(this.timeoutMs, 35_000) : this.timeoutMs);
       timeout.unref();
 
       child.stdout.on('data', (chunk: Buffer | string) => {
@@ -193,7 +218,7 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
         finish();
       });
       child.stdin.once('error', (error) => finish(error));
-      child.stdin.end(resume ? request.prompt : `${COORDINATOR_PROMPT}\n${request.prompt}`);
+      child.stdin.end(resume || routing ? request.prompt : `${COORDINATOR_PROMPT}\n${request.prompt}`);
     });
   }
 }

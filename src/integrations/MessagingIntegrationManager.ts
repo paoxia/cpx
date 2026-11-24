@@ -146,8 +146,9 @@ export class MessagingIntegrationManager {
     }
 
     this.statuses.dingtalk = this.connectingStatus('dingtalk');
+    const appId = this.dingtalkConfig.clientId!;
     const client = new DWClient({
-      clientId: this.dingtalkConfig.clientId!,
+      clientId: appId,
       clientSecret: this.dingtalkConfig.clientSecret!,
       debug: false,
     });
@@ -183,6 +184,9 @@ export class MessagingIntegrationManager {
           userName: message.senderNick || 'DingTalkUser',
           source: 'dingtalk',
           replyRouteId,
+          privateChat: String(message.conversationType) === '1',
+          platformMessageId: message.msgId || event.headers.messageId,
+          platformAppId: appId,
         });
       } catch (error) {
         this.logger.error(`钉钉消息处理失败: ${errorMessage(error)}`);
@@ -217,8 +221,9 @@ export class MessagingIntegrationManager {
     }
 
     this.statuses.feishu = this.connectingStatus('feishu');
+    const appId = this.feishuConfig.appId!;
     const channel = createLarkChannel({
-      appId: this.feishuConfig.appId!,
+      appId,
       appSecret: this.feishuConfig.appSecret!,
       loggerLevel: LoggerLevel.warn,
       handshakeTimeoutMs: 15_000,
@@ -242,6 +247,9 @@ export class MessagingIntegrationManager {
           userName: message.senderName || 'FeishuUser',
           source: 'feishu',
           replyRouteId,
+          privateChat: message.chatType === 'p2p',
+          platformMessageId: message.messageId,
+          platformAppId: appId,
         });
       } catch (error) {
         this.logger.error(`飞书消息处理失败: ${errorMessage(error)}`);

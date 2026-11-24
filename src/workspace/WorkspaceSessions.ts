@@ -57,7 +57,10 @@ export class WorkspaceSessions {
           this.db.prepare('INSERT INTO workspace_session_metadata (session_id, title) VALUES (?, ?)')
             .run(turn.storyId, title);
         }
-        if (routeKey) this.saveMessagingSelection(routeKey, null, turn.id);
+        if (routeKey) {
+          this.rememberMessagingStory(routeKey, turn.storyId);
+          this.saveMessagingSelection(routeKey, null, turn.id);
+        }
       })
       .immediate();
   }
@@ -86,6 +89,24 @@ export class WorkspaceSessions {
         'SELECT thread_id AS threadId FROM workspace_sessions WHERE story_id = ?',
       )
       .get(storyId)?.threadId;
+  }
+
+  lastActivity(id: string): number | undefined {
+    return (this.db.prepare('SELECT MAX(created_at) AS time FROM workspace_session_turns WHERE story_id = ?')
+      .get(id) as { time: number | null }).time ?? undefined;
+  }
+
+  previousMessagingStory(routeKey: string): string | undefined {
+    return (this.db.prepare('SELECT story_id AS id FROM workspace_messaging_previous WHERE route_key = ?')
+      .get(routeKey) as { id: string } | undefined)?.id;
+  }
+
+  rememberMessagingStory(routeKey: string, next?: string): void {
+    const current = this.currentMessagingStory(routeKey);
+    if (!current || current === next) return;
+    this.db.prepare(
+      'INSERT INTO workspace_messaging_previous VALUES (?, ?) ON CONFLICT(route_key) DO UPDATE SET story_id = excluded.story_id',
+    ).run(routeKey, current);
   }
 
   metadata(id: string): { id: string; title: string } | undefined {
@@ -118,6 +139,7 @@ export class WorkspaceSessions {
   }
 
   selectMessagingStory(routeKey: string, storyId?: string): void {
+    this.rememberMessagingStory(routeKey, storyId);
     if (storyId) {
       this.saveMessagingSelection(routeKey, storyId, null);
     } else {

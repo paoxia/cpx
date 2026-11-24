@@ -314,6 +314,26 @@ function updateWorkspaceFile(root: string, name: string, before: string, after: 
   }
 }
 
+/** 克隆已向用户展示并确认的清单项目，不改工作区登记和远端。 */
+export async function cloneRegisteredWorkspaceProject(
+  path: string, name: string, expectedRemote: string, httpsRemote: string, environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  const { root } = await inspectWorkspace(path, false);
+  const manifest = readManifest(workspaceFile(root, 'repos.txt'));
+  if (manifest.get(name) !== expectedRemote || !PROJECT_NAME.test(name) || name.endsWith('.')) {
+    throw new Error('项目清单已变化，请重新确认。');
+  }
+  const code = join(root, 'code');
+  const destination = join(code, name);
+  const current = lstatSync(destination, { throwIfNoEntry: false });
+  if (current?.isDirectory() && await isRepository(destination)) return;
+  if (current) throw new Error('已有同名目录，请在工作区检查。');
+  mkdirSync(code, { recursive: true });
+  await prepareDirectory(destination, async (staging) => {
+    await git(['clone', '--', httpsRemote, '.'], staging, '克隆失败，请检查网络和仓库授权。', environment);
+  });
+}
+
 export async function addWorkspaceProject(
   path: string,
   name: string,

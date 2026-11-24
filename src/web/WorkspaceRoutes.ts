@@ -30,10 +30,17 @@ export interface WorkspaceWebAccess {
   defaultRoot?: string;
 }
 
+export interface WorkspaceMessagingRoutes {
+  list(platform: 'dingtalk' | 'feishu'): unknown[];
+  pair(platform: 'dingtalk' | 'feishu', root: string): { message: string; expiresAt: number };
+  revoke(platform: 'dingtalk' | 'feishu', userId: string): void;
+}
+
 interface WorkspaceRouteServices {
   cloneGitHub?: (repository: string) => Promise<Workspace>;
   directoryRoot?: string;
   history?: WorkspaceHistory;
+  messaging?: WorkspaceMessagingRoutes;
 }
 
 const endpoint = '/api/console/workspace';
@@ -47,7 +54,11 @@ const session = z.string().refine((id) => storyId.test(id) || /^session-[0-9a-f-
 const runId = z.string().uuid();
 const directory = z.string().max(4096).default('');
 const file = z.string().min(1).max(4096);
+const platform = z.enum(['feishu', 'dingtalk']);
 const payload = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('list-messaging-bindings'), platform }),
+  z.object({ operation: z.literal('pair-messaging'), platform, path: workspacePath }),
+  z.object({ operation: z.literal('revoke-messaging-binding'), platform, userId: z.string().min(1).max(256) }),
   z.object({ operation: z.literal('server-directories'), path: z.string().trim().min(1).max(4096).optional() }),
   z.object({ operation: z.literal('recent-workspaces') }),
   z.object({ operation: z.literal('show'), path: workspacePath }),
@@ -196,6 +207,16 @@ async function runOperation(
   services: WorkspaceRouteServices = {},
 ) {
   switch (request.operation) {
+    case 'list-messaging-bindings':
+      return { bindings: services.messaging?.list(request.platform) ?? [] };
+    case 'pair-messaging': {
+      if (!services.messaging) throw new Error('消息平台绑定不可用');
+      const { root } = await inspectWorkspace(request.path, false);
+      return services.messaging.pair(request.platform, root);
+    }
+    case 'revoke-messaging-binding':
+      services.messaging?.revoke(request.platform, request.userId);
+      return { bindings: services.messaging?.list(request.platform) ?? [] };
     case 'server-directories':
       return listServerDirectories(request.path ?? services.directoryRoot ?? process.cwd());
     case 'recent-workspaces':

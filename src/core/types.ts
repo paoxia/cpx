@@ -13,6 +13,9 @@ export interface Command {
   userName: string;
   /** 消息平台会话路由，不作为用户身份或权限标识。 */
   replyRouteId?: string;
+  privateChat?: boolean;
+  platformMessageId?: string;
+  platformAppId?: string;
   rawText: string;
   name: string;
   args: Record<string, unknown>;

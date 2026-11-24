@@ -409,7 +409,7 @@ Web 控制台在内网部署后即可使用，不需要公网入口。进入“�
 - 两个平台均由 cpx 主动建立 WebSocket/Stream 连接，不配置 HTTP 回调地址，也不配置固定群 Webhook；
 - 保存后在页面确认“已连接”，再向机器人发消息。回复会发送到产生该消息的会话。
 
-要从机器人操作会话工作台，可在极空间文件管理器编辑挂载到 `/app/config` 的 `config.yaml`。将 `messagingWorkspaceRoot` 指向容器内工作区，如 `/app/data/digital-avatar`。向机器人发送 `/whoami`，把返回的用户 ID 写入对应平台的 `workspaceUsers`。使用 Compose 页面重启服务后，在工作区页打开同一个目录。
+要从机器人操作已有的 cpx 会话，先在网页打开现有工作区，再在「消息平台 → 绑定工作区」生成绑定消息并发给机器人私聊。绑定结果在 cpx 的 SQLite 数据中，升级时保留 `data` 挂载。既有 `messagingWorkspaceRoot` 和 `workspaceUsers` 配置仍可继续使用。可在极空间 Compose 环境变量中设置 `AGENT_WORKSPACE_CONSOLE_URL` 为可访问的控制台地址，使机器人结果带有原会话链接。链接继续由工作区访问密码保护。
 
 配置示例和命令见 [飞书与钉钉自然语言操作](../README.md#飞书与钉钉自然语言操作)。
 
