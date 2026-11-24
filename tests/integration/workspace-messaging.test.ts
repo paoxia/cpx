@@ -29,6 +29,10 @@ it('在网页、钉钉和飞书之间共享 Codex 线程，分别保留当前会
 const fs = require('node:fs');
 const path = require('node:path');
 const prompt = fs.readFileSync(0, 'utf8');
+const useGitHub = prompt.includes('本轮已授权使用 cpx');
+if ((process.env.GH_TOKEN === 'ghp_cpx_fixture_only') !== useGitHub) process.exit(6);
+if (process.env.AGENT_GITHUB_TOKEN || process.env.AGENT_WORKSPACE_WEB_TOKEN) process.exit(7);
+if (useGitHub) console.error('credential redaction fixture ' + process.env.GH_TOKEN);
 const emit = (event) => console.log(JSON.stringify(event));
 if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
   emit({type:'item.completed', item:{type:'agent_message', text:'{"name":"shared-session","title":"跨端会话"}'}});
@@ -61,6 +65,7 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
         storage: { path: join(fixture, 'agent.db') },
         logging: { level: 'error' },
         messagingWorkspaceRoot: root,
+        github: { token: 'ghp_cpx_fixture_only' },
         dingtalk: { enabled: false, workspaceUsers: ['ding-owner'] },
         feishu: { enabled: false, workspaceUsers: ['ou-owner'] },
       }),
@@ -93,9 +98,11 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
       userName: 'Feishu',
       replyRouteId: 'oc-chat:ou-owner',
     };
-    const browser = await web('run-story', { description: '浏览器发起的想法' });
+    const browser = await web('run-story', { description: '浏览器发起的想法', useGitHub: true });
     const initial = await system.getWebConsole().getStoryRunner().waitForRun(browser.id);
     expect(initial).toMatchObject({ status: 'completed', response: '已创建线程' });
+    expect(initial.logs.join(' ')).toContain('credential redaction fixture [REDACTED]');
+    expect(JSON.stringify(initial)).not.toContain('ghp_cpx_fixture_only');
     const id = initial.storyId!;
     expect(readdirSync(join(root, 'story'))).toEqual(['.gitkeep']);
 
@@ -154,6 +161,10 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
       '来自飞书的普通消息',
     ]);
     expect(readdirSync(join(root, 'story'))).toEqual(['.gitkeep']);
+
+    const resumed = await web('run-story', { id, description: '浏览器不勾选授权' });
+    expect(await system.getWebConsole().getStoryRunner().waitForRun(resumed.id))
+      .toMatchObject({ status: 'completed', response: '已继续原线程' });
 
     const alternate = await waitForTurn('/new 开第二个会话', ding);
     expect(alternate.storyId).not.toBe(id);

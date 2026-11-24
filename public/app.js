@@ -103,6 +103,7 @@ const elements = {
   storyDescription: document.querySelector('#story-description'),
   storyDescriptionLabel: document.querySelector('#story-description-label'),
   storySubmit: document.querySelector('#story-submit'),
+  storyUseGitHub: document.querySelector('#story-use-github'),
   storyFeedback: document.querySelector('#story-feedback'),
   storyRun: document.querySelector('#story-run'),
   storyRunStatus: document.querySelector('#story-run-status'),
@@ -1069,6 +1070,7 @@ function renderWorkspace(workspace) {
   const changed = previous?.root !== workspace.root || previous?.repository !== workspace.repository;
   if (changed) {
     state.sessionSelection += 1;
+    elements.storyUseGitHub.checked = false;
     renderStoryRun(null);
     renderStory(null);
     state.workspaceFile = null;
@@ -1449,7 +1451,10 @@ function renderStory(story) {
   elements.storyContent.textContent = story?.content || '';
   elements.storyGitHubLink.hidden = !story?.url;
   elements.storyGitHubLink.href = story?.url || '#stories';
-  if (changed) elements.storyDescription.value = '';
+  if (changed) {
+    elements.storyDescription.value = '';
+    elements.storyUseGitHub.checked = false;
+  }
   elements.storyDescription.placeholder = story ? '补充需求或继续讨论…' : '告诉 Codex 你想做什么…';
   elements.storyDescriptionLabel.textContent = story ? '继续会话' : '描述需求';
   if (changed) renderSessionList();
@@ -1495,11 +1500,13 @@ async function submitStory(event) {
       operation: 'run-story',
       path: workspace.root,
       ...(current ? { id: current.id } : {}),
+      useGitHub: elements.storyUseGitHub.checked,
       description: elements.storyDescription.value.trim(),
     });
     if (state.workspace !== workspace) return;
     renderStoryRun(run);
     elements.storyDescription.value = '';
+    elements.storyUseGitHub.checked = false;
     workspaceFeedback(elements.storyFeedback, '');
   } catch (error) {
     workspaceFeedback(elements.storyFeedback, error.message, true);

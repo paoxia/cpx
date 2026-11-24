@@ -74,8 +74,7 @@ export class WorkspaceSessionMessages {
 
     if (!prompt || prompt.length > 20_000) return reply('请输入 1 到 20,000 字的消息。', false);
     const run = await this.runner.start(root, prompt, storyId, {
-      routeKey,
-      startNew: args.action === 'new',
+      messaging: { routeKey, startNew: args.action === 'new' },
     });
     return { ...reply('已提交给 Codex，完成后会在这里回复。'), data: { runId: run.id } };
   }

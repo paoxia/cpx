@@ -61,6 +61,7 @@ export interface PreparedAgentWorkspace {
   directory: string;
   writableRoot?: string;
   readOnly?: boolean;
+  useGitHub?: boolean;
   onThreadStarted?: (threadId: string) => void;
 }
 
@@ -603,6 +604,12 @@ export class AgentTaskManager {
         delete env[name];
       }
     }
+    if (prepared?.useGitHub && !prepared.readOnly) {
+      const token = this.secrets.githubToken?.trim();
+      if (!token) throw new Error('请先在 cpx 的 GitHub 页面连接账号，再使用本轮 GitHub 授权。');
+      env.GH_TOKEN = token;
+      env.GH_PROMPT_DISABLED = '1';
+    }
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
     const legacyApiKey = this.secrets.openaiApiKey;
     adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
@@ -855,7 +862,10 @@ export class AgentTaskManager {
     useShellOnWindows = false,
   ): Promise<{ stdout: string; stderr: string }> {
     this.assertNotCancelled(task);
-    this.addLog(task, 'system', `$ ${command} ${args.filter((arg) => arg !== '-').join(' ')}`);
+    const githubToken = env.GH_TOKEN || env.CPX_GITHUB_TOKEN;
+    const redact = (value: string): string =>
+      githubToken ? value.split(githubToken).join('[REDACTED]') : value;
+    this.addLog(task, 'system', redact(`$ ${command} ${args.filter((arg) => arg !== '-').join(' ')}`));
 
     return new Promise((resolvePromise, reject) => {
       const child = spawn(command, args, {
@@ -898,14 +908,14 @@ export class AgentTaskManager {
             }
             const response = extractAgentResponse(line);
             if (response) {
-              const finalResponse = response.slice(0, 16_384);
+              const finalResponse = redact(response).slice(0, 16_384);
               task.lastAgentResponse = finalResponse;
               this.currentTurn(task).response = finalResponse;
             }
           }
           const message = captureAgentJson ? formatAgentEvent(line) : line;
           if (message) {
-            this.addLog(task, stream, message);
+            this.addLog(task, stream, redact(message));
           }
         }
         if (stream === 'stdout') {
@@ -948,7 +958,7 @@ export class AgentTaskManager {
           return;
         }
         if (code !== 0) {
-          reject(new AgentProcessError(command, code, stderr, stdout));
+          reject(new AgentProcessError(command, code, redact(stderr), redact(stdout)));
           return;
         }
         resolvePromise({ stdout, stderr });

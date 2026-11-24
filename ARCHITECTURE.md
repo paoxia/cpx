@@ -86,6 +86,8 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `src/workspace/StoryRunner.ts` 管理会话工作台的异步执行，复用 `AgentTaskManager` 的模型配置和 Codex 进程。新会话以 `session-<UUID>` 标识，标题取首条消息；直接以工作区根目录启动，不进行额外命名调用，也不自动创建 Story。提示词要求仅按用户明确指令创建或编辑需求说明。旧版 Story 会话仍从原目录启动，文件保留。工作区 Git 元数据中的 `cpx/sessions.db` 保存会话标题、Codex 线程 ID、各轮消息、回复及状态；旧表的 `story_id` 字段兼容存储新会话 ID，新增 metadata 表而不改写旧绑定。之后通过 `codex exec resume <thread-id>` 续接，按每轮读取的沙箱配置限制可写范围。会话列表合并新元数据与旧 Story 绑定，按最近轮次排序，实时日志留在进程中。
 
+`WebConsole` 在启动和连接 GitHub 时将当前 Token 同步给 `StoryRunner` 的任务管理器。工作区的网页请求通过可选 `useGitHub` 开关按轮授权。仅显式授权的工作区轮次向 Codex 子进程提供 `GH_TOKEN`，方便 `gh` 和 `make init-gh` 使用。
+
 目录标签页按需读取本地目录或 GitHub 仓库对应目录。选择文件时，`WorkspaceRoutes` 按来源读取工作区内的普通文件，两个来源共用 `WorkspaceFile.ts` 的大小检查和预览格式识别。浏览器将文本作为纯文本展示。
 
 配置优先级从低到高为：代码默认值、`config.yaml`、`permissions.yaml`、`AGENT_` 环境变量。npm CLI 默认以 `CPX_HOME`（未设置时为 `~/.cpx`）为运行根目录，配置、数据、日志和 PID 分目录保存；配置中的相对存储、Skill 与日志路径以配置目录的父目录为基准解析。Docker 通过 `-d /app/config` 保持 `/app` 为运行根。运行时会监听 YAML 文件；目前热更新会应用日志级别与权限配置，其他组件仍使用启动时配置。

@@ -892,6 +892,20 @@ select:focus-visible {
 .session-composer textarea::placeholder { color: var(--session-muted); }
 .session-composer textarea:focus-visible { outline: none; }
 
+.session-github-authorization {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 10px;
+  color: var(--session-muted);
+  font-size: 12px;
+}
+
+.session-github-authorization input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .session-composer-actions,
 .story-run .story-actions {
   display: flex;

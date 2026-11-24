@@ -33,15 +33,20 @@ export class StoryRunner {
     this.tasks = new AgentTaskManager(join(runtime, 'tasks'), logger, undefined, sandboxMode);
   }
 
+  setGitHubToken(token: string | undefined): void {
+    this.tasks.setSecrets({ githubToken: token });
+  }
+
   async start(
     path: string,
     description: string,
     storyId?: string,
-    messaging?: { routeKey: string; startNew: boolean },
+    options: { messaging?: { routeKey: string; startNew: boolean }; useGitHub?: boolean } = {},
   ) {
     const { root } = await inspectWorkspace(path);
     const store = await this.workspaceStore(root);
     if (this.stopped) throw new Error('Story 执行服务已停止');
+    const { messaging, useGitHub } = options;
     if (messaging) {
       if (!storyId && !messaging.startNew)
         storyId = store.currentMessagingStory(messaging.routeKey);
@@ -64,7 +69,7 @@ export class StoryRunner {
     this.runs.set(run.id, run);
     this.executions.set(
       run.id,
-      this.perform(run, store)
+      this.perform(run, store, useGitHub)
         .catch((error: unknown) => {
           run.error = error instanceof Error ? error.message : String(error);
           run.status = 'failed';
@@ -189,7 +194,7 @@ export class StoryRunner {
     return { ...turn, path, story, session };
   }
 
-  private async perform(run: StoryRun, store: WorkspaceSessions): Promise<void> {
+  private async perform(run: StoryRun, store: WorkspaceSessions, useGitHub?: boolean): Promise<void> {
     try {
       const { description } = run;
       const configurations = this.configurations();
@@ -210,6 +215,7 @@ export class StoryRunner {
         '默认不创建 Story、需求说明或过程记录文件。只有用户明确要求时才创建；已有 Story 可继续使用。保留原有未提交改动，开发位置、分支和 worktree 规则按工作区规约和用户明确指令执行。',
         '会话消息和答复由 cpx 保存，无需写入项目文件。仅在用户明确要求时创建或修改需求说明。',
         '请实际执行需求并运行相关验证。提交、推送、创建 PR 或归档遵照用户授权和工作区规约。最后汇报具体改动、验证结果和待处理项。',
+        ...(useGitHub ? ['本轮已授权使用 cpx 连接的 GitHub 账号。可直接运行 gh，无需再次登录，也不要读取或输出凭据。'] : []),
         `本轮用户需求：\n${description}`,
       ].join('\n');
       run.status = 'running';
@@ -218,6 +224,7 @@ export class StoryRunner {
         {
           directory: story?.directory ?? run.path,
           writableRoot: run.path,
+          useGitHub,
           onThreadStarted: (id) => store.bindThread(sessionId, id),
         },
         prompt,

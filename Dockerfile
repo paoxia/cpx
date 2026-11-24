@@ -34,11 +34,11 @@ FROM node:22-slim AS runtime
 ARG NPM_REGISTRY
 ARG APT_MIRROR
 
-# 系统依赖：git、gh、SSH 客户端、curl、CA 证书
+# 系统依赖：git、gh、make、SSH 客户端、curl、CA 证书
 # gh 使用 Debian 仓库中的软件包，避免构建时再访问 GitHub CLI 的 APT 仓库。
 RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
   && apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git gh gnupg openssh-client \
+    ca-certificates curl git gh gnupg make openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
 # 全局安装 Codex CLI

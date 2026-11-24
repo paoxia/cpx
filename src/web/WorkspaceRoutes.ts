@@ -69,6 +69,7 @@ const payload = z.discriminatedUnion('operation', [
     path: workspacePath,
     id: session.optional(),
     description,
+    useGitHub: z.boolean().optional(),
   }),
   z.object({
     operation: z.literal('latest-story-run'),
@@ -255,7 +256,9 @@ async function runOperation(
     case 'stop-story-run':
       if (!storyRunner) throw new Error('Story 执行服务不可用');
       if (request.operation === 'run-story')
-        return storyRunner.start(request.path, request.description, request.id);
+        return storyRunner.start(request.path, request.description, request.id, {
+          useGitHub: request.useGitHub,
+        });
       if (request.operation === 'latest-story-run')
         return storyRunner.latest(request.path, request.id, request.knownRunId);
       if (request.operation === 'stop-story-run') return storyRunner.cancel(request.id);

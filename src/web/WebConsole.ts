@@ -158,6 +158,7 @@ export class WebConsole {
     this.storyRunner = new StoryRunner(dataDir, logger, () => this.executionConfigurations(true), sandboxMode);
     this.githubToken = options.githubToken?.trim() || undefined;
     this.githubTokenSource = this.githubToken ? (options.githubTokenSource ?? 'file') : 'none';
+    this.storyRunner.setGitHubToken(this.githubToken);
     if (this.githubToken) {
       this.taskManager.setSecrets({ githubToken: this.githubToken });
     }
@@ -484,6 +485,7 @@ export class WebConsole {
           this.githubTokenSource = 'file';
         }
         this.githubToken = token;
+        this.storyRunner.setGitHubToken(token);
         this.githubConnection = connection;
         this.taskManager.setSecrets({ githubToken: token });
         this.onGitHubTokenConnected?.(token);

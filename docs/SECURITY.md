@@ -51,6 +51,8 @@
 
 GitHub 同样受工作区令牌保护，只接受 GitHub 仓库标识与地址，统一经 HTTPS 克隆到数据库相邻的持久化工作区目录。GitHub 凭据使用当前控制台连接的 Token，经临时 AskPass 的子进程环境传递，不写入 URL、日志或 `.git/config`；克隆结束或失败后清理 helper。复用已有目录前核对本地 `main` 和 `origin`，不自动拉取、覆盖改动或跟随目标目录的符号链接。
 
+网页工作区通过「本轮使用 GitHub 授权」显式将已连接的 GitHub Token 以 `GH_TOKEN` 提供给本轮 Codex 进程及其命令。授权范围为 Token 自身的权限，本轮命令可以读取该变量。cpx 不记录这个值，并遮蔽任务输出中的原值。网页授权开关默认关闭，不继承给后续轮次或消息平台会话。
+
 HTTP 请求体上限为 10 MB，但当前服务没有内置 TLS、速率限制或通用身份认证。公网部署需要由可信网关提供这些能力。
 
 `POST /api/console/codex-sandbox` 与其他设置检查一样由部署环境保护，只执行固定命令。启用沙箱时通过 `codex sandbox` 检查，完全访问时直接执行固定 Node 命令，不调用模型，也不在失败后降级权限。显式保存 `danger-full-access` 后，工作区任务、命名及消息协调从下一轮起不创建 Codex 内部沙箱，文件和网络访问范围扩大为服务进程的权限；Docker 仅提供外层容器权限和挂载边界，工作区之间、cpx 配置和凭据之间不再有 Codex 沙箱边界。其他模式保留对应工作区/只读限制。Docker Compose 提供 `seccomp=unconfined` 和 `apparmor=unconfined` 以兼容内部沙箱，只在重新创建容器时应用；关闭内部沙箱后可以移除这两项，使用 Docker 默认安全策略。
