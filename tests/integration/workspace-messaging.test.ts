@@ -1,6 +1,7 @@
 import { once } from 'events';
 import {
   chmodSync,
+  readdirSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -32,7 +33,7 @@ const emit = (event) => console.log(JSON.stringify(event));
 if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
   emit({type:'item.completed', item:{type:'agent_message', text:'{"name":"shared-session","title":"跨端会话"}'}});
 } else {
-  const thread = 'native-' + path.basename(process.cwd());
+  const thread = process.argv.find(x => x.startsWith('native-')) || 'native-' + require('crypto').randomUUID();
   const resume = process.argv.includes('resume');
   if (resume && !process.argv.includes(thread)) process.exit(2);
   emit({type:'thread.started', thread_id:thread});
@@ -96,8 +97,7 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
     const initial = await system.getWebConsole().getStoryRunner().waitForRun(browser.id);
     expect(initial).toMatchObject({ status: 'completed', response: '已创建线程' });
     const id = initial.storyId!;
-    const file = join(root, 'story', id, '说明.md');
-    const document = readFileSync(file, 'utf8');
+    expect(readdirSync(join(root, 'story'))).toEqual(['.gitkeep']);
 
     const unauthorized = await system.processCommand('/sessions', { ...ding, userId: 'guest' });
     expect(unauthorized).toMatchObject({
@@ -153,14 +153,14 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
       '来自钉钉的普通消息',
       '来自飞书的普通消息',
     ]);
-    expect(readFileSync(file, 'utf8')).toBe(document);
+    expect(readdirSync(join(root, 'story'))).toEqual(['.gitkeep']);
 
     const alternate = await waitForTurn('/new 开第二个会话', ding);
     expect(alternate.storyId).not.toBe(id);
     expect(alternate.response).toBe('已创建线程');
     expect((await web('sessions')).sessions).toEqual([
-      { id: alternate.storyId, title: '跨端会话' },
-      { id, title: '跨端会话' },
+      { id: alternate.storyId, title: '开第二个会话' },
+      { id, title: '浏览器发起的想法' },
     ]);
 
     await system.stop();
@@ -172,7 +172,7 @@ if (prompt.includes('负责为一个 digital-avatar Story 起名')) {
     );
     expect((await waitForTurn('飞书仍在第一个会话', feishu)).storyId).toBe(id);
     expect((await system.processCommand('/new', ding)).message).toContain('下一条');
-    expect((await waitForTurn('开始第三个会话', ding)).storyId).toMatch(/-shared-session-3$/);
+    expect((await waitForTurn('开始第三个会话', ding)).storyId).toMatch(/^session-/);
   } finally {
     await system?.stop();
     vi.unstubAllEnvs();

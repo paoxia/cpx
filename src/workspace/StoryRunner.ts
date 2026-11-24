@@ -1,11 +1,9 @@
 import { randomUUID } from 'crypto';
-import { mkdirSync } from 'fs';
 import { join } from 'path';
-import { z } from 'zod';
 import { AgentModelConfiguration, AgentTask, AgentTaskManager } from '../agents/AgentTaskManager';
 import { CodexSandboxMode, configuredCodexSandbox } from '../agents/CodexSandbox';
 import { Logger } from '../utils/Logger';
-import { createLocalStory, localStorySummaries, readLocalStory } from './Story';
+import { localStorySummaries, readLocalStory } from './Story';
 import { inspectWorkspace, workspaceGitDirectory } from './Workspace';
 import { SessionTurn, WorkspaceSessions, terminalStatuses } from './WorkspaceSessions';
 
@@ -14,26 +12,12 @@ type LocalStory = Awaited<ReturnType<typeof readLocalStory>>;
 interface StoryRun extends SessionTurn {
   path: string;
   story?: LocalStory;
+  session?: { id: string; title?: string };
   taskId?: string;
 }
 
-const namingResult = z.object({
-  name: z
-    .string()
-    .min(2)
-    .max(64)
-    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  title: z
-    .string()
-    .trim()
-    .min(1)
-    .max(100)
-    .refine((title) => !/[\r\n]/.test(title)),
-});
-
 export class StoryRunner {
   private readonly tasks: AgentTaskManager;
-  private readonly namingDirectory: string;
   private readonly runs = new Map<string, StoryRun>();
   private readonly stores = new Map<string, WorkspaceSessions>();
   private readonly executions = new Map<string, Promise<void>>();
@@ -47,8 +31,6 @@ export class StoryRunner {
   ) {
     const runtime = join(dataDirectory, 'story-runs');
     this.tasks = new AgentTaskManager(join(runtime, 'tasks'), logger, undefined, sandboxMode);
-    this.namingDirectory = join(runtime, 'naming');
-    mkdirSync(this.namingDirectory, { recursive: true });
   }
 
   async start(
@@ -65,15 +47,20 @@ export class StoryRunner {
         storyId = store.currentMessagingStory(messaging.routeKey);
       if (storyId) this.requireMessagingStory(root, store, storyId);
     }
+    const session = storyId ? await this.readSession(root, store, storyId) : {
+      id: `session-${randomUUID()}`,
+      title: description.split(/\r?\n/, 1)[0].replace(/^#+\s*/, '').trim().slice(0, 100) || '新会话',
+    };
     const run: StoryRun = {
       id: randomUUID(),
       path: root,
       status: 'queued',
       createdAt: Date.now(),
       description,
-      storyId,
+      storyId: session.id,
+      session: { id: session.id, title: session.title },
     };
-    store.reserve(run, messaging?.routeKey);
+    store.reserve(run, messaging?.routeKey, storyId ? undefined : session.title);
     this.runs.set(run.id, run);
     this.executions.set(
       run.id,
@@ -96,13 +83,13 @@ export class StoryRunner {
 
   async listSessions(path: string) {
     const { root, store } = await this.openWorkspace(path);
-    return localStorySummaries(root, store.storyIds());
+    return this.sessionSummaries(root, store);
   }
 
   async listMessagingSessions(path: string, routeKey: string) {
     const { root, store } = await this.openWorkspace(path);
     return {
-      sessions: localStorySummaries(root, store.storyIds()),
+      sessions: this.sessionSummaries(root, store),
       current: store.currentMessagingStory(routeKey),
     };
   }
@@ -114,6 +101,25 @@ export class StoryRunner {
     return session;
   }
 
+  async session(path: string, id: string) {
+    const { root, store } = await this.openWorkspace(path);
+    return this.readSession(root, store, id);
+  }
+
+  private sessionSummaries(root: string, store: WorkspaceSessions) {
+    return store.storyIds().flatMap((id) => {
+      const metadata = store.metadata(id);
+      return metadata ? [metadata] : localStorySummaries(root, [id]);
+    });
+  }
+
+  private async readSession(root: string, store: WorkspaceSessions, id: string) {
+    const metadata = store.metadata(id);
+    if (metadata) return metadata;
+    const story = await readLocalStory(root, id);
+    return { ...story, title: story.content.match(/^#\s+(.+)$/m)?.[1] };
+  }
+
   async waitForRun(runId: string) {
     this.requireRun(runId);
     await this.executions.get(runId);
@@ -121,7 +127,7 @@ export class StoryRunner {
   }
 
   private requireMessagingStory(root: string, store: WorkspaceSessions, storyId: string) {
-    const session = store.thread(storyId) && localStorySummaries(root, [storyId])[0];
+    const session = store.metadata(storyId) ?? (store.thread(storyId) && localStorySummaries(root, [storyId])[0]);
     if (!session) throw new Error('会话不存在或已归档。发送 /sessions 查看可用会话。');
     return session;
   }
@@ -178,67 +184,31 @@ export class StoryRunner {
     const story = turn.storyId
       ? await readLocalStory(path, turn.storyId).catch(() => undefined)
       : undefined;
-    return { ...turn, path, story };
+    const store = this.stores.get(path)!;
+    const session = turn.storyId ? store.metadata(turn.storyId) ?? { id: turn.storyId } : undefined;
+    return { ...turn, path, story, session };
   }
 
   private async perform(run: StoryRun, store: WorkspaceSessions): Promise<void> {
     try {
       const { description } = run;
       const configurations = this.configurations();
-      let story: LocalStory;
-      if (run.storyId) {
-        story = await readLocalStory(run.path, run.storyId);
-      } else {
-        run.status = 'naming';
-        store.save(run);
-        const naming = this.tasks.createPreparedTask(
-          { directory: this.namingDirectory, readOnly: true },
-          [
-            '你负责为一个 digital-avatar Story 起名。直接返回单行 JSON，不调用工具。',
-            '字段 name：简短、可辨识的小写英文 kebab-case 标识（2 到 64 字符），不要加日期。',
-            '字段 title：与用户需求同语言的简短标题。用户明确给出标识或标题时优先沿用。',
-            '输出示例：{"name":"improve-task-console","title":"改进任务控制台"}',
-            `用户需求：\n${description}`,
-          ].join('\n'),
-          configurations,
-        );
-        run.taskId = naming.id;
-        const named = await this.tasks.waitForTerminal(naming.id);
-        if (terminalStatuses.has(run.status)) return;
-        this.requireSuccess(named);
-        const answer = named.lastAgentResponse?.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
-        let proposal: z.infer<typeof namingResult>;
-        try {
-          proposal = namingResult.parse(JSON.parse(answer ?? ''));
-        } catch {
-          throw new Error('Codex 没有返回有效的 Story 名称，请重新提交');
-        }
-        run.status = 'creating';
-        store.save(run);
-        story = await createLocalStory(
-          run.path,
-          description,
-          proposal.name,
-          new Date(run.createdAt),
-          proposal.title,
-          true,
-        );
-      }
+      const sessionId = run.storyId!;
+      const metadata = store.metadata(sessionId);
+      const story = metadata ? undefined : await readLocalStory(run.path, sessionId);
       run.story = story;
-      run.storyId = story.id;
+      run.session = metadata ?? { id: sessionId, title: story?.content.match(/^#\s+(.+)$/m)?.[1] };
       if (terminalStatuses.has(run.status)) return;
-
-      const threadId = store.thread(story.id);
+      const threadId = store.thread(sessionId);
       const prompt = [
         `digital-avatar 工作区根目录：${run.path}`,
-        `本轮 Story 目录：${story.directory}`,
-        `需求说明：${join(story.directory, story.file)}`,
+        ...(story ? [`已有 Story 目录：${story.directory}`, `需求说明：${join(story.directory, story.file)}`] : []),
         '先读取根 README.md 的项目职能与任务归属、根 AGENTS.md 和目标路径的规约。从整个工作区判断任务归属，可以涉及多个项目。',
         threadId
           ? '延续此 Codex 会话，结合已有对话处理本轮。'
           : '如有已有的需求说明，可读取它了解事项背景。',
-        '使用当前 Story，保留原有未提交改动。开发位置、分支和 worktree 规则按该工作区的 AGENTS.md 和用户明确指令执行。',
-        '会话消息和答复由 cpx 保存。仅在用户明确要求编辑需求说明时修改该文件。',
+        '默认不创建 Story、需求说明或过程记录文件。只有用户明确要求时才创建；已有 Story 可继续使用。保留原有未提交改动，开发位置、分支和 worktree 规则按工作区规约和用户明确指令执行。',
+        '会话消息和答复由 cpx 保存，无需写入项目文件。仅在用户明确要求时创建或修改需求说明。',
         '请实际执行需求并运行相关验证。提交、推送、创建 PR 或归档遵照用户授权和工作区规约。最后汇报具体改动、验证结果和待处理项。',
         `本轮用户需求：\n${description}`,
       ].join('\n');
@@ -246,9 +216,9 @@ export class StoryRunner {
       store.save(run);
       const task = this.tasks.createPreparedTask(
         {
-          directory: story.directory,
+          directory: story?.directory ?? run.path,
           writableRoot: run.path,
-          onThreadStarted: (id) => store.bindThread(story.id, id),
+          onThreadStarted: (id) => store.bindThread(sessionId, id),
         },
         prompt,
         configurations,
@@ -259,7 +229,7 @@ export class StoryRunner {
       if (terminalStatuses.has(run.status)) return;
       this.requireSuccess(outcome);
       run.response = outcome.lastAgentResponse;
-      if (!store.thread(story.id)) throw new Error('Codex 未返回线程 ID，无法绑定当前会话');
+      if (!store.thread(sessionId)) throw new Error('Codex 未返回线程 ID，无法绑定当前会话');
       run.status = 'completed';
     } catch (error) {
       if (!terminalStatuses.has(run.status)) {

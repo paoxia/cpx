@@ -85,6 +85,10 @@ export const MIGRATIONS = [
 ];
 
 export const WORKSPACE_SESSION_MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS workspace_session_metadata (
+    session_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS workspace_sessions (
     story_id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL UNIQUE

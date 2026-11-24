@@ -84,7 +84,7 @@ GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创�
 
 `src/web/GitHubWorkspace.ts` 使用控制台的 GitHub 客户端读取 `main` 的固定提交，并复用本地项目清单解析。`src/workspace/Story.ts` 管理本地 Story 文件，控制台从这些文件恢复需求和后续补充记录。
 
-`src/workspace/StoryRunner.ts` 管理会话工作台的异步执行。它复用 `AgentTaskManager` 的模型配置和 Codex 进程，先在只读环境中为需求命名，再以 Story 目录为 Codex 工作目录启动执行。可写范围为所选工作区，Codex 按该工作区规约识别项目和执行位置。初始需求写入 Story 说明。工作区 Git 元数据中的 `cpx/sessions.db` 以 Story ID 为会话标识，保存 Codex 线程 ID 和各轮消息、回复及状态。第一次执行收到 Codex 的线程事件时保存绑定，之后通过 `codex exec resume <thread-id>` 继续。会话列表从数据库读取已绑定线程，按最近一轮的顺序排列。实时运行日志留在 cpx 进程中。
+`src/workspace/StoryRunner.ts` 管理会话工作台的异步执行，复用 `AgentTaskManager` 的模型配置和 Codex 进程。新会话以 `session-<UUID>` 标识，标题取首条消息；直接以工作区根目录启动，不进行额外命名调用，也不自动创建 Story。提示词要求仅按用户明确指令创建或编辑需求说明。旧版 Story 会话仍从原目录启动，文件保留。工作区 Git 元数据中的 `cpx/sessions.db` 保存会话标题、Codex 线程 ID、各轮消息、回复及状态；旧表的 `story_id` 字段兼容存储新会话 ID，新增 metadata 表而不改写旧绑定。之后通过 `codex exec resume <thread-id>` 续接，按每轮读取的沙箱配置限制可写范围。会话列表合并新元数据与旧 Story 绑定，按最近轮次排序，实时日志留在进程中。
 
 目录标签页按需读取本地目录或 GitHub 仓库对应目录。选择文件时，`WorkspaceRoutes` 按来源读取工作区内的普通文件，两个来源共用 `WorkspaceFile.ts` 的大小检查和预览格式识别。浏览器将文本作为纯文本展示。
 

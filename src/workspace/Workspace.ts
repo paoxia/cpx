@@ -36,7 +36,7 @@ ${PROJECT_SECTION}
 
 ## 任务归属
 
-按项目职能定位目标，阅读根目录和目标路径适用的 AGENTS.md。涉及多个项目的任务共用一份 story。
+按项目职能定位目标，阅读根目录和目标路径适用的 AGENTS.md。默认直接处理任务，只有用户明确要求时才创建 story；已有任务沿用原 story。
 
 ## 工作区命令
 
@@ -46,8 +46,8 @@ ${PROJECT_SECTION}
 const GUIDELINES = `# 工作区规约
 
 - 根仓库保持在 main，使用 README.md 的项目职能与任务归属定位项目，并遵循目标路径适用的规约。
-- 新开发任务在 story/YYYY-MM-DD-需求名 记录说明和验证结果。已有任务沿用原 story，只读查询直接处理。
-- 子项目在 code/ 独立管理。默认在已有 main 或 master 上工作，保留已有改动。明确要求建分支时，在对应 story 下为每个项目创建或复用 worktree。
+- 默认不创建 story。只有用户明确要求时，才在 story/YYYY-MM-DD-需求名 记录说明和验证结果；已有任务沿用原 story。
+- 子项目在 code/ 独立管理。默认在已有 main 或 master 上工作，保留已有改动。明确要求建分支时，在已有 story 下为每个项目创建或复用 worktree；没有 story 时放在 .worktrees/YYYY-MM-DD-需求名/项目名，不为此创建 story。
 - 提交、推送和创建 PR 按用户授权执行。收到「保存所有」时，依次处理子项目和 worktree 的当前分支，再保存根仓库 main。使用该工作区的 Git 身份。
 - 收到明确归档指令后，将已完成任务的过程资料移到同名 archive/ 目录。确认成果已合入且现场无待保留改动后，再移除对应 worktree。
 `;
@@ -248,7 +248,7 @@ export async function initializeWorkspace(path: string): Promise<Workspace> {
     writeFileSync(join(staging, 'README.md'), README, { flag: 'wx' });
     writeFileSync(join(staging, 'AGENTS.md'), GUIDELINES, { flag: 'wx' });
     writeFileSync(join(staging, 'repos.txt'), '# 项目目录名 Git 克隆地址\n', { flag: 'wx' });
-    writeFileSync(join(staging, '.gitignore'), '/code/\n/story/*/*/\n.DS_Store\n', { flag: 'wx' });
+    writeFileSync(join(staging, '.gitignore'), '/code/\n/story/*/*/\n/.worktrees/\n.DS_Store\n', { flag: 'wx' });
     mkdirSync(join(staging, 'code'));
     for (const directory of ['story', 'archive']) {
       mkdirSync(join(staging, directory));

@@ -33,7 +33,7 @@ export class WorkspaceSessions {
     })();
   }
 
-  reserve(turn: SessionTurn, routeKey?: string): void {
+  reserve(turn: SessionTurn, routeKey?: string, title?: string): void {
     this.db
       .transaction(() => {
         this.recoverInterruptedTurn();
@@ -53,6 +53,10 @@ export class WorkspaceSessions {
             process.pid,
             turn.description,
           );
+        if (title && turn.storyId) {
+          this.db.prepare('INSERT INTO workspace_session_metadata (session_id, title) VALUES (?, ?)')
+            .run(turn.storyId, title);
+        }
         if (routeKey) this.saveMessagingSelection(routeKey, null, turn.id);
       })
       .immediate();
@@ -84,26 +88,30 @@ export class WorkspaceSessions {
       .get(storyId)?.threadId;
   }
 
+  metadata(id: string): { id: string; title: string } | undefined {
+    return this.db.prepare<[string], { id: string; title: string }>(
+      'SELECT session_id AS id, title FROM workspace_session_metadata WHERE session_id = ?',
+    ).get(id);
+  }
+
   storyIds(): string[] {
-    return this.db
-      .prepare<[], { storyId: string }>(
-        `SELECT sessions.story_id AS storyId
-         FROM workspace_sessions AS sessions
-         JOIN workspace_session_turns AS turns ON turns.story_id = sessions.story_id
-         GROUP BY sessions.story_id
-         ORDER BY MAX(turns.rowid) DESC`,
-      )
-      .all()
-      .map(({ storyId }) => storyId);
+    return this.db.prepare<[], { storyId: string }>(
+      `SELECT turns.story_id AS storyId FROM workspace_session_turns AS turns
+       LEFT JOIN workspace_sessions AS sessions ON sessions.story_id = turns.story_id
+       LEFT JOIN workspace_session_metadata AS metadata ON metadata.session_id = turns.story_id
+       WHERE sessions.story_id IS NOT NULL OR metadata.session_id IS NOT NULL
+       GROUP BY turns.story_id ORDER BY MAX(turns.rowid) DESC`,
+    ).all().map(({ storyId }) => storyId);
   }
 
   currentMessagingStory(routeKey: string): string | undefined {
     return this.db
       .prepare<[string], { storyId: string }>(
-        `SELECT sessions.story_id AS storyId
+        `SELECT COALESCE(sessions.story_id, metadata.session_id) AS storyId
          FROM workspace_messaging_selections AS selection
          LEFT JOIN workspace_session_turns AS turns ON turns.id = selection.run_id
-         JOIN workspace_sessions AS sessions ON sessions.story_id = COALESCE(selection.story_id, turns.story_id)
+         LEFT JOIN workspace_sessions AS sessions ON sessions.story_id = COALESCE(selection.story_id, turns.story_id)
+         LEFT JOIN workspace_session_metadata AS metadata ON metadata.session_id = COALESCE(selection.story_id, turns.story_id)
          WHERE selection.route_key = ?`,
       )
       .get(routeKey)?.storyId;

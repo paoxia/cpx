@@ -1407,7 +1407,7 @@ function selectSessionTab(tab) {
 function renderSessionTitle() {
   elements.storyTitle.textContent = state.sessionTab === 'directory'
     ? state.workspaceFile?.path.split('/').at(-1) || '目录结构'
-    : state.story?.content.match(/^#\s+(.+)$/m)?.[1] || state.story?.id || '新会话';
+    : state.story?.title || state.story?.content?.match(/^#\s+(.+)$/m)?.[1] || state.story?.id || '新会话';
 }
 
 function setSessionRail(open) {
@@ -1442,8 +1442,8 @@ function renderStory(story) {
   renderSessionTitle();
   elements.sessionWelcome.hidden = Boolean(story || state.storyRun);
   elements.sessionRecord.hidden = !story?.content;
-  elements.storyLocation.hidden = !story;
-  elements.storyLocation.textContent = story ? `story/${story.id}/${story.file}` : '';
+  elements.storyLocation.hidden = !story?.directory;
+  elements.storyLocation.textContent = story?.directory ? `story/${story.id}/${story.file}` : '';
   elements.storyLocation.title = story?.directory ? `${story.directory}/${story.file}` : '';
   elements.storyContent.hidden = !story;
   elements.storyContent.textContent = story?.content || '';
@@ -1460,7 +1460,7 @@ async function openStory(id) {
   if (!workspace || storyRunActive(state.storyRun)) return;
   const selection = ++state.sessionSelection;
   const payload = workspace.root
-    ? { operation: 'story', path: workspace.root, id }
+    ? { operation: 'session', path: workspace.root, id }
     : { operation: 'github-story', repository: workspace.repository, id };
   try {
     const story = await callWorkspace(payload);
@@ -1529,14 +1529,15 @@ function renderStoryRun(run) {
     elements.sessionMessages.replaceChildren();
     return;
   }
-  if (run.story && (state.story?.id !== run.story.id || previous?.story?.content !== run.story.content)) {
-    renderStory(run.story);
+  const session = run.story || run.session;
+  if (session && (state.story?.id !== session.id || previous?.story?.content !== run.story?.content || state.story?.title !== session.title)) {
+    renderStory(session);
   }
   if (previous?.id !== run.id) elements.sessionLog.open = false;
   elements.storyRunStatus.textContent = {
     queued: '等待 Codex',
     naming: 'Codex 正在命名会话',
-    creating: '正在建立会话工作区',
+    creating: '正在建立会话',
     running: 'Codex 正在执行需求',
     completed: 'Codex 已完成',
     failed: '执行失败',

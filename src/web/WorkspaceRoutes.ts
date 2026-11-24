@@ -43,6 +43,7 @@ const workspacePath = z.string().trim().min(1).max(4096).refine(isAbsolute, '工
 const remote = z.string().trim().min(1).max(2048);
 const description = z.string().trim().min(1).max(20000);
 const story = z.string().regex(storyId);
+const session = z.string().refine((id) => storyId.test(id) || /^session-[0-9a-f-]{36}$/.test(id));
 const runId = z.string().uuid();
 const directory = z.string().max(4096).default('');
 const file = z.string().min(1).max(4096);
@@ -61,17 +62,18 @@ const payload = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('github-story'), repository: remote, id: story }),
   z.object({ operation: z.literal('stories'), path: workspacePath }),
   z.object({ operation: z.literal('sessions'), path: workspacePath }),
+  z.object({ operation: z.literal('session'), path: workspacePath, id: session }),
   z.object({ operation: z.literal('story'), path: workspacePath, id: story }),
   z.object({
     operation: z.literal('run-story'),
     path: workspacePath,
-    id: story.optional(),
+    id: session.optional(),
     description,
   }),
   z.object({
     operation: z.literal('latest-story-run'),
     path: workspacePath,
-    id: story.optional(),
+    id: session.optional(),
     knownRunId: runId.optional(),
   }),
   z.object({ operation: z.literal('story-run'), id: runId, path: workspacePath.optional() }),
@@ -241,6 +243,9 @@ async function runOperation(
     }
     case 'story':
       return readLocalStory(request.path, request.id);
+    case 'session':
+      if (!storyRunner) throw new Error('会话执行服务不可用');
+      return storyRunner.session(request.path, request.id);
     case 'sessions':
       if (!storyRunner) throw new Error('Story 执行服务不可用');
       return { sessions: await storyRunner.listSessions(request.path) };
