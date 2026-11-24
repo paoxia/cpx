@@ -4,7 +4,7 @@
 
 ## 系统概览
 
-cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 `@paoxia/cpx` npm 包的全局 `cpx` 命令或 Docker 启动。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台；聊天命令与控制台 API 复用一个 `AgentTaskManager`，把任务委托给本机 Codex CLI，并在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
+cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 `@paoxia/cpx` npm 包的全局 `cpx` 命令或 Docker 启动。它通过钉钉 Stream、飞书 WebSocket 长连接或本地 HTTP 测试端点接收命令，将命令解析后交给统一路由，并按需调用 GitHub、Coding Agent、Skill 或 MCP 模块。同一 HTTP 服务还提供 Web 开发控制台。网页与消息平台可以共用工作区会话。工作区会话和独立 GitHub 任务使用各自的 `AgentTaskManager` 调用本机 Codex CLI，在额度耗尽或鉴权失败时按有序 Codex 配置自动切换。配置、连接状态和审计记录存储在本地文件与 SQLite 中。
 
 ```text
 钉钉 / 飞书 / HTTP
@@ -25,16 +25,12 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
                                     SQLite / 日志 / 平台回传
 ```
 
-开发控制台 API 不经过聊天命令解析器和权限管理器，但与聊天开发命令汇合到同一个任务管理器：
+工作区会话共用 `StoryRunner`。GitHub 任务使用自己的执行入口。
 
 ```text
-浏览器 → WebConsole API ─────────────┐
-                                    ├→ AgentTaskManager → 完整仓库缓存 → Git worktree → Codex / resume
-聊天 → CommandRouter → 协调 Codex ──cpx_platform MCP──┐
-                         │                            │
-                         └→ WebConsole ──────────────┴→ AgentTaskManager → worktree Codex → Git + gh
-                                                       │ cpx_platform MCP
-                                                       ▼
+浏览器 → 工作区 API → StoryRunner → AgentTaskManager → 工作区 Codex / resume
+钉钉 / 飞书 → CommandRouter → WorkspaceSessionMessages → StoryRunner
+聊天 → CommandRouter → 协调 Codex → cpx_platform MCP → AgentTaskManager → worktree Codex → Git + gh
 原会话 ← MessagingIntegration ← 会话/任务专属 Token 校验的 HTTP 路由
 
 浏览器 → WebConsole API → AgentAuthManager → Codex 官方 CLI 登录与状态检查
@@ -55,6 +51,7 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 | `src/mcp/`            | JSON-RPC 2.0 与 stdio、WebSocket、HTTP 三种 MCP 传输                                |
 | `src/agents/`         | 运行消息协调 Codex；同步仓库缓存、创建 worktree、持续运行任务 Codex 并按授权更新 PR |
 | `src/web/`、`public/` | 控制台静态资源、模型设置和任务 HTTP API                                             |
+| `src/workspace/`      | CLI 和控制台共用的工作区初始化、只读检查、通用 Git 克隆和 `code/` 项目登记           |
 | `src/permissions/`    | 命令黑名单、Git 分支规则、危险操作确认和审计记录                                    |
 | `src/storage/`        | SQLite 连接与幂等建表迁移                                                           |
 | `src/utils/`          | 日志、HTTP、重试和错误类型                                                          |
@@ -62,18 +59,36 @@ cpx 是一个运行在单个 Node.js 进程中的 TypeScript 应用，可通过 
 ## 请求流程
 
 1. `MessagingIntegrationManager` 主动建立钉钉 Stream 和飞书 WebSocket 连接；`HttpServer` 的 `/command` 仅用于本地测试与集成调试。
-2. `CommandParser` 去除平台前缀，将飞书和钉钉普通文本转换为 `agent_chat`；仅 `/new`、`/tasks`、`/status`、`/stop`、`/help` 和确认流程保留确定性入口。旧文本命令继续兼容；当会话已有任务时，`AgentSystem` 会把非生命周期文本改回 `agent_chat`，避免旧命令抢走 Codex 上下文。
+2. `CommandParser` 去除平台前缀。配置工作区时，普通文本与会话控制命令进入 `workspace_session`。独立 GitHub 任务流程使用 `agent_chat` 及原有任务控制命令。
 3. `CommandRouter` 调用 `PermissionManager`。被禁止的命令直接拒绝；需要确认的命令写入 SQLite，确认后重新分派原命令。
-4. 当前会话没有任务时，`MessagingCoordinator` 在独立非 Git 目录中用只读沙箱启动或恢复 Codex。协调 Codex 只能通过 `cpx_platform` 查询仓库/分支和管理当前用户任务；仓库明确后由工具创建异步开发任务。已有任务时，文本直接恢复 worktree 中的任务 Codex。
+4. `WorkspaceSessionMessages` 校验平台发送者，按平台、用户和聊天定位工作区内的会话选择。文本经过和浏览器相同的 `StoryRunner` 创建或恢复 Codex 线程。独立 GitHub 任务流程由 `MessagingCoordinator` 在只读目录协调，用 `cpx_platform` 查询仓库、分支和管理用户任务。
 5. 即时受理结果写入审计日志，并由 `ResponseFormatter` 转换为来源平台的消息格式。协调回复和 Coding Agent 终态都回到原会话。`cpx_platform` stdio 服务使用会话或任务专属 Bearer Token 访问内部 HTTP 路由；服务端固定平台、用户和会话，并再次校验任务归属。
 
-控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，但强制使用 `--skip-git-repo-check` 与只读沙箱。创建任务时，控制台或协调工具可通过 GitHub API 分页读取仓库分支；`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。Web 控制台以任务列表、会话流和统一底部输入框组织新建与续写，不展示 PR 发布入口；聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
+控制台将多套 Codex 配置持久化到数据库相邻的 `console-settings.json`，每项包含 id、名称、模型和推理强度，不保存 API Key。`CodexModelCatalog` 在登录后运行 `codex debug models`，读取与交互式 `/model` 同源的账号模型目录以及每个模型支持的推理强度。`ModelConfigurationTester` 使用当前配置调用 Codex CLI，从 JSONL 事件中提取最终文本回复；测试内容和回复不持久化。消息协调和代码任务复用同一有序模型配置与额度/鉴权回退策略；协调会话记录自己的 Codex `thread_id`，使用 `--skip-git-repo-check`，除显式完全访问外采用只读沙箱。创建聊天开发任务时，协调工具可通过 GitHub API 分页读取仓库分支。`AgentTaskManager` 首次把完整仓库克隆到 `repositories/<owner>/<repo>`，后续串行 fetch 同一缓存，并从远端基础分支创建独立 worktree。任务记录独立的 Codex `thread_id`，每个 turn 同时保存用户 prompt 与 Agent 最终回复；追加 prompt 时使用 `codex exec resume` 复用会话和工作区。聊天开发任务默认创建 PR，后续轮次向同一分支和 PR 推送。协调会话、聊天任务和最近日志保存在进程内，仓库缓存与工作区保存在磁盘。
 
-GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新；任务页通过分页 `/repos/{owner}/{repo}/branches` 读取分支。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
+GitHub 页在没有凭据时返回并展示预填权限的 fine-grained PAT 创建链接；PAT 由用户在 GitHub 生成并复制回控制台，cpx 不接管 GitHub OAuth。后端先调用 `/user` 和分页 `/user/repos` 验证，成功后才写入 `config.yaml`，并将内存中的 GitHub API 服务和 Agent 任务凭据同时更新。消息平台查询分支时使用分页的 `/repos/{owner}/{repo}/branches`。HTTPS Git 操作通过运行时生成且不含密钥的 askpass helper 从子进程环境读取 Token，`gh` 通过 `GH_TOKEN` 读取；密钥不进入远端 URL、命令参数或任务日志。环境变量来源只在状态接口中标识，不复制到配置文件。
 
 `AgentAuthManager` 使用 `codex login --device-auth`、`codex login --with-api-key` 与 `codex login status` 管理官方 CLI 登录。管理器只在内存中保留受长度限制的终端输出、验证地址和一次性设备码；授权进程退出后再次调用 status 命令复核。凭据的落盘和刷新由 Codex CLI 管理。服务停止或用户取消时会终止仍在等待的登录进程。
 
+`CodexModelCatalog` 保留模型的 Fast 能力；模型配置可选的 `serviceTier` 由 `CodexSpeed` 校验并生成 CLI 参数。缺失字段不覆盖 CLI；`fast` 同时启用 Fast 功能，`default` 显式恢复标准。适配器在模型测试、任务启动、续接和协调会话中共用这条传递路径，速度不影响推理强度。`CodexConfigManager` 在 agents 层提供共享的 CLI 配置读写，Web 入口保留兼容导出。`CodexSandbox` 为任务、命名和协调在每轮读取已保存的沙箱模式；完全访问取消内部沙箱，其余模式保持相应限制且命名/协调只读。`CodexSandboxProbe` 按保存的模式通过 `codex sandbox` 或直接固定 Node 命令检查执行环境，不使用模型或自动扩大权限。
+
 ## 配置与状态
+
+`cpx workspace` 与控制台的 `/api/console/workspace` 共用工作区服务，直接读取用户指定的 Git 工作区目录。服务异步执行 Git 子进程，控制台可同时处理其他请求。`README.md` 和 `repos.txt` 分别维护项目导航与远端清单，`code/` 下是各自管理提交的独立仓库。工作区信息从文件系统重建。
+
+`AgentSystem` 通过 `WorkspaceWebToken` 为远程工作区入口解析访问令牌。环境变量优先；未设置时用加密随机数生成，独占创建数据库旁的 `workspace-web-token` 并在重启时读取。仅监听回环地址时保留原有本机访问检查。`WorkspaceRoutes` 继续对工作区请求校验 Bearer Token，公开状态 API 不返回令牌。
+
+`server-directories` 在相同鉴权后调用 `ServerDirectories` 列举服务端子目录，返回规范化绝对路径供目录选择器填写。`WorkspaceHistory` 将最近 30 个成功打开的本地工作区原子写入数据库旁的 `workspace-history.json`，并合并受管 `workspaces/<owner>/<repo>` 中已有的克隆目录；`recent-workspaces` 提供本地选择列表。历史不保存访问凭据，重启可恢复，损坏记录保留并报告错误。
+
+工作区页的 GitHub 调用 `clone-github` 操作。`WebConsole` 将当前 GitHub Token 及数据库旁的 `workspaces` 目录交给 `GitHubWorkspaceClone`：统一转为 GitHub HTTPS 地址，按账号和仓库名创建本地目录，复用同源已有工作区并保护本地改动。`GitHubGitCredentials` 通过临时 AskPass 和子进程环境提供认证，完成后清理 helper，不把 Token 写入 Git URL 或仓库配置。克隆得到的本地工作区共用目录预览、Story 和会话服务；原 GitHub 只读 API 保留兼容，页面不再提供只读接入选项。
+
+`src/web/GitHubWorkspace.ts` 使用控制台的 GitHub 客户端读取 `main` 的固定提交，并复用本地项目清单解析。`src/workspace/Story.ts` 管理本地 Story 文件，控制台从这些文件恢复需求和后续补充记录。
+
+`src/workspace/StoryRunner.ts` 管理会话工作台的异步执行，复用 `AgentTaskManager` 的模型配置和 Codex 进程。新会话以 `session-<UUID>` 标识，标题取首条消息；直接以工作区根目录启动，不进行额外命名调用，也不自动创建 Story。提示词要求仅按用户明确指令创建或编辑需求说明。旧版 Story 会话仍从原目录启动，文件保留。工作区 Git 元数据中的 `cpx/sessions.db` 保存会话标题、Codex 线程 ID、各轮消息、回复及状态；旧表的 `story_id` 字段兼容存储新会话 ID，新增 metadata 表而不改写旧绑定。之后通过 `codex exec resume <thread-id>` 续接，按每轮读取的沙箱配置限制可写范围。会话列表合并新元数据与旧 Story 绑定，按最近轮次排序，实时日志留在进程中。
+
+`WebConsole` 在启动和连接 GitHub 时将当前 Token 同步给 `StoryRunner` 的任务管理器。工作区的网页请求通过可选 `useGitHub` 开关按轮授权。仅显式授权的工作区轮次向 Codex 子进程提供 `GH_TOKEN`，方便 `gh` 和 `make init-gh` 使用。
+
+目录标签页按需读取本地目录或 GitHub 仓库对应目录。选择文件时，`WorkspaceRoutes` 按来源读取工作区内的普通文件，两个来源共用 `WorkspaceFile.ts` 的大小检查和预览格式识别。浏览器将文本作为纯文本展示。
 
 配置优先级从低到高为：代码默认值、`config.yaml`、`permissions.yaml`、`AGENT_` 环境变量。npm CLI 默认以 `CPX_HOME`（未设置时为 `~/.cpx`）为运行根目录，配置、数据、日志和 PID 分目录保存；配置中的相对存储、Skill 与日志路径以配置目录的父目录为基准解析。Docker 通过 `-d /app/config` 保持 `/app` 为运行根。运行时会监听 YAML 文件；目前热更新会应用日志级别与权限配置，其他组件仍使用启动时配置。
 
@@ -93,7 +108,7 @@ SQLite 默认位于 `data/agent.db`。实际表结构以 `src/storage/migrations
 
 - 系统是单进程、单机 SQLite 架构，没有分布式任务调度。
 - 控制台只调度本机 Codex CLI，没有远程 Agent 注册、持久化队列、并发调度或重启恢复。
-- 控制台 API 任务不经过聊天命令的 `PermissionManager` 与 SQLite 命令审计；聊天开发命令经过命令黑名单检查并记录委托及终态审计。两类任务都以独立 Git worktree 和 CLI 沙箱参数为执行边界。
+- Web 会话由工作区访问规则授权，在所选工作区范围内运行。聊天开发命令经过命令黑名单检查并记录委托及终态审计，代码修改在隔离 worktree 中执行。
 - 仓库提供面向单机和极空间 NAS 的 Dockerfile、Compose 配置与构建部署脚本；可选的 `docker-compose.mihomo.yml` 在同一 Docker 网络中增加显式 HTTP 代理伴随容器，但不改变 cpx 单进程架构。目前没有 Kubernetes 部署文件。
 - Skill 在主进程内以 Node.js 模块执行，不构成安全沙箱。
 - HTTP 服务没有通用认证层；部署边界和已知风险见 [docs/SECURITY.md](docs/SECURITY.md)。

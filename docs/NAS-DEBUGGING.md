@@ -107,6 +107,8 @@ docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
 - 首次部署时的 Mihomo 镜像包；
 - `data/mihomo/config.yaml`。
 
+首次部署还需把源码中的 `config/config.example.yaml` 和 `config/permissions.example.yaml` 分别上传为项目的 `config/config.yaml` 和 `config/permissions.yaml`。启动需要 `config.yaml`；更新已有实例时保留原配置。
+
 `data/mihomo/config.yaml` 可能包含订阅地址、节点密码和其他凭据。限制目录访问权限，不要把它提交到 Git、发送到聊天或复制到不可信备份。
 
 ### 6. 通过极空间图形界面导入镜像
@@ -139,7 +141,7 @@ metacubex/mihomo:v1.19.30
    MIHOMO_IMAGE=metacubex/mihomo:v1.19.30
    ```
 
-5. 其他 Token 暂时可以留空，然后创建项目。
+5. 其他 Token 暂时可以留空，然后创建项目。工作区访问密码会自动生成到项目的 `data/workspace-web-token`，无需手动设置 `AGENT_WORKSPACE_WEB_TOKEN`。
 
 不要额外覆盖 `HTTP_PROXY` 或 `HTTPS_PROXY`。这份 Compose 已把 cpx 的代理地址固定为 `http://mihomo:7890`，且没有把 Mihomo 的代理端口映射到 NAS 或局域网。
 
@@ -158,8 +160,10 @@ cpx
 2. 打开 `cpx` 日志，确认服务监听 `0.0.0.0:3000`；
 3. 浏览器访问 `http://<NAS-IP>:3000/health`，预期返回包含 `"status":"ok"` 的 JSON；
 4. 浏览器访问 `http://<NAS-IP>:3000`；
-5. 在“模型设置”中连接 Codex，完成设备码登录并执行一条简短测试；
-6. 首个开发任务使用测试仓库，不创建 Pull Request，先验证读取型任务。
+5. 用极空间文件管理器打开项目的 `data/workspace-web-token`，复制内容到 cpx「工作区」页的访问密码输入框；若在 Compose 中设置过 `AGENT_WORKSPACE_WEB_TOKEN`，使用该值；
+6. 选择「GitHub」，选择或填写工作区根仓库；自动使用 HTTPS 克隆到 `/app/data/workspaces/<owner>/<repo>` 并进入本地会话工作台。私有仓库先在 GitHub 页连接有权限的 Token，无需容器 SSH Key。也可新建或打开已有工作区，路径使用容器内的持久化目录，例如 `/app/data/workspaces/my-workspace`；
+7. 在“Agent 设置”中连接 Codex，完成设备码登录，先点击「检查执行权限」，再执行一条简短测试；模型支持时可在配置中选择 Fast 速度，推理强度独立设置；
+8. 首个开发任务使用测试仓库，不创建 Pull Request，先验证读取型任务。
 
 用于设备码登录的电脑或手机也必须能够打开验证页面。网络可达不等于外部服务在当前地区受到官方支持，使用前应确认账号、位置和上游配置符合相应政策与当地要求。
 
@@ -208,8 +212,10 @@ CPX_IMAGE=cpx:dev-20260820-1
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `cpx-mihomo` 持续重启                                 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 能被 Mihomo 解析且 `mixed-port` 为 7890                                                |
 | Mihomo 正常但 Codex 超时                              | 检查代理组选择、最终 `MATCH` 规则和节点状态，确认 cpx 代理地址仍为 `http://mihomo:7890`                                                   |
+| Codex 能回复但执行命令出现 `bwrap` 权限错误            | 同步新版 Compose 的 cpx `security_opt` 后重新创建容器，再从页面「检查执行权限」验证；镜像更新本身不会改变容器安全选项                    |
 | Compose 尝试拉取 `cpx:dev`                            | `cpx-dev.tar` 尚未成功导入，或导入后的镜像标签与 `CPX_IMAGE` 不一致                                                                       |
 | 页面仍是旧版本                                        | 重新导入镜像并重新创建容器，检查新旧镜像标识；必要时使用唯一开发标签                                                                      |
+| 工作区提示回环地址或无法接入                           | 更新 cpx 镜像并重新创建容器，从文件管理器读取 `data/workspace-web-token` 填入页面；环境变量令牌已配置时使用该值                          |
 | 端口 3000 被占用                                      | 在 Compose 中只修改端口映射左侧，例如 `13000:3000`，然后访问 `http://<NAS-IP>:13000`                                                      |
 | Codex 登录后重建又丢失                                | 检查 `./data/codex:/root/.codex` 是否仍挂载到原来的持久化目录                                                                             |
 | 架构错误或 `exec format error`                        | 按 NAS 实际架构重新构建并导入 cpx 与 Mihomo 镜像                                                                                          |

@@ -17,7 +17,7 @@ export class GitHubClient {
       baseURL: GITHUB_API_BASE,
       timeout: 15000,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
       },

@@ -1,3 +1,4 @@
+import { isAbsolute } from 'path';
 import { z } from 'zod';
 
 export const SkillPermissionsSchema = z.object({
@@ -25,12 +26,14 @@ export const DingTalkConfigSchema = z.object({
   enabled: z.boolean().default(false),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
+  workspaceUsers: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const FeishuConfigSchema = z.object({
   enabled: z.boolean().default(false),
   appId: z.string().optional(),
   appSecret: z.string().optional(),
+  workspaceUsers: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const GitHubConfigSchema = z.object({
@@ -94,6 +97,7 @@ export const AppConfigSchema = z.object({
   server: ServerConfigSchema.default({}),
   dingtalk: DingTalkConfigSchema.default({}),
   feishu: FeishuConfigSchema.default({}),
+  messagingWorkspaceRoot: z.string().trim().refine(isAbsolute, '需要绝对路径').optional(),
   github: GitHubConfigSchema.default({}),
   skills: SkillsConfigSchema.default({}),
   mcp: McpConfigSchema.default({}),

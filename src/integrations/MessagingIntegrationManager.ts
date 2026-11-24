@@ -51,6 +51,7 @@ export class MessagingIntegrationManager {
   private feishuChannel?: LarkChannel;
   private readonly dingTalkRoutes = new Map<string, DingTalkReplyRoute>();
   private readonly feishuRoutes = new Map<string, string>();
+  private readonly recentMessages = new Set<string>();
   private statuses: Record<MessagingPlatform, MessagingPlatformStatus>;
 
   constructor(
@@ -152,9 +153,14 @@ export class MessagingIntegrationManager {
     });
     this.dingTalkClient = client;
     client.registerCallbackListener(TOPIC_ROBOT, async (event) => {
+      let acknowledged = false;
       try {
         const message = JSON.parse(event.data) as RobotMessage;
         if (message.msgtype !== 'text' || !message.text?.content?.trim()) {
+          client.socketCallBackResponse(event.headers.messageId, { success: true });
+          return;
+        }
+        if (!this.acceptMessage('dingtalk', message.msgId || event.headers.messageId)) {
           client.socketCallBackResponse(event.headers.messageId, { success: true });
           return;
         }
@@ -170,19 +176,19 @@ export class MessagingIntegrationManager {
           lastMessageAt: Date.now(),
           message: '长连接正常，已收到消息。',
         };
+        client.socketCallBackResponse(event.headers.messageId, { success: true });
+        acknowledged = true;
         await this.processCommand(message.text.content.trim(), {
           userId,
           userName: message.senderNick || 'DingTalkUser',
           source: 'dingtalk',
           replyRouteId,
         });
-        client.socketCallBackResponse(event.headers.messageId, { success: true });
       } catch (error) {
         this.logger.error(`钉钉消息处理失败: ${errorMessage(error)}`);
-        client.socketCallBackResponse(event.headers.messageId, {
-          success: false,
-          message: 'cpx command failed',
-        });
+        if (!acknowledged) {
+          client.socketCallBackResponse(event.headers.messageId, { success: false, message: 'cpx command failed' });
+        }
       }
     });
 
@@ -221,6 +227,7 @@ export class MessagingIntegrationManager {
     });
     this.feishuChannel = channel;
     channel.on('message', async (message) => {
+      if (!message.content.trim() || !this.acceptMessage('feishu', message.messageId)) return;
       const replyRouteId = `${message.chatId}:${message.senderId}`;
       this.feishuRoutes.set(replyRouteId, message.chatId);
       this.statuses.feishu = {
@@ -265,6 +272,18 @@ export class MessagingIntegrationManager {
       this.statuses.feishu = this.errorStatus('feishu', connectionError(error));
       this.logger.warn(`飞书 WebSocket 连接失败: ${errorMessage(error)}`);
     }
+  }
+
+  private acceptMessage(platform: MessagingPlatform, messageId?: string): boolean {
+    if (!messageId) return true;
+    const key = `${platform}:${messageId}`;
+    if (this.recentMessages.has(key)) return false;
+    this.recentMessages.add(key);
+    if (this.recentMessages.size > 2048) {
+      const oldest = this.recentMessages.values().next().value;
+      if (oldest) this.recentMessages.delete(oldest);
+    }
+    return true;
   }
 
   private async pushDingTalk(userId: string, message: unknown): Promise<void> {

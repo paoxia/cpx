@@ -4,6 +4,8 @@ import { dirname, join, resolve } from 'path';
 import { randomUUID } from 'crypto';
 import { Logger } from '../utils/Logger';
 import { AGENT_ADAPTERS, ALL_PROVIDERS } from './agentAdapters';
+import { AgentServiceTier, normalizeServiceTier } from './CodexSpeed';
+import { CodexSandboxMode, configuredCodexSandbox, effectiveCodexSandbox } from './CodexSandbox';
 import {
   AgentErrorKind,
   AgentProcessError,
@@ -24,6 +26,7 @@ export interface AgentModelConfiguration {
   provider: CodingAgentProvider;
   model?: string;
   reasoningEffort?: AgentReasoningEffort;
+  serviceTier?: AgentServiceTier;
   baseUrl?: string;
   apiKey?: string;
 }
@@ -52,6 +55,14 @@ export interface AgentTaskContinuationRequest {
   configurations?: AgentModelConfiguration[];
   /** 设置后可在后续轮次提交或更新同一个 Pull Request。 */
   createPullRequest?: boolean;
+}
+
+export interface PreparedAgentWorkspace {
+  directory: string;
+  writableRoot?: string;
+  readOnly?: boolean;
+  useGitHub?: boolean;
+  onThreadStarted?: (threadId: string) => void;
 }
 
 export interface AgentTaskLog {
@@ -132,6 +143,7 @@ export interface AgentPlatformToolContext {
 }
 
 const MAX_LOG_ENTRIES = 800;
+const MAX_PREPARED_PROMPT_LENGTH = 40_000;
 const MODEL_PATTERN = /^[a-zA-Z0-9._:/-]+$/;
 const BRANCH_PATTERN = /^[a-zA-Z0-9._/-]+$/;
 const DEFAULT_PROTECTED_BRANCHES = ['main', 'master', 'production'] as const;
@@ -148,13 +160,19 @@ export class AgentTaskManager {
   private logger: Logger;
   private secrets: AgentRuntimeSecrets = {};
   private executionConfigurations = new Map<string, AgentModelConfiguration[]>();
+  private preparedWorkspaces = new Map<string, PreparedAgentWorkspace>();
   private platformToolContexts = new Map<string, AgentPlatformToolContext>();
   private terminalWaiters = new Map<string, Set<(task: AgentTask) => void>>();
   private gitAskPassPath?: string;
   private repositoryLocks = new Map<string, Promise<void>>();
   private stopped = false;
 
-  constructor(workspaceRoot: string, logger: Logger, repositoryRoot?: string) {
+  constructor(
+    workspaceRoot: string,
+    logger: Logger,
+    repositoryRoot?: string,
+    private readonly sandboxMode: () => CodexSandboxMode = configuredCodexSandbox,
+  ) {
     this.workspaceRoot = resolve(workspaceRoot);
     this.repositoryRoot = resolve(
       repositoryRoot ?? join(dirname(this.workspaceRoot), 'repositories'),
@@ -179,10 +197,32 @@ export class AgentTaskManager {
   }
 
   create(request: AgentTaskRequest): AgentTask {
+    return this.enqueue(this.validateRequest(request));
+  }
+
+  createPreparedTask(
+    workspace: PreparedAgentWorkspace,
+    prompt: string,
+    configurations: AgentModelConfiguration[],
+    threadId?: string,
+  ): AgentTask {
+    const repository = workspace.writableRoot ?? workspace.directory;
+    return this.enqueue({
+      repository,
+      prompt: validatePrompt(prompt, MAX_PREPARED_PROMPT_LENGTH),
+      configurations: normalizeConfigurations({ repository, prompt, configurations }),
+      createPullRequest: false,
+    }, workspace, threadId);
+  }
+
+  private enqueue(
+    normalized: ReturnType<AgentTaskManager['validateRequest']>,
+    prepared?: PreparedAgentWorkspace,
+    threadId?: string,
+  ): AgentTask {
     if (this.stopped) {
       throw new Error('任务管理器已停止');
     }
-    const normalized = this.validateRequest(request);
     const configurations = normalized.configurations;
     const now = Date.now();
     const task: AgentTask = {
@@ -197,6 +237,8 @@ export class AgentTaskManager {
       prompt: normalized.prompt,
       createPullRequest: normalized.createPullRequest,
       status: 'queued',
+      workspace: prepared?.directory,
+      threadId,
       createdAt: now,
       updatedAt: now,
       logs: [],
@@ -204,11 +246,12 @@ export class AgentTaskManager {
       turns: [this.createTurn(normalized.prompt, now)],
     };
     this.tasks.set(task.id, task);
+    if (prepared) this.preparedWorkspaces.set(task.id, prepared);
     this.executionConfigurations.set(task.id, configurations);
-    this.addLog(task, 'system', '任务已创建，正在准备 Git 工作区。');
+    this.addLog(task, 'system', prepared ? '任务已创建，正在启动 Codex。' : '任务已创建，正在准备 Git 工作区。');
     queueMicrotask(() => {
       if (task.status !== 'cancelled') {
-        void this.execute(task);
+        void this.execute(task, Boolean(threadId));
       }
     });
     return this.snapshot(task);
@@ -225,11 +268,12 @@ export class AgentTaskManager {
     if (!isTerminal(task.status)) {
       throw new Error('任务仍在执行，请等待当前轮次结束');
     }
-    if (!task.workspace || !task.agentBranch || !existsSync(task.workspace)) {
+    const prepared = this.preparedWorkspaces.has(id);
+    if (!task.workspace || (!prepared && !task.agentBranch) || !existsSync(task.workspace)) {
       throw new Error('任务工作区尚未创建，无法继续');
     }
 
-    const prompt = validatePrompt(request.prompt);
+    const prompt = validatePrompt(request.prompt, prepared ? MAX_PREPARED_PROMPT_LENGTH : 20_000);
     const configurations: AgentModelConfiguration[] = request.configurations
       ? normalizeConfigurations({
           repository: task.repository,
@@ -245,7 +289,7 @@ export class AgentTaskManager {
     task.configurations = configurations.map(
       ({ apiKey: _apiKey, ...configuration }) => configuration,
     );
-    task.createPullRequest = request.createPullRequest ?? task.createPullRequest;
+    task.createPullRequest = !prepared && (request.createPullRequest ?? task.createPullRequest);
     task.status = 'queued';
     task.error = undefined;
     task.lastAgentResponse = undefined;
@@ -300,9 +344,10 @@ export class AgentTaskManager {
     turn.status = 'cancelled';
     turn.completedAt = task.completedAt;
     this.addLog(task, 'system', '用户已取消任务。');
-    this.processes.get(id)?.kill();
+    const child = this.processes.get(id);
+    child?.kill();
     this.executionConfigurations.delete(id);
-    this.notifyTerminal(task);
+    if (!child || !this.preparedWorkspaces.has(id)) this.notifyTerminal(task);
     return true;
   }
 
@@ -324,6 +369,7 @@ export class AgentTaskManager {
     }
     this.processes.clear();
     this.executionConfigurations.clear();
+    this.preparedWorkspaces.clear();
     this.platformToolContexts.clear();
   }
 
@@ -362,7 +408,9 @@ export class AgentTaskManager {
       task.updatedAt = Date.now();
       turn.status = 'running';
       turn.startedAt = Date.now();
-      const workspace = reuseWorkspace ? task.workspace! : await this.prepareWorkspace(task);
+      const workspace = reuseWorkspace || this.preparedWorkspaces.has(task.id)
+        ? task.workspace!
+        : await this.prepareWorkspace(task);
 
       task.status = 'running';
       task.updatedAt = Date.now();
@@ -492,7 +540,8 @@ export class AgentTaskManager {
       );
 
       try {
-        await this.runAgent(task, workspace, configuration, resumeThreadId);
+        const threadId = this.preparedWorkspaces.has(task.id) ? task.threadId : resumeThreadId;
+        await this.runAgent(task, workspace, configuration, threadId);
         attempt.status = 'success';
         attempt.endedAt = Date.now();
         return;
@@ -548,7 +597,19 @@ export class AgentTaskManager {
   ): Promise<void> {
     const provider = configuration.provider;
     const adapter = AGENT_ADAPTERS[provider];
-    const env = this.agentGitHubEnvironment(task);
+    const prepared = this.preparedWorkspaces.get(task.id);
+    const env = prepared ? { ...process.env } : this.agentGitHubEnvironment(task);
+    if (prepared) {
+      for (const name of ['AGENT_WORKSPACE_WEB_TOKEN', 'AGENT_GITHUB_TOKEN', 'CPX_GITHUB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN']) {
+        delete env[name];
+      }
+    }
+    if (prepared?.useGitHub && !prepared.readOnly) {
+      const token = this.secrets.githubToken?.trim();
+      if (!token) throw new Error('请先在 cpx 的 GitHub 页面连接账号，再使用本轮 GitHub 授权。');
+      env.GH_TOKEN = token;
+      env.GH_PROMPT_DISABLED = '1';
+    }
     const configuredApiKey = 'apiKey' in configuration ? configuration.apiKey : undefined;
     const legacyApiKey = this.secrets.openaiApiKey;
     adapter.configureEnvironment(env, configuredApiKey || legacyApiKey, configuration.baseUrl);
@@ -558,13 +619,24 @@ export class AgentTaskManager {
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         )
       : adapter.buildArgs(
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         );
     const platformTools = this.platformToolContexts.get(task.id);
+    if (prepared) {
+      const sandbox = effectiveCodexSandbox(this.sandboxMode(), prepared.readOnly);
+      const options = ['--skip-git-repo-check', '--config', `sandbox_mode=${JSON.stringify(sandbox)}`, '--config', 'approval_policy="never"'];
+      if (sandbox === 'workspace-write' && prepared.writableRoot) {
+        options.push('--config', `sandbox_workspace_write.writable_roots=[${JSON.stringify(prepared.writableRoot)}]`);
+      }
+      if (prepared.readOnly) options.push('--ephemeral');
+      args.splice(1, 0, ...options);
+    }
     if (platformTools) {
       this.configurePlatformTools(args, env, platformTools, Boolean(resumeThreadId));
     }
@@ -573,7 +645,7 @@ export class AgentTaskManager {
       adapter.command,
       args,
       workspace,
-      buildPrompt(task, Boolean(platformTools)),
+      prepared ? task.prompt : buildPrompt(task, Boolean(platformTools)),
       true,
       env,
       adapter.useShellOnWindows,
@@ -790,7 +862,10 @@ export class AgentTaskManager {
     useShellOnWindows = false,
   ): Promise<{ stdout: string; stderr: string }> {
     this.assertNotCancelled(task);
-    this.addLog(task, 'system', `$ ${command} ${args.filter((arg) => arg !== '-').join(' ')}`);
+    const githubToken = env.GH_TOKEN || env.CPX_GITHUB_TOKEN;
+    const redact = (value: string): string =>
+      githubToken ? value.split(githubToken).join('[REDACTED]') : value;
+    this.addLog(task, 'system', redact(`$ ${command} ${args.filter((arg) => arg !== '-').join(' ')}`));
 
     return new Promise((resolvePromise, reject) => {
       const child = spawn(command, args, {
@@ -805,6 +880,8 @@ export class AgentTaskManager {
       let stderr = '';
       let stdoutBuffer = '';
       let stderrBuffer = '';
+      let threadError: unknown;
+      const onThreadStarted = this.preparedWorkspaces.get(task.id)?.onThreadStarted;
 
       const flush = (stream: 'stdout' | 'stderr', final = false) => {
         let buffer = stream === 'stdout' ? stdoutBuffer : stderrBuffer;
@@ -820,17 +897,25 @@ export class AgentTaskManager {
           }
           if (captureAgentJson) {
             const threadId = extractAgentThreadId(line);
-            if (threadId) task.threadId = threadId;
+            if (threadId && threadId !== task.threadId && !threadError) {
+              try {
+                onThreadStarted?.(threadId);
+                task.threadId = threadId;
+              } catch (error) {
+                threadError = error;
+                child.kill();
+              }
+            }
             const response = extractAgentResponse(line);
             if (response) {
-              const finalResponse = response.slice(0, 16_384);
+              const finalResponse = redact(response).slice(0, 16_384);
               task.lastAgentResponse = finalResponse;
               this.currentTurn(task).response = finalResponse;
             }
           }
           const message = captureAgentJson ? formatAgentEvent(line) : line;
           if (message) {
-            this.addLog(task, stream, message);
+            this.addLog(task, stream, redact(message));
           }
         }
         if (stream === 'stdout') {
@@ -856,16 +941,24 @@ export class AgentTaskManager {
         this.processes.delete(task.id);
         reject(new Error(`无法启动 ${command}: ${error.message}`));
       });
+      child.stdin.on('error', () => {
+        // Spawn failures and early CLI exits are reported by error/close below.
+      });
       child.on('close', (code) => {
         flush('stdout', true);
         flush('stderr', true);
         this.processes.delete(task.id);
         if (task.status === 'cancelled') {
+          this.notifyTerminal(task);
           reject(new Error('任务已取消'));
           return;
         }
+        if (threadError) {
+          reject(threadError);
+          return;
+        }
         if (code !== 0) {
-          reject(new AgentProcessError(command, code, stderr, stdout));
+          reject(new AgentProcessError(command, code, redact(stderr), redact(stdout)));
           return;
         }
         resolvePromise({ stdout, stderr });
@@ -981,13 +1074,13 @@ export function repositoryCoordinates(input: string): { owner: string; repositor
   return { owner: match[1], repository: match[2] };
 }
 
-function validatePrompt(input: string | undefined): string {
+function validatePrompt(input: string | undefined, maxLength = 20_000): string {
   const prompt = input?.trim();
   if (!prompt) {
     throw new Error('任务指令不能为空');
   }
-  if (prompt.length > 20_000) {
-    throw new Error('任务指令不能超过 20000 个字符');
+  if (prompt.length > maxLength) {
+    throw new Error(`任务指令不能超过 ${maxLength} 个字符`);
   }
   return prompt;
 }
@@ -1100,12 +1193,14 @@ function normalizeConfigurations(request: AgentTaskRequest): AgentModelConfigura
         throw new Error('配置名称格式无效');
       }
       const reasoningEffort = normalizeReasoningEffort(configuration.reasoningEffort);
+      const serviceTier = normalizeServiceTier(configuration.serviceTier);
       return {
         id,
         ...(name ? { name } : {}),
         provider: configuration.provider,
         model,
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
         ...(baseUrl ? { baseUrl } : {}),
         apiKey,
       };

@@ -35,6 +35,7 @@ describe('CodexModelCatalog', () => {
           visibility: 'list',
           default_reasoning_level: 'medium',
           supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }],
+          service_tiers: [{ id: 'priority', name: 'Fast' }],
         },
         { slug: 'hidden-model', visibility: 'hide' },
       ],
@@ -48,6 +49,7 @@ describe('CodexModelCatalog', () => {
         displayName: 'GPT Test',
         defaultReasoningEffort: 'medium',
         supportedReasoningEfforts: ['low', 'medium', 'high'],
+        supportedServiceTiers: ['default', 'fast'],
       }],
     });
     expect(spawnMock).toHaveBeenCalledWith(
@@ -64,5 +66,20 @@ describe('CodexModelCatalog', () => {
     child.stderr.write('not logged in\n');
     child.emit('close', 1);
     await expect(resultPromise).rejects.toThrow('not logged in');
+  });
+
+  it('兼容旧速度目录，并以当前模型明确声明的服务档位为准', async () => {
+    const child = fakeProcess();
+    const catalog = new CodexModelCatalog(vi.fn(() => child) as unknown as typeof spawn);
+    const pending = catalog.list();
+    child.stdout.write(JSON.stringify({ models: [
+      { slug: 'legacy', additional_speed_tiers: ['fast'] },
+      { slug: 'current', service_tiers: [], additional_speed_tiers: ['fast'] },
+      { slug: 'no-speed' },
+    ] }));
+    child.emit('close', 0);
+    expect((await pending).models.map((model) => model.supportedServiceTiers)).toEqual([
+      ['default', 'fast'], ['default'], ['default'],
+    ]);
   });
 });

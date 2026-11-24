@@ -1,9 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { pathToFileURL } from 'url';
+import { initializeWorkspace } from '../../../src/workspace/Workspace';
+import { WorkspaceHistory } from '../../../src/workspace/WorkspaceHistory';
 import type { RequestHandler } from '../../../src/core/HttpServer';
 import { WebConsole } from '../../../src/web/WebConsole';
+import { registerWorkspaceRoutes } from '../../../src/web/WorkspaceRoutes';
 import { Logger } from '../../../src/utils/Logger';
+import { WORKSPACE_FILE_LIMIT } from '../../../src/workspace/WorkspaceFile';
 import { GitHubError } from '../../../src/utils/errors';
 import type { GitHubApiClient } from '../../../src/web/GitHubExplorer';
 import type { AgentAuthService } from '../../../src/web/AgentAuthManager';
@@ -44,6 +50,7 @@ describe('WebConsole', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await webConsole.stop();
     rmSync(TMP_DIR, { recursive: true, force: true });
   });
@@ -58,6 +65,22 @@ describe('WebConsole', () => {
     });
     const html = (response.body as Buffer).toString('utf8');
     expect(html).toContain('id="github-tab"');
+    expect(html).toContain('id="workspace-tab"');
+    expect(html).toContain('id="workspace-project-form"');
+    expect(html).toContain('<option value="clone-github">GitHub</option>');
+    expect(html).toContain('id="workspace-browse"');
+    expect(html).toContain('id="directory-picker"');
+    expect(html).toContain('id="workspace-recent"');
+    expect(html).toContain('id="profile-speed"');
+    expect(html).toContain('id="codex-sandbox-check"');
+    expect(html).not.toContain('<option value="clone">');
+    expect(html).not.toContain('读取 GitHub 工作区');
+    expect(html).not.toContain('id="workspace-remote"');
+    expect(html).toContain('id="stories-view">');
+    expect(html).toContain('id="session-search"');
+    expect(html).toContain('id="story-description"');
+    expect(html).not.toContain('id="tasks-view"');
+    expect(html).not.toContain('repository-tasks');
     expect(html).toContain('id="integrations-tab"');
     expect(html).toContain('id="codex-tab"');
     expect(html).toContain('WebSocket 长连接');
@@ -65,14 +88,8 @@ describe('WebConsole', () => {
     expect(html).not.toContain('Claude Code');
     expect(html).toContain('Codex 配置方案');
     expect(html).toContain('id="github-create-token"');
-    expect(html).toContain('id="repository-picker"');
-    expect(html).toContain('id="branch-picker"');
-    expect(html).toContain('id="task-branch"');
-    expect(html).toContain('id="new-task-button"');
-    expect(html).toContain('class="thread-composer new-task-mode"');
     expect(html).not.toContain('id="create-pr"');
     expect(html).not.toContain('完成后创建 Pull Request');
-    expect(html).toContain('选择已有 Token 授权的项目');
     expect(html).toContain('contents=write');
     expect(html).toContain('pull_requests=write');
     expect(html).toContain('id="codex-auth-status"');
@@ -83,20 +100,252 @@ describe('WebConsole', () => {
     expect(script).toContain('/api/console/codex-config');
     expect(script).toContain('/api/console/agent-auth/api-key');
     expect(script).toContain('/api/console/codex-models');
-    expect(script).toContain('baseBranch: selectedTaskBaseBranch()');
-    expect(script).toContain('runDetailsOpenTaskIds: new Set()');
-    expect(script).toContain('runOutputScrollByTaskId: new Map()');
-    expect(script).toContain('rememberRunDetailsState()');
-    expect(script).toContain('restoreTaskOutputScroll(task.id, taskOutput)');
-    expect(script).toContain('followTail:');
-    expect(script).toContain('class="task-list-meta-text"');
     expect(script).not.toContain('/webhook/');
 
     const stylesResponse = await server.handler('GET', '/styles.css')(Buffer.alloc(0), {}, {});
     const styles = (stylesResponse.body as Buffer).toString('utf8');
     expect(styles).toContain('grid-template-columns: minmax(0, 1fr)');
-    expect(styles).toContain('overflow-x: hidden');
-    expect(styles).toContain('-webkit-line-clamp: 2');
+    expect(styles).toContain('.session-body');
+    expect(styles).toContain('.session-dock');
+  });
+
+  it('工作区 API 应拒绝默认外部访问，并通过回环连接创建和登记本地项目', async () => {
+    const endpoint = '/api/console/workspace';
+    const path = join(realpathSync(TMP_DIR), 'local-workspace');
+    const input = Buffer.from(JSON.stringify({ operation: 'init', path }));
+    const headers = {
+      host: '127.0.0.1:4000',
+      origin: 'http://127.0.0.1:4000',
+      'content-type': 'application/json',
+    };
+    expect((await server.handler('GET', endpoint)(Buffer.alloc(0), headers, {}, '127.0.0.1')).body).toEqual({ mode: 'disabled' });
+    expect((await server.handler('POST', endpoint)(input, headers, {}, '127.0.0.1')).status).toBe(403);
+
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer, {
+      host: '127.0.0.1',
+      defaultRoot: path,
+    });
+    const mode = server.handler('GET', endpoint);
+    expect((await mode(Buffer.alloc(0), headers, {}, '127.0.0.1')).body).toEqual({ mode: 'local', defaultRoot: path });
+    expect((await mode(Buffer.alloc(0), headers, {}, '192.0.2.1')).body).toEqual({ mode: 'disabled' });
+    const submit = server.handler('POST', endpoint);
+    expect((await submit(input, headers, {}, '192.0.2.1')).status).toBe(403);
+    expect((await submit(input, { ...headers, origin: 'http://other.example' }, {}, '127.0.0.1')).status).toBe(403);
+    expect((await submit(input, { ...headers, 'x-forwarded-for': '192.0.2.1' }, {}, '127.0.0.1')).status).toBe(403);
+    expect((await submit(input, { ...headers, 'content-type': 'text/plain' }, {}, '127.0.0.1')).status).toBe(415);
+    expect(existsSync(path)).toBe(false);
+    expect((await submit(input, headers, {}, '127.0.0.1')).body).toMatchObject({ root: path, branch: 'main', projects: [] });
+
+    const project = join(path, 'code', 'notes');
+    mkdirSync(project);
+    execFileSync('git', ['init', '-q'], { cwd: project });
+    const add = Buffer.from(JSON.stringify({ operation: 'add', path, name: 'notes', purpose: '知识笔记' }));
+    expect((await submit(add, headers, {}, '127.0.0.1')).body).toMatchObject({ projects: [{ name: 'notes', present: true }] });
+    expect(readFileSync(join(path, 'README.md'), 'utf8')).toContain('知识笔记');
+  });
+
+  it('远程工作区 API 应验证独立令牌和服务器绝对路径', async () => {
+    const endpoint = '/api/console/workspace';
+    const token = 'workspace-test-access-token-0123456789';
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer, { host: '0.0.0.0', token });
+    const headers = { 'content-type': 'application/json', host: 'cpx.example' };
+    const submit = server.handler('POST', endpoint);
+    const mode = await server.handler('GET', endpoint)(Buffer.alloc(0), headers, {}, '192.0.2.1');
+    expect(mode.body).toEqual({ mode: 'token' });
+    const path = join(realpathSync(TMP_DIR), 'remote-access');
+    const input = Buffer.from(JSON.stringify({ operation: 'init', path }));
+    expect((await submit(input, { ...headers, authorization: 'Bearer wrong' }, {}, '192.0.2.1')).status).toBe(401);
+    const authorized = { ...headers, authorization: `Bearer ${token}` };
+    expect(await submit(Buffer.from('{"operation":"init","path":"relative"}'), authorized, {}, '192.0.2.1')).toMatchObject({ status: 400, body: { error: expect.stringContaining('绝对路径') } });
+    expect((await submit(input, authorized, {}, '192.0.2.1')).body).toMatchObject({ root: path, branch: 'main' });
+    const show = Buffer.from(JSON.stringify({ operation: 'show', path }));
+    expect((await submit(show, authorized, {}, '192.0.2.1')).status).toBe(200);
+  });
+
+  it('使用 cpx 已配置的 GitHub 凭据读取远端工作区和 Story', async () => {
+    await webConsole.stop();
+    const revision = 'a'.repeat(40);
+    const id = '2026-11-21-example';
+    const requests: string[] = [];
+    const file = (content: string) => ({ type: 'file', encoding: 'base64', content: Buffer.from(content).toString('base64') });
+    const contents: Record<string, unknown> = {
+      'README.md': file('# 工作区'),
+      'AGENTS.md': file('# 规约'),
+      'repos.txt': file('notes git@github.com:octocat/notes.git\n'),
+      story: [{ type: 'dir', name: id }, { type: 'file', name: '.gitkeep' }],
+      [`story/${id}`]: [{ type: 'file', name: '说明.md' }],
+      [`story/${id}/${encodeURIComponent('说明.md')}`]: file('# 示例需求'),
+    };
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      {
+        workspaceAccess: { host: '127.0.0.1' },
+        githubToken: 'github-configured-token',
+        githubClientFactory: (token) => {
+          expect(token).toBe('github-configured-token');
+          return {
+            get: async <T>(url: string, params?: Record<string, unknown>) => {
+              requests.push(url);
+              if (url === '/repos/octocat/desktop/branches/main') return { commit: { sha: revision } } as T;
+              const path = url.replace('/repos/octocat/desktop/contents/', '');
+              expect(params?.ref).toBe(revision);
+              if (!(path in contents)) throw new GitHubError('Not Found', 404);
+              return contents[path] as T;
+            },
+          };
+        },
+      },
+    );
+    const submit = (operation: string, extra = {}) => server.handler('POST', '/api/console/workspace')(
+      Buffer.from(JSON.stringify({ operation, repository: 'https://github.com/octocat/desktop.git', ...extra })),
+      { host: 'localhost:3000', 'content-type': 'application/json' }, {}, '127.0.0.1',
+    );
+    expect(await submit('github')).toMatchObject({ status: 200, body: {
+      source: 'github', repository: 'octocat/desktop', branch: 'main', revision, stories: [id],
+      projects: [{ name: 'notes', present: false, remote: 'git@github.com:octocat/notes.git' }],
+    } });
+    expect(await submit('github-story', { id })).toMatchObject({ status: 200, body: { id, content: '# 示例需求' } });
+    expect(await submit('github-tree', { directory: `story/${id}` })).toMatchObject({
+      status: 200, body: { entries: [{ type: 'file', name: '说明.md', storyId: id }] },
+    });
+    expect(await submit('github-file', { file: `story/${id}/说明.md` })).toMatchObject({
+      status: 200, body: {
+        kind: 'text', content: '# 示例需求',
+        url: `https://github.com/octocat/desktop/blob/${revision}/story/${id}/${encodeURIComponent('说明.md')}`,
+      },
+    });
+    const count = requests.length;
+    expect(await submit('github', { repository: 'https://elsewhere.example/octocat/desktop' })).toMatchObject({ status: 400 });
+    expect(requests).toHaveLength(count);
+    delete contents['AGENTS.md'];
+    expect(await submit('github')).toMatchObject({ status: 400, body: { error: expect.stringContaining('AGENTS.md') } });
+  });
+
+  it('服务器目录与已保存工作区仅向持有正确令牌的客户端开放', async () => {
+    const token = 'workspace-browser-access-token-0123456789';
+    const parent = join(realpathSync(TMP_DIR), 'directories');
+    const workspace = (await initializeWorkspace(join(realpathSync(TMP_DIR), 'saved-workspace'))).root;
+    mkdirSync(parent);
+    mkdirSync(join(parent, 'folder'));
+    const history = new WorkspaceHistory(TMP_DIR);
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      { host: '0.0.0.0', token }, undefined, undefined, { directoryRoot: parent, history });
+    const submit = (body: object, access?: string) => server.handler('POST', '/api/console/workspace')(
+      Buffer.from(JSON.stringify(body)),
+      { 'content-type': 'application/json', ...(access ? { authorization: `Bearer ${access}` } : {}) },
+      {}, '192.0.2.1');
+    for (const operation of ['server-directories', 'recent-workspaces']) {
+      expect((await submit({ operation })).status).toBe(401);
+      expect((await submit({ operation }, 'wrong')).status).toBe(401);
+    }
+    expect(await submit({ operation: 'server-directories' }, token)).toMatchObject({ status: 200, body: {
+      path: parent, directories: [{ name: 'folder', path: join(parent, 'folder') }],
+    } });
+    expect(await submit({ operation: 'recent-workspaces' }, token)).toMatchObject({ status: 200, body: { workspaces: [] } });
+    expect(await submit({ operation: 'show', path: workspace }, token)).toMatchObject({ status: 200, body: {
+      root: workspace, recentWorkspaces: [{ path: workspace, available: true }],
+    } });
+    expect(await submit({ operation: 'recent-workspaces' }, token)).toMatchObject({ status: 200, body: { workspaces: [{ path: workspace }] } });
+    expect(await submit({ operation: 'show', path: '/not/a/workspace' }, token)).toMatchObject({ status: 400 });
+    expect(history.list()).toHaveLength(1);
+  });
+
+  it('Clone GitHub 接口直接返回可创建会话的持久化本地工作区', async () => {
+    const source = (await initializeWorkspace(join(realpathSync(TMP_DIR), 'fixture'))).root;
+    execFileSync('git', ['add', '.'], { cwd: source });
+    execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com',
+      '-c', 'commit.gpgSign=false', 'commit', '-m', 'Fixture'], { cwd: source });
+    vi.stubEnv('GIT_CONFIG_COUNT', '1');
+    vi.stubEnv('GIT_CONFIG_KEY_0', `url.${pathToFileURL(source).href}.insteadOf`);
+    vi.stubEnv('GIT_CONFIG_VALUE_0', 'https://github.com/octocat/workspace.git');
+    const endpoint = '/api/console/workspace';
+    const input = Buffer.from(JSON.stringify({ operation: 'clone-github', repository: 'octocat/workspace' }));
+    const headers = { host: '127.0.0.1:3000', 'content-type': 'application/json' };
+    const destination = join(realpathSync(TMP_DIR), 'workspaces/octocat/workspace');
+    expect((await server.handler('POST', endpoint)(input, headers, {}, '127.0.0.1')).status).toBe(403);
+    expect(existsSync(destination)).toBe(false);
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { workspaceAccess: { host: '127.0.0.1' } });
+    const submit = (body: object) => server.handler('POST', endpoint)(Buffer.from(JSON.stringify(body)), headers, {}, '127.0.0.1');
+    expect(await submit({ operation: 'clone-github', repository: 'octocat/workspace' })).toMatchObject({
+      status: 200, body: { root: destination, branch: 'main', projects: [] },
+    });
+    expect(readFileSync(join(destination, 'README.md'), 'utf8')).toContain('工作区');
+    expect(await submit({ operation: 'create-story', path: destination, description: '在本地工作区继续开发', name: 'local-clone' })).toMatchObject({ status: 200 });
+    expect(await submit({ operation: 'sessions', path: destination })).toMatchObject({ status: 200, body: { sessions: [] } });
+    expect(await submit({ operation: 'clone-github', repository: 'octocat/workspace' })).toMatchObject({ status: 200, body: { root: destination } });
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { workspaceAccess: { host: '127.0.0.1' } });
+    expect(await submit({ operation: 'recent-workspaces' })).toMatchObject({ status: 200, body: {
+      workspaces: [{ path: destination, name: 'workspace', available: true }],
+    } });
+  });
+
+  it('在独立目录创建和读取 Story，无需选择项目', async () => {
+    await webConsole.stop();
+    server = new FakeHttpServer();
+    webConsole = new WebConsole(
+      server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'),
+      new Logger('error'),
+      { workspaceAccess: { host: '127.0.0.1' } },
+    );
+    const path = join(realpathSync(TMP_DIR), 'story-workspace');
+    const send = (operation: string, extra = {}) => server.handler('POST', '/api/console/workspace')(
+      Buffer.from(JSON.stringify({ operation, path, ...extra })),
+      { host: 'localhost:3000', 'content-type': 'application/json' }, {}, '127.0.0.1',
+    );
+    expect((await send('init')).status).toBe(200);
+    const created = await send('create-story', { description: '更新本地流程\n需要补充说明' });
+    const { id, directory } = created.body as { id: string; directory: string };
+    expect(created.status).toBe(200);
+    expect(directory).toBe(join(path, 'story', id));
+    expect(id).toMatch(/^\d{4}-\d{2}-\d{2}-更新本地流程$/);
+    expect(await send('stories')).toMatchObject({ status: 200, body: { stories: [id] } });
+    expect(await send('sessions')).toMatchObject({ status: 200, body: { sessions: [] } });
+    expect((await send('append-story', { id, description: '第二轮要求' })).status).toBe(400);
+    expect(await send('story', { id })).toMatchObject({ status: 200, body: { directory, content: expect.stringContaining('需要补充说明') } });
+    expect((await send('story', { id: '../README.md' })).status).toBe(400);
+    expect((await send('create-story', { description: '更新本地流程' })).status).toBe(400);
+    expect(execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: path, encoding: 'utf8' }).trim()).toBe('main');
+  });
+
+  it('预览工作区内的文本与图片，并拒绝越界或不支持的文件', async () => {
+    const root = join(realpathSync(TMP_DIR), 'file-preview-workspace');
+    registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer, { host: '127.0.0.1' });
+    const submit = server.handler('POST', '/api/console/workspace');
+    const send = (payload: object) => submit(
+      Buffer.from(JSON.stringify({ ...payload, path: root })),
+      { host: 'localhost:3000', 'content-type': 'application/json' }, {}, '127.0.0.1',
+    );
+    const preview = (file: string) => send({ operation: 'workspace-file', file });
+    expect((await send({ operation: 'init' })).status).toBe(200);
+    const text = '文件预览\n<script>Text remains literal</script>';
+    writeFileSync(join(root, 'code', '示例.txt'), text);
+    expect(await preview('code/示例.txt')).toMatchObject({ status: 200, body: { kind: 'text', content: text } });
+    const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZkUAAAAASUVORK5CYII=';
+    writeFileSync(join(root, 'picture.png'), Buffer.from(image, 'base64'));
+    expect(await preview('picture.png')).toMatchObject({
+      status: 200, body: { kind: 'image', imageType: 'image/png', content: image },
+    });
+    writeFileSync(join(root, 'example.bin'), Buffer.from([0, 255]));
+    expect(await preview('example.bin')).toMatchObject({ status: 200, body: { kind: 'unsupported' } });
+    writeFileSync(join(root, 'large.txt'), Buffer.alloc(WORKSPACE_FILE_LIMIT + 1));
+    expect(await preview('large.txt')).toMatchObject({ status: 200, body: { kind: 'too-large' } });
+    for (const file of ['../README.md', '.GIT/config', 'code']) {
+      expect((await preview(file)).status).toBe(400);
+    }
+    if (process.platform !== 'win32') {
+      symlinkSync(join(root, 'README.md'), join(root, 'linked.md'));
+      symlinkSync(root, join(root, 'linked-directory'));
+      expect((await preview('linked.md')).status).toBe(400);
+      expect((await preview('linked-directory/README.md')).status).toBe(400);
+    }
   });
 
   it('未配置 GitHub Token 时应返回 fine-grained Token 创建引导', async () => {
@@ -300,20 +549,30 @@ describe('WebConsole', () => {
     expect(existsSync(join(TMP_DIR, 'console-settings.json'))).toBe(false);
   });
 
-  it('应对错误设置和错误任务请求返回 400', async () => {
-    const settingsResponse = await server.handler('POST', '/api/console/settings')(
-      Buffer.from('{bad json'),
-      {},
-      {},
-    );
-    expect(settingsResponse).toMatchObject({ status: 400 });
+  it('速度配置可持久化并用于模型测试，无效档位不能覆盖已有配置', async () => {
+    await webConsole.stop();
+    const tested: ModelTestConfiguration[] = [];
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer,
+      join(TMP_DIR, 'agent.db'), new Logger('error'), { modelTester: { test: async (config) => {
+        tested.push(config);
+        return { success: true, provider: 'codex', message: 'ok', durationMs: 1 };
+      } } });
+    const configuration = { id: 'speed', name: 'Fast', provider: 'codex', model: 'gpt-test', reasoningEffort: 'high', serviceTier: 'fast' };
+    const save = (value: object) => server.handler('POST', '/api/console/settings')(
+      Buffer.from(JSON.stringify({ modelConfigs: [value] })), {}, {});
+    expect(await save(configuration)).toMatchObject({ status: 200, body: { modelConfigs: [{ serviceTier: 'fast', reasoningEffort: 'high' }] } });
+    expect(await save({ ...configuration, serviceTier: 'invalid' })).toMatchObject({ status: 400 });
+    expect(await server.handler('POST', '/api/console/model-test')(Buffer.from(JSON.stringify(configuration)), {}, {})).toMatchObject({ status: 200 });
+    expect(tested).toEqual([{ provider: 'codex', model: 'gpt-test', reasoningEffort: 'high', serviceTier: 'fast' }]);
+    await webConsole.stop();
+    webConsole = new WebConsole(server as unknown as import('../../../src/core/HttpServer').HttpServer, join(TMP_DIR, 'agent.db'), new Logger('error'));
+    expect(await server.handler('GET', '/api/console/settings')(Buffer.alloc(0), {}, {})).toMatchObject({ body: { modelConfigs: [{ serviceTier: 'fast' }] } });
+    expect(await save({ ...configuration, serviceTier: 'default' })).toMatchObject({ status: 200, body: { modelConfigs: [{ serviceTier: 'default' }] } });
+  });
 
-    const taskResponse = await server.handler('POST', '/api/console/tasks')(
-      Buffer.from(JSON.stringify({ repository: 'not-github', prompt: 'test' })),
-      {},
-      {},
-    );
-    expect(taskResponse).toMatchObject({ status: 400 });
+  it('应对错误设置返回 400', async () => {
+    const response = await server.handler('POST', '/api/console/settings')(Buffer.from('{bad json'), {}, {});
+    expect(response).toMatchObject({ status: 400 });
   });
 
   it('应保存 Codex 运行配置并通过消息平台接口隐藏 Secret', async () => {
@@ -390,26 +649,14 @@ describe('WebConsole', () => {
     expect(savedPlatforms).toEqual(['dingtalk:true:ding-id:ding-secret']);
   });
 
-  it('应返回空任务列表以及明确的查询和取消错误', async () => {
-    const list = await server.handler('GET', '/api/console/tasks')(Buffer.alloc(0), {}, {});
-    expect(list).toMatchObject({ status: 200, body: { tasks: [] } });
-
-    const detail = await server.handler('GET', '/api/console/task')(Buffer.alloc(0), {}, {});
-    expect(detail).toMatchObject({ status: 400, body: { error: 'id is required' } });
-
-    const cancel = await server.handler('POST', '/api/console/cancel')(
-      Buffer.from(JSON.stringify({ id: 'missing' })),
-      {},
-      {},
-    );
-    expect(cancel).toMatchObject({ status: 409 });
-
-    const continuation = await server.handler('POST', '/api/console/task/continue')(
-      Buffer.from(JSON.stringify({ id: 'missing', prompt: '继续修改' })),
-      {},
-      {},
-    );
-    expect(continuation).toMatchObject({ status: 400, body: { error: '任务不存在' } });
+  it('只注册会话工作台的工作区入口', () => {
+    expect(server.routes.has('POST /api/console/workspace')).toBe(true);
+    for (const route of [
+      'GET /api/console/tasks', 'POST /api/console/tasks', 'GET /api/console/task',
+      'POST /api/console/task/continue', 'POST /api/console/cancel', 'GET /api/console/github/branches',
+    ]) {
+      expect(server.routes.has(route)).toBe(false);
+    }
   });
 
   it('应拒绝未知 Agent、空配置列表和重复配置 ID', async () => {
@@ -595,21 +842,10 @@ describe('WebConsole', () => {
       tokenSource: 'file',
       repositoryCount: 101,
     });
-    const branches = await server.handler('GET', '/api/console/github/branches')(
-      Buffer.alloc(0),
-      {},
-      { repository: 'octocat/repo-1' },
-    );
-    expect(branches).toMatchObject({
-      status: 200,
-      body: {
-        repository: 'octocat/repo-1',
-        branches: [
-          { name: 'main', protected: true },
-          { name: 'develop', protected: false },
-        ],
-      },
-    });
+    expect(await webConsole.getGitHubBranches('octocat/repo-1')).toEqual([
+      { name: 'main', protected: true },
+      { name: 'develop', protected: false },
+    ]);
     expect(requestedBranchPages).toEqual([1]);
     expect(tokens).toEqual(['github_pat_runtime-only', 'github_pat_runtime-only']);
   });

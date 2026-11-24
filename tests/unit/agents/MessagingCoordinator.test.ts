@@ -24,12 +24,12 @@ describe('MessagingCoordinator', () => {
   it('应在只读非 Git 会话中向 Codex 注入受限平台 MCP', async () => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
-    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock);
+    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock, 90_000, () => 'workspace-write');
 
     const resultPromise = coordinator.run({
       scopeId: 'scope-1',
       prompt: '帮我在 cpx 修复登录问题',
-      configurations: [{ id: 'default', provider: 'codex', model: 'gpt-test' }],
+      configurations: [{ id: 'default', provider: 'codex', model: 'gpt-test', serviceTier: 'fast' }],
       platformTools: {
         endpoint: 'http://127.0.0.1:3000/internal',
         token: 'scope-token',
@@ -59,6 +59,7 @@ describe('MessagingCoordinator', () => {
       ]),
     );
     expect(args.join(' ')).toContain('mcp_servers.cpx_platform.command');
+    expect(args).toContain('service_tier="fast"');
     const stdin = child.stdin.read()?.toString() ?? '';
     expect(stdin).toContain('协调 Agent');
     expect(stdin).not.toContain('scope-token');
@@ -67,13 +68,13 @@ describe('MessagingCoordinator', () => {
   it('应使用 thread id 恢复同一个协调会话', async () => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
-    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock);
+    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock, 90_000, () => 'workspace-write');
 
     const resultPromise = coordinator.run({
       scopeId: 'scope-2',
       prompt: '就用第一个仓库',
       threadId: 'thread-existing',
-      configurations: [{ id: 'default', provider: 'codex' }],
+      configurations: [{ id: 'default', provider: 'codex', serviceTier: 'default' }],
       platformTools: {
         endpoint: 'http://127.0.0.1:3000/internal',
         token: 'scope-token',
@@ -98,13 +99,32 @@ describe('MessagingCoordinator', () => {
     ]);
     expect(args.indexOf('--sandbox')).toBeLessThan(args.indexOf('resume'));
     expect(args).toContain('thread-existing');
+    expect(args).toContain('service_tier="default"');
     expect(child.stdin.read()?.toString()).toBe('就用第一个仓库');
+  });
+
+  it.each([undefined, 'existing-thread'])('完全访问模式下新建和续接均不使用只读沙箱（%s）', async (threadId) => {
+    const child = fakeProcess();
+    const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
+    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock, 90_000, () => 'danger-full-access');
+    const result = coordinator.run({
+      scopeId: 'full-access', prompt: '继续', threadId,
+      configurations: [{ id: 'default', provider: 'codex' }],
+      platformTools: { endpoint: 'http://127.0.0.1:3000/internal', token: 'scope-token', taskId: 'full-access', platform: 'feishu' },
+    });
+    child.stdout.write('{"type":"result","result":"完成"}\n');
+    child.emit('close', 0);
+    await result;
+    const args = (spawnMock as ReturnType<typeof vi.fn>).mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--sandbox') + 1]).toBe('danger-full-access');
+    expect(args).not.toContain('read-only');
+    if (threadId) expect(args.indexOf('--sandbox')).toBeLessThan(args.indexOf('resume'));
   });
 
   it('应向用户保留 Codex CLI 的真实错误而不是末尾帮助提示', async () => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
-    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock);
+    const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock, 90_000, () => 'workspace-write');
 
     const resultPromise = coordinator.run({
       scopeId: 'scope-error',

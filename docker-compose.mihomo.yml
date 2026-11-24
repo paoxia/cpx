@@ -14,6 +14,10 @@ services:
   cpx:
     image: ${CPX_IMAGE:-cpx:latest}
     container_name: cpx
+    # Allow Codex to create its inner workspace sandbox.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
     restart: unless-stopped
     depends_on:
       - mihomo
@@ -23,6 +27,7 @@ services:
       TZ: Asia/Shanghai
       AGENT_SERVER_HOST: 0.0.0.0
       AGENT_SERVER_PORT: 3000
+      AGENT_WORKSPACE_WEB_TOKEN: ${AGENT_WORKSPACE_WEB_TOKEN:-}
       AGENT_LOGGING_LEVEL: ${AGENT_LOGGING_LEVEL:-info}
       HTTP_PROXY: http://mihomo:7890
       HTTPS_PROXY: http://mihomo:7890

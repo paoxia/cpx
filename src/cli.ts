@@ -27,6 +27,13 @@ import {
 } from './cliSupport';
 import { ConfigManager } from './config/ConfigManager';
 import { AgentSystem } from './core/AgentSystem';
+import {
+  addWorkspaceProject,
+  cloneWorkspace,
+  initializeWorkspace,
+  inspectWorkspace,
+  type Workspace,
+} from './workspace/Workspace';
 
 const PACKAGE_ROOT = resolve(__dirname, '..');
 const PACKAGE_NAME = packageMetadata.name;
@@ -251,6 +258,15 @@ function compareVersions(left: string, right: string): number {
   return 0;
 }
 
+function printWorkspace(workspace: Workspace): void {
+  console.log(`工作区: ${workspace.root} (${workspace.branch})`);
+  for (const project of workspace.projects) {
+    const status = project.present ? '在 code/ 中' : '待克隆';
+    const remote = project.remote ? ` ${project.remote}` : '';
+    console.log(`- ${project.name} (${status})${remote}`);
+  }
+}
+
 export function createProgram(): Command {
   const program = new Command();
   program
@@ -330,6 +346,34 @@ export function createProgram(): Command {
       requireConfiguration(paths.configDir);
       new ConfigManager(paths.configDir).load();
       console.log(`配置有效: ${join(paths.configDir, 'config.yaml')}`);
+    });
+
+  const workspace = program.command('workspace').description('管理 digital-avatar 工作区');
+  workspace
+    .command('init [path]')
+    .description('在空目录初始化本地工作区')
+    .action(async (path = '.') => printWorkspace(await initializeWorkspace(path)));
+  workspace
+    .command('show [path]')
+    .description('查看已有工作区及子项目')
+    .option('--json', '以 JSON 输出')
+    .action(async (path: string | undefined, options: { json?: boolean }) => {
+      const result = await inspectWorkspace(path ?? '.');
+      if (options.json) console.log(JSON.stringify(result, null, 2));
+      else printWorkspace(result);
+    });
+  workspace
+    .command('clone <remote> <path>')
+    .description('从 Git 地址克隆已有的工作区根仓库')
+    .action(async (remote: string, path: string) => printWorkspace(await cloneWorkspace(remote, path)));
+  workspace
+    .command('add <name> [remote]')
+    .description('登记 code 下的本地仓库或克隆远端项目')
+    .option('--root <path>', '工作区根目录', '.')
+    .requiredOption('--purpose <text>', '项目职能')
+    .action(async (name: string, remote: string | undefined, options: { root: string; purpose: string }) => {
+      const project = await addWorkspaceProject(options.root, name, options.purpose, remote);
+      console.log(`已登记项目: code/${project.name}`);
     });
 
   program

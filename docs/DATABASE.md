@@ -24,3 +24,20 @@
 - 参数、结果、权限、能力等结构化值以 JSON 文本存储。
 - 业务层负责状态值和 JSON 结构的校验，SQLite 表本身未声明外键或 `CHECK` 约束。
 - 当前只有初始化式迁移，没有版本表和增量迁移记录；修改现有结构前需要先建立兼容迁移策略。
+
+## 工作区会话数据库
+
+每个本地工作区在其 Git 目录下独立保存 `cpx/sessions.db`。cpx 打开工作区会话时初始化数据库。
+
+| 表 | 用途 | 主键 | 主要字段 |
+|---|---|---|---|
+| `workspace_session_metadata` | 新会话标题，不依赖项目文件 | `session_id` | `title` |
+| `workspace_sessions` | 会话与 Codex 线程的绑定 | `story_id` | `thread_id`（唯一） |
+| `workspace_session_turns` | 用户消息、回复和运行状态 | `id` | `story_id`, `status`, `created_at`, `owner_pid`, `description`, `response`, `error` |
+| `workspace_messaging_selections` | 各平台账号在对应聊天中的当前会话 | `route_key` | `story_id` 或 `run_id` |
+
+轮次表按 `story_id` 索引。部分唯一索引限制同一工作区同时只有一轮处于等待、命名、创建或执行状态。运行服务退出后，cpx 将遗留的运行轮次标为失败，已保存的线程可继续使用。
+
+旧表的 `story_id` 字段保留兼容旧 Story ID，同时可存储新会话的 `session-<UUID>` 标识。新增 metadata 表使用幂等建表，不迁移或覆盖既有线程及消息。新会话元数据和首轮消息在同一事务中保存，不创建项目内的 Story 文件。
+
+显式切换记录会话 ID。发送文本时在写入轮次的同一事务中记录运行 ID，启动后由该轮次关联会话和 Codex 线程。

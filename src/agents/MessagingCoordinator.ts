@@ -5,6 +5,7 @@ import { AgentModelConfiguration, AgentPlatformToolContext } from './AgentTaskMa
 import { AGENT_ADAPTERS } from './agentAdapters';
 import { AgentProcessError, classifyAgentError } from './errorClassifier';
 import { Logger } from '../utils/Logger';
+import { CodexSandboxMode, configuredCodexSandbox, effectiveCodexSandbox } from './CodexSandbox';
 
 export interface MessagingCoordinatorRequest {
   scopeId: string;
@@ -41,7 +42,7 @@ const COORDINATOR_PROMPT = `你是 cpx 消息平台的协调 Agent。用户正�
 
 用户消息：`;
 
-/** 在非 Git 目录中运行只读 Codex 协调会话，由受限 MCP 工具执行平台操作。 */
+/** 在非 Git 目录中运行 Codex 协调会话，由受限 MCP 工具执行平台操作。 */
 export class MessagingCoordinator implements MessagingCoordinatorRunner {
   private readonly workingDirectory: string;
   private readonly logger: Logger;
@@ -52,6 +53,7 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
     logger: Logger,
     private readonly spawnCommand: SpawnCommand = spawn,
     private readonly timeoutMs = 90_000,
+    private readonly sandboxMode: () => CodexSandboxMode = configuredCodexSandbox,
   ) {
     this.workingDirectory = resolve(workingDirectory);
     this.logger = logger.child('MessagingCoordinator');
@@ -92,21 +94,24 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         )
       : adapter.buildArgs(
           configuration.model,
           configuration.baseUrl,
           configuration.reasoningEffort,
+          configuration.serviceTier,
         );
+    const sandbox = effectiveCodexSandbox(this.sandboxMode(), true);
     if (resume) {
       // `--sandbox` belongs to `codex exec`, while `--skip-git-repo-check` is
       // accepted by the `resume` subcommand. Keep each option before the
       // command level that owns it so Clap does not reject the second turn.
-      args.splice(1, 0, '--sandbox', 'read-only');
+      args.splice(1, 0, '--sandbox', sandbox);
       const resumeIndex = args.indexOf('resume');
       args.splice(resumeIndex + 1, 0, '--skip-git-repo-check');
     } else {
-      args.splice(1, 0, '--skip-git-repo-check', '--sandbox', 'read-only');
+      args.splice(1, 0, '--skip-git-repo-check', '--sandbox', sandbox);
     }
 
     const env: NodeJS.ProcessEnv = { ...process.env };

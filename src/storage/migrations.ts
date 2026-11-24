@@ -83,3 +83,32 @@ export const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_confirmations_status ON pending_confirmations(status)`,
   `CREATE INDEX IF NOT EXISTS idx_confirmations_expires ON pending_confirmations(expires_at)`,
 ];
+
+export const WORKSPACE_SESSION_MIGRATIONS = [
+  `CREATE TABLE IF NOT EXISTS workspace_session_metadata (
+    session_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS workspace_sessions (
+    story_id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL UNIQUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS workspace_session_turns (
+    id TEXT PRIMARY KEY,
+    story_id TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    owner_pid INTEGER NOT NULL,
+    description TEXT NOT NULL,
+    response TEXT,
+    error TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workspace_turns_story ON workspace_session_turns(story_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_active_turn ON workspace_session_turns((1))
+    WHERE status IN ('queued', 'naming', 'creating', 'running')`,
+  `CREATE TABLE IF NOT EXISTS workspace_messaging_selections (
+    route_key TEXT PRIMARY KEY,
+    story_id TEXT,
+    run_id TEXT
+  )`,
+];

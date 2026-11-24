@@ -31,13 +31,13 @@ export interface ParsedUserInfo {
  * - @agent <cmd> <json>                 -> <cmd> (fallback)
  */
 export class CommandParser {
-  parse(rawText: string, userInfo: ParsedUserInfo): Command {
+  parse(rawText: string, userInfo: ParsedUserInfo, workspaceSessions = false): Command {
     const text = this.userText(rawText, userInfo.source);
     if (!text) {
       throw new CommandError('空命令');
     }
 
-    const { name, args } = this.matchCommand(text, userInfo.source);
+    const { name, args } = this.matchCommand(text, userInfo.source, workspaceSessions);
     return {
       id: randomUUID(),
       source: userInfo.source,
@@ -72,6 +72,7 @@ export class CommandParser {
   private matchCommand(
     text: string,
     source: CommandSource,
+    workspaceSessions: boolean,
   ): { name: string; args: Record<string, unknown> } {
     const lower = text.toLowerCase();
 
@@ -85,7 +86,12 @@ export class CommandParser {
     }
 
     if (source === 'feishu' || source === 'dingtalk') {
-      if (/^\/(?:new|新建)$/i.test(text)) return { name: 'agent_new', args: {} };
+      const workspaceArgs = matchWorkspaceSession(text);
+      const legacyNew = !workspaceSessions && /^\/(?:new|新建)$/i.test(text);
+      if (workspaceArgs && !legacyNew) {
+        return { name: 'workspace_session', args: workspaceArgs };
+      }
+      if (legacyNew) return { name: 'agent_new', args: {} };
       let control = text.match(/^\/(?:tasks?|任务)(?:\s+(\d+))?$/i);
       if (control) {
         return {
@@ -102,6 +108,9 @@ export class CommandParser {
       control = text.match(/^\/(?:cancel|取消)\s+(cf_[a-f0-9]+)$/i);
       if (control) return { name: 'cancel', args: { id: control[1] } };
       if (/^\/(?:help|帮助)$/i.test(text)) return { name: 'help', args: {} };
+      if (workspaceSessions) {
+        return { name: 'workspace_session', args: { action: 'send', prompt: text } };
+      }
     }
 
     // 查看 GitHub 账号和最近仓库
@@ -270,4 +279,17 @@ export class CommandParser {
     }
     return { name: cmd, args };
   }
+}
+
+function matchWorkspaceSession(text: string): Record<string, unknown> | undefined {
+  let match = text.match(/^(?:\/new|\/新建|新建会话)(?:\s+([\s\S]+))?$/i);
+  if (match) return { action: 'new', prompt: match[1] };
+  match = text.match(/^(?:\/resume|继续会话|恢复会话)(?:\s+(\S+)(?:\s+([\s\S]+))?)?$/i);
+  if (match) return { action: 'resume', id: match[1], prompt: match[2] };
+  match = text.match(/^(?:\/switch|切换会话)(?:\s+(\S+)(?:\s+([\s\S]+))?)?$/i);
+  if (match) return { action: 'switch', id: match[1], prompt: match[2] };
+  match = text.match(/^(?:\/sessions|查询(?:所有)?会话|列出(?:所有)?会话|所有会话)(?:\s+([\s\S]+))?$/i);
+  if (match) return { action: 'list', page: match[1] };
+  if (/^(?:\/whoami|查询身份)$/i.test(text)) return { action: 'identity' };
+  return undefined;
 }
