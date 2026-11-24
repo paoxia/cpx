@@ -1,3 +1,5 @@
+const storyGitHubPreferenceKey = 'cpx.story.useGitHub';
+
 const state = {
   settings: null,
   activeView: 'stories',
@@ -230,6 +232,24 @@ elements.storyNew.addEventListener('click', () => {
   workspaceFeedback(elements.storyFeedback, '');
   setSessionRail(false);
   elements.storyDescription.focus();
+});
+try {
+  elements.storyUseGitHub.checked = window.localStorage.getItem(storyGitHubPreferenceKey) === 'true';
+} catch {
+  // The checkbox remains usable when browser storage is unavailable.
+}
+elements.storyUseGitHub.addEventListener('change', () => {
+  try {
+    window.localStorage.setItem(storyGitHubPreferenceKey, String(elements.storyUseGitHub.checked));
+  } catch {
+    // The current page still reflects the user's choice.
+  }
+});
+window.addEventListener('storage', (event) => {
+  if (event.storageArea !== window.localStorage) return;
+  if (event.key === storyGitHubPreferenceKey || event.key === null) {
+    elements.storyUseGitHub.checked = event.newValue === 'true';
+  }
 });
 elements.storyForm.addEventListener('submit', submitStory);
 elements.storyDescription.addEventListener('keydown', (event) => {
@@ -1070,7 +1090,6 @@ function renderWorkspace(workspace) {
   const changed = previous?.root !== workspace.root || previous?.repository !== workspace.repository;
   if (changed) {
     state.sessionSelection += 1;
-    elements.storyUseGitHub.checked = false;
     renderStoryRun(null);
     renderStory(null);
     state.workspaceFile = null;
@@ -1451,10 +1470,7 @@ function renderStory(story) {
   elements.storyContent.textContent = story?.content || '';
   elements.storyGitHubLink.hidden = !story?.url;
   elements.storyGitHubLink.href = story?.url || '#stories';
-  if (changed) {
-    elements.storyDescription.value = '';
-    elements.storyUseGitHub.checked = false;
-  }
+  if (changed) elements.storyDescription.value = '';
   elements.storyDescription.placeholder = story ? '补充需求或继续讨论…' : '告诉 Codex 你想做什么…';
   elements.storyDescriptionLabel.textContent = story ? '继续会话' : '描述需求';
   if (changed) renderSessionList();
@@ -1506,7 +1522,6 @@ async function submitStory(event) {
     if (state.workspace !== workspace) return;
     renderStoryRun(run);
     elements.storyDescription.value = '';
-    elements.storyUseGitHub.checked = false;
     workspaceFeedback(elements.storyFeedback, '');
   } catch (error) {
     workspaceFeedback(elements.storyFeedback, error.message, true);
