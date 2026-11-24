@@ -1,3 +1,4 @@
+const loadingWorkspaceFolders = new WeakSet();
 const storyGitHubPreferenceKey = 'cpx.story.useGitHub';
 
 const state = {
@@ -10,6 +11,7 @@ const state = {
   recentWorkspaces: [],
   directoryBrowser: null,
   directoryBrowserRequest: 0,
+  refreshingTreeFor: null,
   workspaceFile: null,
   story: null,
   storyRun: null,
@@ -302,6 +304,7 @@ async function init() {
     }
     window.setInterval(refreshStoryRun, 900);
     window.setInterval(refreshWorkspaceSessions, 4000);
+    window.setInterval(refreshVisibleWorkspaceTree, 4000);
     window.setInterval(() => {
       if (state.activeView === 'codex' && state.codexAuth?.state === 'waiting') {
         void refreshCodexAuth();
@@ -1139,57 +1142,92 @@ async function readWorkspaceDirectory(workspace, directory) {
   return (await callWorkspace({ ...request, directory })).entries;
 }
 
-function directoryTree(workspace, entries, parent = '') {
-  const list = document.createElement('ul');
-  list.className = 'directory-tree';
-  for (const entry of entries) {
+function updateDirectoryTree(workspace, list, entries, parent = '') {
+  const existing = new Map([...list.children].map((row) => [row.dataset.entryKey, row]));
+  const rows = entries.map((entry) => {
+    const key = JSON.stringify([entry.name, entry.type, entry.url]);
     const path = parent ? `${parent}/${entry.name}` : entry.name;
-    const row = document.createElement('li');
+    const row = existing.get(key) || createDirectoryRow(workspace, entry, path);
+    existing.delete(key);
+    row.dataset.entryKey = key;
     row.dataset.kind = entry.repository ? 'repository' : entry.type;
-    if (entry.type === 'directory') {
-      const folder = document.createElement('details');
-      const summary = document.createElement('summary');
-      styleTreeEntry(summary, entry.name);
-      folder.append(summary);
-      folder.addEventListener('toggle', async () => {
-        if (folder.open && folder.lastElementChild?.dataset.failed) folder.lastElementChild.remove();
-        if (!folder.open || folder.childElementCount > 1) return;
-        const status = document.createElement('small');
-        status.className = 'tree-status';
-        status.setAttribute('role', 'status');
-        status.textContent = '读取中…';
-        folder.append(status);
-        try {
-          const children = await readWorkspaceDirectory(workspace, path);
-          if (children.length) status.replaceWith(directoryTree(workspace, children, path));
-          else status.textContent = '空目录';
-        } catch (error) {
-          status.textContent = error.message;
-          status.dataset.failed = 'true';
-        }
-      });
-      row.append(folder);
-    } else if (entry.type === 'file') {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.filePath = path;
-      button.setAttribute('aria-current', String(state.workspaceFile?.path === path));
-      styleTreeEntry(button, entry.name);
-      button.addEventListener('click', () => void openWorkspaceFile(workspace, path));
-      row.append(button);
-    } else {
-      const label = document.createElement(entry.url ? 'a' : 'span');
-      styleTreeEntry(label, entry.name);
-      if (entry.url) {
-        label.href = entry.url;
-        label.target = '_blank';
-        label.rel = 'noreferrer';
-      }
-      row.append(label);
+    if (entry.type === 'file') {
+      row.firstElementChild.setAttribute('aria-current', String(state.workspaceFile?.path === path));
     }
-    list.append(row);
+    return row;
+  });
+  for (const row of existing.values()) row.remove();
+  rows.forEach((row, index) => {
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] ?? null);
+  });
+}
+
+function createDirectoryRow(workspace, entry, path) {
+  const row = document.createElement('li');
+  if (entry.type === 'directory') {
+    const folder = document.createElement('details');
+    folder.dataset.path = path;
+    const summary = document.createElement('summary');
+    styleTreeEntry(summary, entry.name);
+    folder.append(summary);
+    folder.addEventListener('toggle', () => {
+      if (folder.open && (workspace.root || !folder.querySelector(':scope > ul'))) {
+        void loadWorkspaceFolder(workspace, folder);
+      }
+    });
+    row.append(folder);
+  } else if (entry.type === 'file') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.filePath = path;
+    styleTreeEntry(button, entry.name);
+    button.addEventListener('click', () => void openWorkspaceFile(workspace, path));
+    row.append(button);
+  } else {
+    const label = document.createElement(entry.url ? 'a' : 'span');
+    styleTreeEntry(label, entry.name);
+    if (entry.url) {
+      label.href = entry.url;
+      label.target = '_blank';
+      label.rel = 'noreferrer';
+    }
+    row.append(label);
   }
-  return list;
+  return row;
+}
+
+async function loadWorkspaceFolder(workspace, folder) {
+  if (state.workspace !== workspace || !folder.isConnected || loadingWorkspaceFolders.has(folder)) return;
+  loadingWorkspaceFolders.add(folder);
+  let status = folder.querySelector(':scope > .tree-status');
+  const list = folder.querySelector(':scope > ul') ?? document.createElement('ul');
+  if (!status) {
+    status = document.createElement('small');
+    status.className = 'tree-status';
+    status.setAttribute('role', 'status');
+  }
+  if (!list.isConnected && !status.isConnected) {
+    status.textContent = '读取中…';
+    folder.append(status);
+  }
+  try {
+    const entries = await readWorkspaceDirectory(workspace, folder.dataset.path);
+    if (state.workspace !== workspace || !folder.isConnected) return;
+    list.className = 'directory-tree';
+    updateDirectoryTree(workspace, list, entries, folder.dataset.path);
+    if (!list.isConnected) folder.append(list);
+    if (entries.length) status.remove();
+    else {
+      status.textContent = '空目录';
+      if (!status.isConnected) folder.append(status);
+    }
+  } catch (error) {
+    if (state.workspace === workspace && folder.isConnected && !list.isConnected) {
+      status.textContent = error.message;
+    }
+  } finally {
+    loadingWorkspaceFolders.delete(folder);
+  }
 }
 
 function styleTreeEntry(element, name) {
@@ -1214,13 +1252,45 @@ async function loadWorkspaceTree(workspace) {
   try {
     const entries = await readWorkspaceDirectory(workspace, '');
     if (state.workspace !== workspace) return;
-    elements.workspaceTree.replaceChildren(directoryTree(workspace, entries));
-    elements.sessionTree.replaceChildren(directoryTree(workspace, entries));
+    for (const container of [elements.workspaceTree, elements.sessionTree]) {
+      const list = document.createElement('ul');
+      list.className = 'directory-tree';
+      updateDirectoryTree(workspace, list, entries);
+      container.replaceChildren(list);
+    }
     elements.workspaceTree.hidden = false;
     elements.workspaceProjects.hidden = true;
   } catch (error) {
     if (state.workspace !== workspace) return;
     status.textContent = error.message;
+  }
+}
+
+function visibleWorkspaceTree() {
+  if (state.activeView === 'workspace') return elements.workspaceTree;
+  if (state.activeView === 'stories' && state.sessionTab === 'directory') return elements.sessionTree;
+  return null;
+}
+
+async function refreshVisibleWorkspaceTree() {
+  const workspace = state.workspace;
+  const tree = visibleWorkspaceTree();
+  const list = tree?.querySelector(':scope > ul');
+  if (!workspace?.root || !list || tree.hidden || document.hidden || state.refreshingTreeFor === workspace) return;
+  state.refreshingTreeFor = workspace;
+  try {
+    const entries = await readWorkspaceDirectory(workspace, '');
+    if (state.workspace !== workspace || visibleWorkspaceTree() !== tree || !list.isConnected) return;
+    updateDirectoryTree(workspace, list, entries);
+    for (const folder of list.querySelectorAll('details[open]')) {
+      if (state.workspace !== workspace || visibleWorkspaceTree() !== tree || document.hidden) break;
+      if (!folder.parentElement || folder.parentElement.closest('details:not([open])')) continue;
+      await loadWorkspaceFolder(workspace, folder);
+    }
+  } catch {
+    // Keep the current tree visible while a temporary read failure is retried.
+  } finally {
+    if (state.refreshingTreeFor === workspace) state.refreshingTreeFor = null;
   }
 }
 
@@ -1408,6 +1478,7 @@ async function refreshWorkspaceSessions() {
 }
 
 function selectSessionTab(tab) {
+  const becameVisible = tab === 'directory' && state.sessionTab !== tab;
   const workspace = state.workspace;
   state.sessionTab = workspace && !workspace.root ? 'directory' : tab;
   const directory = Boolean(workspace && state.sessionTab === 'directory');
@@ -1423,6 +1494,7 @@ function selectSessionTab(tab) {
   elements.sessionConversation.hidden = directory;
   elements.filePreview.hidden = !directory;
   renderSessionTitle();
+  if (becameVisible) void refreshVisibleWorkspaceTree();
 }
 
 function renderSessionTitle() {
@@ -1609,6 +1681,7 @@ async function refreshStoryRun() {
     const run = await callWorkspace({ operation: 'story-run', path: state.workspace.root, id });
     if (state.storyRun?.id !== id || !storyRunActive(state.storyRun)) return;
     renderStoryRun(run);
+    if (!storyRunActive(run)) void refreshVisibleWorkspaceTree();
     if (run.storyId && (run.storyId !== storyId || !storyRunActive(run))) await loadStories();
   } catch (error) {
     workspaceFeedback(elements.storyFeedback, error.message, true);
@@ -1625,6 +1698,7 @@ async function stopStoryRun() {
     const run = await callWorkspace({ operation: 'stop-story-run', id });
     if (state.storyRun?.id === id) {
       renderStoryRun(run);
+      void refreshVisibleWorkspaceTree();
       if (run.storyId) await loadStories();
     }
   } catch (error) {
@@ -1650,6 +1724,7 @@ async function switchView(view) {
   });
   if ((normalized === 'workspace' || normalized === 'stories') && !state.workspaceMode) await loadWorkspaceMode();
   if (normalized === 'stories') await loadStories();
+  void refreshVisibleWorkspaceTree();
   if (normalized === 'github' && !state.githubStatus) {
     try {
       await loadGitHubStatus();

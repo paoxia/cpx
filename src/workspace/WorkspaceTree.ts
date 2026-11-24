@@ -41,7 +41,7 @@ export async function listWorkspaceDirectory(
   path: string,
   directory: string,
 ): Promise<WorkspaceTreeEntry[]> {
-  const workspace = await inspectWorkspace(path);
+  const workspace = await inspectWorkspace(path, directory === 'code');
   const parts = workspaceDirectoryParts(directory);
   const target = localWorkspaceDirectory(workspace.root, parts);
   const repositories = new Set(

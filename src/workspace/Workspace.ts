@@ -165,7 +165,7 @@ export function workspaceProjects(content: string, present = new Set<string>()):
   });
 }
 
-export async function inspectWorkspace(path: string): Promise<Workspace> {
+export async function inspectWorkspace(path: string, scanProjects = true): Promise<Workspace> {
   const root = realpathSync(path);
   if (
     !(await isRepository(root)) ||
@@ -180,7 +180,7 @@ export async function inspectWorkspace(path: string): Promise<Workspace> {
   const codeEntry = lstatSync(code, { throwIfNoEntry: false });
   if (codeEntry && !codeEntry.isDirectory()) throw new Error('code 必须是工作区内的普通目录');
   const present = new Set<string>();
-  if (codeEntry) {
+  if (codeEntry && scanProjects) {
     for (const entry of readdirSync(code, { withFileTypes: true })) {
       if (entry.isDirectory() && (await isRepository(join(code, entry.name))))
         present.add(entry.name);
