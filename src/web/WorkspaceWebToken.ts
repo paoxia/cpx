@@ -9,12 +9,7 @@ export function resolveWorkspaceWebToken(
   dataDirectory: string,
 ): string | undefined {
   const configured = configuredToken?.trim();
-  if (configured) {
-    if (configured.length < 32) {
-      throw new Error('AGENT_WORKSPACE_WEB_TOKEN 至少需要 32 个字符');
-    }
-    return configured;
-  }
+  if (configured) return configured;
   if (['localhost', '127.0.0.1', '::1'].includes(host)) return undefined;
 
   mkdirSync(dataDirectory, { recursive: true });
@@ -28,8 +23,8 @@ export function resolveWorkspaceWebToken(
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
   }
   const token = readFileSync(tokenFile, 'utf8').trim();
-  if (token.length < 32) {
-    throw new Error(`工作区访问令牌文件无效：${tokenFile}，请设置至少 32 字符的 AGENT_WORKSPACE_WEB_TOKEN，或移除该文件后重启以重新生成`);
+  if (!token) {
+    throw new Error(`工作区访问令牌文件为空：${tokenFile}，请填写非空令牌、设置 AGENT_WORKSPACE_WEB_TOKEN，或移除该文件后重启以重新生成`);
   }
   return token;
 }

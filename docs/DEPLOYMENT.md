@@ -94,7 +94,7 @@ RUN npm install -g @openai/codex@latest
 
 默认 Compose 已提供服务地址、端口、时区和日志级别。Codex、GitHub、钉钉和飞书的可选密钥默认留空，不会阻止首次启动。
 
-工作区访问密码也可留空：首次启动自动生成并保存到项目的 `data/workspace-web-token`。在极空间文件管理器打开该文件，复制全部内容，进入 cpx「工作区」页填入「工作区访问密码（令牌）」。它授权读取项目和运行 Codex，与 GitHub Token、Codex 登录分别管理。重建容器时保留 `data`，密码就会保持不变。也可在 Compose 环境变量界面设置至少 32 字符的随机 `AGENT_WORKSPACE_WEB_TOKEN`，此时页面使用该值；短于 32 字符会阻止启动。页面中的工作区目录填写容器路径，例如 `/app/data/workspaces/my-workspace`。
+工作区访问密码也可留空：首次启动自动生成并保存到项目的 `data/workspace-web-token`。在极空间文件管理器打开该文件，复制全部内容，进入 cpx「工作区」页填入「工作区访问密码（令牌）」。它授权读取项目和运行 Codex，与 GitHub Token、Codex 登录分别管理。重建容器时保留 `data`，密码就会保持不变。可以在文件管理器中编辑该文件并重启 cpx，使自定义密码生效。也可以在 Compose 环境变量界面设置 `AGENT_WORKSPACE_WEB_TOKEN`，此时优先使用环境变量中的值。两种手动配置均接受少于 32 字符的非空令牌。页面中的工作区目录填写容器路径，例如 `/app/data/workspaces/my-workspace`。
 
 接入 GitHub 根仓库时选择「GitHub」，填写或选择仓库后，cpx 自动经 HTTPS 克隆到 `/app/data/workspaces/<owner>/<repo>`，直接打开可编辑的本地会话工作台。私有仓库使用 GitHub 页已连接的 Token，不要求在 NAS 或容器配置 SSH Key。项目目录保存在挂载的 `data/workspaces` 中，更新容器时继续保留。
 
@@ -183,7 +183,7 @@ cpx → http://mihomo:7890 → Mihomo 配置的上游 → 外部服务
 如果 NAS 不能直接拉取镜像，在开发机按 NAS 架构准备 cpx 与 Mihomo 镜像。以下示例适用于 amd64：
 
 ```bash
-scripts/docker-build.sh latest linux/amd64
+scripts/build-nas-image.sh latest linux/amd64
 docker pull --platform linux/amd64 metacubex/mihomo:v1.19.30
 docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
 ```
@@ -235,13 +235,13 @@ ports:
 在开发机仓库根目录执行：
 
 ```bash
-scripts/docker-build.sh latest linux/amd64
+scripts/build-nas-image.sh latest linux/amd64
 ```
 
 ARM64 NAS 将平台改为：
 
 ```bash
-scripts/docker-build.sh latest linux/arm64
+scripts/build-nas-image.sh latest linux/arm64
 ```
 
 这些命令只在开发机执行，并生成 `cpx-latest.tar`。

@@ -57,7 +57,7 @@ cpx start --daemon
 
 浏览器访问 `http://localhost:3000/`。使用 `cpx status` 查看状态，使用 `cpx stop` 精准停止由当前 `CPX_HOME` 启动的实例。npm 安装默认把配置、数据库、日志和 PID 分别保存在 `~/.cpx/config`、`~/.cpx/data`、`~/.cpx/logs` 和 `~/.cpx/run`；可通过 `CPX_HOME` 或全局 `--home <目录>` 覆盖。相对运行路径始终相对于配置目录的父目录解析，不依赖执行命令时所在的工作目录。
 
-在开发机上运行 `make nas-docker-build` 可构建并导出 Docker 镜像，默认版本为 `dev-nas-image`、平台为 `linux/amd64`。该入口清除大小写的 HTTP、HTTPS、ALL 代理环境变量，使用阿里云 apt 镜像和 npmmirror npm 源，并将 `~/.docker/bin` 加入 PATH。可用 `make nas-docker-build VERSION=<版本> PLATFORM=<平台>` 覆盖版本与平台。
+在开发机上运行 `make nas-docker-build` 或 `scripts/build-nas-image.sh`，默认构建 `linux/amd64` 的 `cpx:dev-nas-image` 并导出 `cpx-dev-nas-image.tar`。Make 入口清除大小写的 HTTP、HTTPS、ALL 代理环境变量，使用阿里云 apt 镜像和 npmmirror npm 源，并将 `~/.docker/bin` 加入 PATH。可用 `make nas-docker-build VERSION=<版本> PLATFORM=<平台>` 或 `scripts/build-nas-image.sh <版本> <平台>` 覆盖默认值。
 
 从源码开发时使用：
 
@@ -119,7 +119,7 @@ Codex CLI 将凭据保存在运行 cpx 的系统用户凭据目录，不写入 `
 
 ## digital-avatar 工作区
 
-控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、GitHub，以及登记本地或远端子项目。打开或新建时填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。远程实例首次启动会自动生成工作区访问密码（令牌），保存在数据库同目录的 `workspace-web-token` 文件中，进入页面时填写。也可通过至少 32 字符的 `AGENT_WORKSPACE_WEB_TOKEN` 覆盖；无效的短令牌会阻止启动。
+控制台侧栏的「工作区」支持打开已有目录、新建本地工作区、GitHub，以及登记本地或远端子项目。打开或新建时填写 cpx 服务所在机器的绝对路径。在本机调试时，使用 `AGENT_SERVER_HOST=127.0.0.1 cpx start` 启动，并直接通过 `http://127.0.0.1:3000` 打开。远程实例首次启动会生成 64 个十六进制字符的随机工作区访问密码（令牌），保存在数据库同目录的 `workspace-web-token` 文件中，进入页面时填写。手动编辑该文件或设置环境变量 `AGENT_WORKSPACE_WEB_TOKEN` 时，可使用任意非空长度的令牌。文件修改后需要重启 cpx。
 
 Docker/NAS 部署时，默认无需手动配置令牌。在极空间文件管理器中打开项目的 `data/workspace-web-token`，复制内容到「工作区访问密码（令牌）」；重建容器会复用此文件。已设置环境变量令牌时使用该值。该密码只用于工作区访问，与 GitHub Token 和 Codex 登录分别管理。页面路径使用容器内路径，持久化工作区可以放在已挂载的 `/app/data/` 内。
 

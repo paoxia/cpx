@@ -12,4 +12,4 @@ nas-docker-build:
 		PATH="$$HOME/.docker/bin:$$PATH" \
 		APT_MIRROR=http://mirrors.aliyun.com \
 		NPM_REGISTRY=https://registry.npmmirror.com \
-		bash scripts/docker-build.sh "$(VERSION)" "$(PLATFORM)"
+		bash scripts/build-nas-image.sh "$(VERSION)" "$(PLATFORM)"

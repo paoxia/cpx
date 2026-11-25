@@ -9,7 +9,7 @@
 使用预构建镜像和 [docker-compose.mihomo.yml](../docker-compose.mihomo.yml)：
 
 ```text
-开发机源码 → cpx:dev 镜像包 → 极空间图形界面导入
+开发机源码 → cpx:dev-nas-image 镜像包 → 极空间图形界面导入
                                       │
                                       ▼
 浏览器 ← NAS:3000 ← cpx → http://mihomo:7890 → 外部服务
@@ -41,7 +41,7 @@
 在开发机的项目根目录执行：
 
 ```bash
-scripts/docker-build.sh dev linux/amd64
+scripts/build-nas-image.sh
 ```
 
 国内网络可同时使用 Debian 和 npm 镜像：
@@ -49,13 +49,13 @@ scripts/docker-build.sh dev linux/amd64
 ```bash
 APT_MIRROR=http://mirrors.aliyun.com \
 NPM_REGISTRY=https://registry.npmmirror.com \
-  scripts/docker-build.sh dev linux/amd64
+  scripts/build-nas-image.sh
 ```
 
-脚本构建 `cpx:dev` 并生成：
+脚本默认构建 `cpx:dev-nas-image`。ARM64 NAS 使用 `scripts/build-nas-image.sh dev-nas-image linux/arm64`。两种平台生成的文件名均为：
 
 ```text
-cpx-dev.tar
+cpx-dev-nas-image.tar
 ```
 
 该命令只能在开发机执行。生成的 tar 是本地构建产物，不应提交到 Git。
@@ -103,7 +103,7 @@ docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
 通过文件管理器上传：
 
 - `docker-compose.mihomo.yml`；
-- `cpx-dev.tar`；
+- `cpx-dev-nas-image.tar`；
 - 首次部署时的 Mihomo 镜像包；
 - `data/mihomo/config.yaml`。
 
@@ -116,14 +116,14 @@ docker save -o mihomo-v1.19.30-amd64.tar metacubex/mihomo:v1.19.30
 进入“Docker → 镜像 → 本地导入”，依次导入：
 
 ```text
-cpx-dev.tar
+cpx-dev-nas-image.tar
 mihomo-v1.19.30-amd64.tar
 ```
 
 导入后确认镜像列表中存在：
 
 ```text
-cpx:dev
+cpx:dev-nas-image
 metacubex/mihomo:v1.19.30
 ```
 
@@ -137,7 +137,7 @@ metacubex/mihomo:v1.19.30
 4. 在 Compose 环境变量界面填写：
 
    ```dotenv
-   CPX_IMAGE=cpx:dev
+   CPX_IMAGE=cpx:dev-nas-image
    MIHOMO_IMAGE=metacubex/mihomo:v1.19.30
    ```
 
@@ -176,13 +176,13 @@ Mihomo 镜像、Mihomo 配置和持久化目录通常不需要变化。每次修
 ```bash
 APT_MIRROR=http://mirrors.aliyun.com \
 NPM_REGISTRY=https://registry.npmmirror.com \
-  scripts/docker-build.sh dev linux/amd64
+  scripts/build-nas-image.sh
 ```
 
 ### 极空间图形界面
 
-1. 通过文件管理器覆盖上传新的 `cpx-dev.tar`；
-2. 在 Docker 镜像页面重新导入 `cpx-dev.tar`；
+1. 通过文件管理器覆盖上传新的 `cpx-dev-nas-image.tar`；
+2. 在 Docker 镜像页面重新导入 `cpx-dev-nas-image.tar`；
 3. 在 Compose 项目中重新创建 `cpx` 容器；
 4. 如果界面只能重新创建整个项目，可以执行项目级重新创建；
 5. 在容器详情中确认 cpx 使用的镜像标识已经变化；
@@ -192,10 +192,10 @@ NPM_REGISTRY=https://registry.npmmirror.com \
 
 ## 五、同名镜像未更新时
 
-某些极空间版本可能仍让新容器引用旧的 `cpx:dev` 镜像。出现这种情况时，每轮使用唯一标签：
+某些极空间版本可能仍让新容器引用旧的 `cpx:dev-nas-image` 镜像。出现这种情况时，每轮使用唯一标签：
 
 ```bash
-scripts/docker-build.sh dev-20260820-1 linux/amd64
+scripts/build-nas-image.sh dev-20260820-1 linux/amd64
 ```
 
 上传并导入生成的 `cpx-dev-20260820-1.tar`，然后在 Compose 环境变量中更新：
@@ -213,7 +213,7 @@ CPX_IMAGE=cpx:dev-20260820-1
 | `cpx-mihomo` 持续重启                                 | 检查 `data/mihomo/config.yaml` 是否存在，确认 YAML 能被 Mihomo 解析且 `mixed-port` 为 7890                                                |
 | Mihomo 正常但 Codex 超时                              | 检查代理组选择、最终 `MATCH` 规则和节点状态，确认 cpx 代理地址仍为 `http://mihomo:7890`                                                   |
 | Codex 能回复但执行命令出现 `bwrap` 权限错误            | 同步新版 Compose 的 cpx `security_opt` 后重新创建容器，再从页面「检查执行权限」验证；镜像更新本身不会改变容器安全选项                    |
-| Compose 尝试拉取 `cpx:dev`                            | `cpx-dev.tar` 尚未成功导入，或导入后的镜像标签与 `CPX_IMAGE` 不一致                                                                       |
+| Compose 尝试拉取 `cpx:dev-nas-image`                            | `cpx-dev-nas-image.tar` 尚未成功导入，或导入后的镜像标签与 `CPX_IMAGE` 不一致                                                                       |
 | 页面仍是旧版本                                        | 重新导入镜像并重新创建容器，检查新旧镜像标识；必要时使用唯一开发标签                                                                      |
 | 工作区提示回环地址或无法接入                           | 更新 cpx 镜像并重新创建容器，从文件管理器读取 `data/workspace-web-token` 填入页面；环境变量令牌已配置时使用该值                          |
 | 端口 3000 被占用                                      | 在 Compose 中只修改端口映射左侧，例如 `13000:3000`，然后访问 `http://<NAS-IP>:13000`                                                      |
