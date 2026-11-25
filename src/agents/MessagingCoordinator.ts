@@ -187,7 +187,7 @@ export class MessagingCoordinator implements MessagingCoordinatorRunner {
       const timeout = setTimeout(() => {
         child.kill();
         finish(new Error('Codex 协调会话超时'));
-      }, routing ? Math.min(this.timeoutMs, 35_000) : this.timeoutMs);
+      }, this.timeoutMs);
       timeout.unref();
 
       child.stdout.on('data', (chunk: Buffer | string) => {

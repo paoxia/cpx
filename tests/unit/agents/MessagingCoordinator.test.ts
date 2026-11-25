@@ -103,6 +103,27 @@ describe('MessagingCoordinator', () => {
     expect(child.stdin.read()?.toString()).toBe('就用第一个仓库');
   });
 
+  it('意图识别可以在协调器时限内完成较慢的请求', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = fakeProcess();
+      const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
+      const coordinator = new MessagingCoordinator(process.cwd(), new Logger('error'), spawnMock);
+      const outcome = coordinator.classify('继续电脑上的会话', [{ id: 'default', provider: 'codex' }])
+        .then(response => ({ response }), (error: unknown) => ({ error }));
+
+      vi.advanceTimersByTime(40_000);
+      const response = '{"action":"resume","choices":[1]}';
+      child.stdout.write(JSON.stringify({ type: 'result', result: response }) + '\n');
+      child.emit('close', 0);
+
+      expect(await outcome).toEqual({ response });
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([undefined, 'existing-thread'])('完全访问模式下新建和续接均不使用只读沙箱（%s）', async (threadId) => {
     const child = fakeProcess();
     const spawnMock = vi.fn(() => child) as unknown as typeof spawn;
