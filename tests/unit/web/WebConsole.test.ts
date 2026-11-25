@@ -146,7 +146,7 @@ describe('WebConsole', () => {
 
   it('远程工作区 API 应验证独立令牌和服务器绝对路径', async () => {
     const endpoint = '/api/console/workspace';
-    const token = 'workspace-test-access-token-0123456789';
+    const token = 'short';
     registerWorkspaceRoutes(server as unknown as import('../../../src/core/HttpServer').HttpServer, { host: '0.0.0.0', token });
     const headers = { 'content-type': 'application/json', host: 'cpx.example' };
     const submit = server.handler('POST', endpoint);
@@ -154,6 +154,7 @@ describe('WebConsole', () => {
     expect(mode.body).toEqual({ mode: 'token' });
     const path = join(realpathSync(TMP_DIR), 'remote-access');
     const input = Buffer.from(JSON.stringify({ operation: 'init', path }));
+    expect((await submit(input, headers, {}, '192.0.2.1')).status).toBe(401);
     expect((await submit(input, { ...headers, authorization: 'Bearer wrong' }, {}, '192.0.2.1')).status).toBe(401);
     const authorized = { ...headers, authorization: `Bearer ${token}` };
     expect(await submit(Buffer.from('{"operation":"init","path":"relative"}'), authorized, {}, '192.0.2.1')).toMatchObject({ status: 400, body: { error: expect.stringContaining('绝对路径') } });

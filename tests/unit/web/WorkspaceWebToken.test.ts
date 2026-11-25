@@ -25,7 +25,7 @@ describe('远程工作区访问密码', () => {
 
   it('环境变量优先且不覆盖已有密码，取消覆盖后恢复原密码', () => {
     const original = resolveWorkspaceWebToken('0.0.0.0', undefined, directory);
-    const configured = 'configured-workspace-access-password-123456';
+    const configured = 'short';
     expect(resolveWorkspaceWebToken('0.0.0.0', ` ${configured} `, directory)).toBe(configured);
     expect(resolveWorkspaceWebToken('0.0.0.0', '', directory)).toBe(original);
     expect(resolveWorkspaceWebToken('0.0.0.0', configured, join(directory, 'unused'))).toBe(configured);
@@ -37,14 +37,20 @@ describe('远程工作区访问密码', () => {
       expect(resolveWorkspaceWebToken(host, undefined, directory)).toBeUndefined();
     }
     expect(existsSync(join(directory, 'workspace-web-token'))).toBe(false);
-    expect(resolveWorkspaceWebToken('127.0.0.1', 'a'.repeat(32), directory)).toBe('a'.repeat(32));
+    expect(resolveWorkspaceWebToken('127.0.0.1', 'a', directory)).toBe('a');
   });
 
-  it('无效配置或损坏文件报告错误，保留原文件且不回退成未授权访问', () => {
-    expect(() => resolveWorkspaceWebToken('0.0.0.0', 'short', directory)).toThrow('至少需要 32');
+  it('复用已有的短令牌文件，并去掉首尾空白', () => {
     const file = join(directory, 'workspace-web-token');
-    writeFileSync(file, 'broken');
-    expect(() => resolveWorkspaceWebToken('0.0.0.0', '', directory)).toThrow('令牌文件无效');
-    expect(readFileSync(file, 'utf8')).toBe('broken');
+    writeFileSync(file, ' a\r\n');
+    expect(resolveWorkspaceWebToken('0.0.0.0', '', directory)).toBe('a');
+    expect(readFileSync(file, 'utf8')).toBe(' a\r\n');
+  });
+
+  it('空白令牌文件报告启动错误并保留原文件', () => {
+    const file = join(directory, 'workspace-web-token');
+    writeFileSync(file, ' \n');
+    expect(() => resolveWorkspaceWebToken('0.0.0.0', '', directory)).toThrow('令牌文件为空');
+    expect(readFileSync(file, 'utf8')).toBe(' \n');
   });
 });

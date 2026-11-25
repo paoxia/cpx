@@ -118,7 +118,7 @@ export function registerWorkspaceRoutes(
   services: WorkspaceRouteServices = {},
 ): void {
   const secret = access.token?.trim();
-  const token = secret && secret.length >= 32 ? Buffer.from(secret) : undefined;
+  const token = secret ? Buffer.from(secret) : undefined;
   const local = !secret && ['localhost', '127.0.0.1', '::1'].includes(access.host ?? '');
   const mode = token ? 'token' : local ? 'local' : 'disabled';
   const configuredRoot = access.defaultRoot?.trim();
